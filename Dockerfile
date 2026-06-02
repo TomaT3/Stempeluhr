@@ -8,7 +8,7 @@ COPY stempeluhr-client/ ./
 RUN npm run build
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS api-build
-ARG VERSION=0.1.2
+ARG VERSION=0.0.0-local
 WORKDIR /src
 COPY Directory.Build.props ./
 COPY Stempeluhr.Api/Stempeluhr.Api.csproj Stempeluhr.Api/

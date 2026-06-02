@@ -1,7 +1,5 @@
 # Stempeluhr fuer Kimai
 
-Aktuelle Version: `0.1.2`
-
 Touch-freundliche Stempeluhr fuer eine gehostete Kimai-Instanz.
 
 ## Aufbau
@@ -65,13 +63,13 @@ Der Angular-Dev-Server leitet `/api` ueber `stempeluhr-client/proxy.conf.json` l
 Image lokal bauen:
 
 ```powershell
-docker build -t stempeluhr:0.1.2 .
+docker build -t stempeluhr:local .
 ```
 
 Container starten:
 
 ```powershell
-docker run --rm -p 8080:8080 -v stempeluhr-data:/app/data -e Admin__Password=admin stempeluhr:0.1.2
+docker run --rm -p 8080:8080 -v stempeluhr-data:/app/data -e Admin__Password=admin stempeluhr:local
 ```
 
 Die App ist dann unter `http://localhost:8080` erreichbar.
@@ -79,24 +77,34 @@ Im Container werden Frontend und Backend vom selben .NET-Prozess ausgeliefert. D
 
 ## Semantische Versionierung
 
-Versionen folgen SemVer: `MAJOR.MINOR.PATCH`.
-Die Versionsdateien werden nicht automatisch durch einen Git-Tag geaendert. Vor einem Release muessen die Dateien angepasst und committed werden; der Tag startet danach den Container-Release.
+Versionen folgen SemVer: `MAJOR.MINOR.PATCH`. Die Release-Version ist der Git-Tag, zum Beispiel `v0.1.3`.
 
-- `VERSION` enthaelt die aktuelle App-Version.
-- `Directory.Build.props` setzt die .NET Assembly-Version.
-- `stempeluhr-client/package.json` enthaelt die Angular-Version.
+Es gibt keine Versionsdatei, die pro Release angepasst werden muss:
 
-Ein Release wird ueber einen Git-Tag erstellt:
+- Lokale Builds verwenden `0.0.0-local`.
+- Release-Builds bekommen die Version aus dem Git-Tag.
+- Die GitHub Action uebergibt die Tag-Version als Docker-Build-Arg an `.NET`.
+- `stempeluhr-client/package.json` bleibt bei `0.0.0`, weil die Angular-App nicht als npm-Paket released wird.
+
+Automatisch versionieren:
+
+1. In GitHub `Actions` oeffnen.
+2. Workflow `Create version tag` starten.
+3. `patch`, `minor` oder `major` waehlen.
+4. Der Workflow erzeugt den naechsten Tag, zum Beispiel `v0.1.3`.
+5. Der Workflow `Release container` baut und pusht danach automatisch das Docker-Image.
+
+Manuell geht es weiterhin ueber einen Git-Tag:
 
 ```powershell
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
-Der Workflow `.github/workflows/release-container.yml` baut bei Tags wie `v0.1.2` oder bei einem veroeffentlichten GitHub Release ein Docker-Image und pusht es nach GitHub Container Registry:
+Der Workflow `.github/workflows/release-container.yml` baut bei Tags wie `v0.1.3` oder bei einem veroeffentlichten GitHub Release ein Docker-Image und pusht es nach GitHub Container Registry:
 
 ```text
-ghcr.io/<owner>/<repo>:0.1.2
+ghcr.io/<owner>/<repo>:0.1.3
 ghcr.io/<owner>/<repo>:0.1
 ghcr.io/<owner>/<repo>:latest
 ```

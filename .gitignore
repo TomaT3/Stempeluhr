@@ -23,6 +23,7 @@ pnpm-debug.log*
 *.userosscache
 *.sln.docstates
 TestResults/
+artifacts/
 
 # Local configuration and secrets
 .env

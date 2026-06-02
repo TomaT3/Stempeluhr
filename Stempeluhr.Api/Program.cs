@@ -481,7 +481,7 @@ public sealed record EmployeeDto(string Id, string DisplayName, string Initials,
 public sealed record ClockStatusDto(
     bool IsRunning,
     int? ActiveTimesheetId,
-    string StartedAt,
+    string? StartedAt,
     int DurationSeconds,
     string StateText);
 
