@@ -62,7 +62,6 @@ type ViewMode = 'clock' | 'admin';
 })
 export class App {
   private readonly http = inject(HttpClient);
-  private readonly apiBase = window.location.port === '4200' ? 'http://localhost:5100' : '';
 
   readonly mode = signal<ViewMode>('clock');
   readonly employees = signal<Employee[]>([]);
@@ -151,7 +150,7 @@ export class App {
 
   loadAdminSettings(): void {
     this.adminBusy.set(true);
-    this.http.get<AdminSettings>(`${this.apiBase}/api/admin/settings`, { headers: this.adminHeaders() }).subscribe({
+    this.http.get<AdminSettings>('/api/admin/settings', { headers: this.adminHeaders() }).subscribe({
       next: settings => {
         this.adminSettings.set(this.withEditableTokens(settings));
         this.adminMessage.set('');
@@ -171,7 +170,7 @@ export class App {
     }
 
     this.adminBusy.set(true);
-    this.http.put<AdminSettings>(`${this.apiBase}/api/admin/settings`, this.toUpdatePayload(settings), { headers: this.adminHeaders() }).subscribe({
+    this.http.put<AdminSettings>('/api/admin/settings', this.toUpdatePayload(settings), { headers: this.adminHeaders() }).subscribe({
       next: saved => {
         this.adminSettings.set(this.withEditableTokens(saved));
         this.adminMessage.set('Gespeichert');
@@ -192,7 +191,7 @@ export class App {
     }
 
     this.adminBusy.set(true);
-    this.http.post<KimaiUser[]>(`${this.apiBase}/api/admin/kimai-users`, {
+    this.http.post<KimaiUser[]>('/api/admin/kimai-users', {
       baseUrl: settings.baseUrl,
       adminApiToken: ''
     }, { headers: this.adminHeaders() }).subscribe({
@@ -326,7 +325,7 @@ export class App {
   }
 
   private loadEmployees(): void {
-    this.http.get<Employee[]>(`${this.apiBase}/api/employees`).subscribe({
+    this.http.get<Employee[]>('/api/employees').subscribe({
       next: employees => this.employees.set(employees),
       error: () => this.message.set('Backend nicht erreichbar')
     });
@@ -339,7 +338,7 @@ export class App {
     }
 
     this.isBusy.set(true);
-    this.http.post<ClockStatus>(`${this.apiBase}/api/clock/status`, this.requestBody()).subscribe({
+    this.http.post<ClockStatus>('/api/clock/status', this.requestBody()).subscribe({
       next: status => {
         this.loadedAt = Date.now();
         this.status.set(status);
@@ -358,7 +357,7 @@ export class App {
 
   private sendClockAction(action: 'start' | 'stop'): void {
     this.isBusy.set(true);
-    this.http.post<ClockStatus>(`${this.apiBase}/api/clock/${action}`, this.requestBody()).subscribe({
+    this.http.post<ClockStatus>(`/api/clock/${action}`, this.requestBody()).subscribe({
       next: status => {
         this.loadedAt = Date.now();
         this.status.set(status);

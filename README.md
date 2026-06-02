@@ -58,6 +58,7 @@ npm start
 ```
 
 Danach ist die App unter `http://localhost:4200` erreichbar. Das Backend laeuft auf `http://localhost:5100`.
+Der Angular-Dev-Server leitet `/api` ueber `stempeluhr-client/proxy.conf.json` lokal an das Backend weiter.
 
 ## Docker
 
@@ -74,6 +75,7 @@ docker run --rm -p 8080:8080 -v stempeluhr-data:/app/data -e Admin__Password=adm
 ```
 
 Die App ist dann unter `http://localhost:8080` erreichbar.
+Im Container werden Frontend und Backend vom selben .NET-Prozess ausgeliefert. Dadurch funktionieren API-Aufrufe relativ ueber `/api`, auch wenn der Container spaeter ueber Cloudflared unter einer externen Domain erreichbar ist.
 
 ## Semantische Versionierung
 
