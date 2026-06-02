@@ -301,7 +301,7 @@ public sealed class RuntimeSettingsStore(IWebHostEnvironment environment, IConfi
     }
 }
 
-public sealed class KimaiClient(IHttpClientFactory httpClientFactory)
+public sealed class KimaiClient(HttpClient httpClient)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -376,7 +376,6 @@ public sealed class KimaiClient(IHttpClientFactory httpClientFactory)
         object? body,
         CancellationToken cancellationToken)
     {
-        using var httpClient = httpClientFactory.CreateClient();
         using var request = new HttpRequestMessage(method, BuildUri(baseUrl, path));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));

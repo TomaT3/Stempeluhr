@@ -1,6 +1,6 @@
 # Stempeluhr fuer Kimai
 
-Aktuelle Version: `0.1.0`
+Aktuelle Version: `0.1.2`
 
 Touch-freundliche Stempeluhr fuer eine gehostete Kimai-Instanz.
 
@@ -65,13 +65,13 @@ Der Angular-Dev-Server leitet `/api` ueber `stempeluhr-client/proxy.conf.json` l
 Image lokal bauen:
 
 ```powershell
-docker build -t stempeluhr:0.1.0 .
+docker build -t stempeluhr:0.1.2 .
 ```
 
 Container starten:
 
 ```powershell
-docker run --rm -p 8080:8080 -v stempeluhr-data:/app/data -e Admin__Password=admin stempeluhr:0.1.0
+docker run --rm -p 8080:8080 -v stempeluhr-data:/app/data -e Admin__Password=admin stempeluhr:0.1.2
 ```
 
 Die App ist dann unter `http://localhost:8080` erreichbar.
@@ -80,6 +80,7 @@ Im Container werden Frontend und Backend vom selben .NET-Prozess ausgeliefert. D
 ## Semantische Versionierung
 
 Versionen folgen SemVer: `MAJOR.MINOR.PATCH`.
+Die Versionsdateien werden nicht automatisch durch einen Git-Tag geaendert. Vor einem Release muessen die Dateien angepasst und committed werden; der Tag startet danach den Container-Release.
 
 - `VERSION` enthaelt die aktuelle App-Version.
 - `Directory.Build.props` setzt die .NET Assembly-Version.
@@ -88,14 +89,14 @@ Versionen folgen SemVer: `MAJOR.MINOR.PATCH`.
 Ein Release wird ueber einen Git-Tag erstellt:
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
-Der Workflow `.github/workflows/release-container.yml` baut bei Tags wie `v0.1.0` oder bei einem veroeffentlichten GitHub Release ein Docker-Image und pusht es nach GitHub Container Registry:
+Der Workflow `.github/workflows/release-container.yml` baut bei Tags wie `v0.1.2` oder bei einem veroeffentlichten GitHub Release ein Docker-Image und pusht es nach GitHub Container Registry:
 
 ```text
-ghcr.io/<owner>/<repo>:0.1.0
+ghcr.io/<owner>/<repo>:0.1.2
 ghcr.io/<owner>/<repo>:0.1
 ghcr.io/<owner>/<repo>:latest
 ```
