@@ -339,7 +339,7 @@ public sealed class KimaiClient(HttpClient httpClient)
 
         var body = new
         {
-            begin = DateTime.Now.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture),
+            //begin = DateTime.Now.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture),
             project = projectId,
             activity = activityId,
             description = string.IsNullOrWhiteSpace(employee.Description) ? "Stempeluhr" : employee.Description,
@@ -481,7 +481,7 @@ public sealed record EmployeeDto(string Id, string DisplayName, string Initials,
 public sealed record ClockStatusDto(
     bool IsRunning,
     int? ActiveTimesheetId,
-    string? StartedAt,
+    string StartedAt,
     int DurationSeconds,
     string StateText);
 

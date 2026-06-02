@@ -58,7 +58,7 @@ npm start
 ```
 
 Danach ist die App unter `http://localhost:4200` erreichbar. Das Backend laeuft auf `http://localhost:5100`.
-Der Angular-Dev-Server leitet `/api` ueber `stempeluhr-client/proxy.conf.json` lokal an das Backend weiter.
+Der Angular-Dev-Server leitet `/api` ueber `stempeluhr-client/proxy.conf.json` lokal an das Backend weiter. Das gilt auch fuer direktes `ng serve`, weil der Proxy in `angular.json` eingetragen ist.
 
 ## Docker
 

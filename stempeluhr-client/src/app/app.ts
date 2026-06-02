@@ -1,5 +1,5 @@
 import { Component, computed, inject, signal } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 
 interface Employee {
   id: string;
@@ -78,6 +78,7 @@ export class App {
   readonly kimaiUsers = signal<KimaiUser[]>([]);
   readonly adminMessage = signal('');
   readonly adminBusy = signal(false);
+  readonly adminDirty = signal(false);
 
   readonly elapsed = computed(() => {
     const status = this.status();
@@ -154,10 +155,11 @@ export class App {
       next: settings => {
         this.adminSettings.set(this.withEditableTokens(settings));
         this.adminMessage.set('');
+        this.adminDirty.set(false);
         this.adminBusy.set(false);
       },
-      error: () => {
-        this.adminMessage.set('Admin-Passwort stimmt nicht oder ist noch nicht gesetzt.');
+      error: (error: HttpErrorResponse) => {
+        this.adminMessage.set(this.adminLoginErrorMessage(error));
         this.adminBusy.set(false);
       }
     });
@@ -174,6 +176,7 @@ export class App {
       next: saved => {
         this.adminSettings.set(this.withEditableTokens(saved));
         this.adminMessage.set('Gespeichert');
+        this.adminDirty.set(false);
         this.adminBusy.set(false);
         this.loadEmployees();
       },
@@ -197,7 +200,8 @@ export class App {
     }, { headers: this.adminHeaders() }).subscribe({
       next: users => {
         this.kimaiUsers.set(users);
-        this.adminMessage.set(`${users.length} Kimai-Mitarbeiter geladen`);
+        const added = this.mergeKimaiUsers(users);
+        this.adminMessage.set(`${users.length} Kimai-Mitarbeiter geladen, ${added} uebernommen`);
         this.adminBusy.set(false);
       },
       error: () => {
@@ -208,28 +212,25 @@ export class App {
   }
 
   addKimaiUser(user: KimaiUser): void {
+    const settings = this.adminSettings();
+    if (!settings) {
+      return;
+    }
+
+    if (this.hasKimaiUser(settings, user)) {
+      this.adminMessage.set('Mitarbeiter ist bereits uebernommen');
+      return;
+    }
+
     this.updateSettings(settings => ({
       ...settings,
-      employees: [
-        ...settings.employees,
-        {
-          id: crypto.randomUUID(),
-          kimaiUserId: user.id,
-          displayName: user.displayName,
-          pin: null,
-          hasApiToken: false,
-          apiToken: '',
-          projectId: null,
-          activityId: null,
-          color: this.nextColor(settings.employees.length),
-          imageUrl: user.avatarUrl,
-          description: 'Arbeitszeit',
-          tags: ['stempeluhr'],
-          billable: true,
-          isEnabled: true
-        }
-      ]
+      employees: [...settings.employees, this.createEmployeeFromKimaiUser(user, settings.employees.length)]
     }));
+  }
+
+  isKimaiUserConfigured(user: KimaiUser): boolean {
+    const settings = this.adminSettings();
+    return settings ? this.hasKimaiUser(settings, user) : false;
   }
 
   addEmployee(): void {
@@ -382,6 +383,18 @@ export class App {
     return new HttpHeaders({ 'X-Admin-Password': this.adminPassword() });
   }
 
+  private adminLoginErrorMessage(error: HttpErrorResponse): string {
+    if (error.status === 0 || error.status === 404) {
+      return 'Backend nicht erreichbar. Lokal bitte .NET auf Port 5100 starten und Angular mit Proxy verwenden.';
+    }
+
+    if (error.status === 401) {
+      return 'Admin-Passwort stimmt nicht oder ist noch nicht gesetzt.';
+    }
+
+    return `Admin-Anmeldung fehlgeschlagen (${error.status}).`;
+  }
+
   private withEditableTokens(settings: AdminSettings): AdminSettings {
     return {
       ...settings,
@@ -425,6 +438,54 @@ export class App {
     }
 
     this.adminSettings.set(update(settings));
+    this.adminDirty.set(true);
+  }
+
+  private mergeKimaiUsers(users: KimaiUser[]): number {
+    let added = 0;
+    const settings = this.adminSettings();
+    if (!settings) {
+      return 0;
+    }
+
+    const employees = [...settings.employees];
+    for (const user of users) {
+      if (employees.some(employee => employee.kimaiUserId === user.id)) {
+        continue;
+      }
+
+      employees.push(this.createEmployeeFromKimaiUser(user, employees.length));
+      added++;
+    }
+
+    if (added > 0) {
+      this.updateSettings(current => ({ ...current, employees }));
+    }
+
+    return added;
+  }
+
+  private hasKimaiUser(settings: AdminSettings, user: KimaiUser): boolean {
+    return settings.employees.some(employee => employee.kimaiUserId === user.id);
+  }
+
+  private createEmployeeFromKimaiUser(user: KimaiUser, index: number): AdminEmployee {
+    return {
+      id: crypto.randomUUID(),
+      kimaiUserId: user.id,
+      displayName: user.displayName,
+      pin: null,
+      hasApiToken: false,
+      apiToken: '',
+      projectId: null,
+      activityId: null,
+      color: this.nextColor(index),
+      imageUrl: user.avatarUrl,
+      description: 'Arbeitszeit',
+      tags: ['stempeluhr'],
+      billable: true,
+      isEnabled: true
+    };
   }
 
   private toNumber(value: string): number | null {

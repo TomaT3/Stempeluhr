@@ -13,24 +13,32 @@
 
   @if (mode() === 'clock') {
     @if (!selectedEmployee()) {
-      <section class="employee-grid" aria-label="Mitarbeiter">
-        @for (employee of employees(); track employee.id) {
-          <button class="employee-tile" type="button" (click)="selectEmployee(employee)">
-            <span class="avatar" [style.background]="employee.imageUrl ? 'transparent' : employee.color">
-              @if (employee.imageUrl) {
-                <img [src]="employee.imageUrl" [alt]="employee.displayName">
-              } @else {
-                {{ employee.initials }}
-              }
-            </span>
-            <span class="employee-name">{{ employee.displayName }}</span>
-          </button>
-        }
-      </section>
+      @if (employees().length > 0) {
+        <section class="employee-grid" aria-label="Mitarbeiter">
+          @for (employee of employees(); track employee.id) {
+            <button class="employee-tile" type="button" (click)="selectEmployee(employee)">
+              <span class="avatar" [style.background]="employee.imageUrl ? 'transparent' : employee.color">
+                @if (employee.imageUrl) {
+                  <img [src]="employee.imageUrl" [alt]="employee.displayName">
+                } @else {
+                  {{ employee.initials }}
+                }
+              </span>
+              <span class="employee-name">{{ employee.displayName }}</span>
+            </button>
+          }
+        </section>
+      } @else {
+        <section class="empty-state">
+          <h2>Keine Mitarbeiter</h2>
+          <p>Mitarbeiter erscheinen hier nach dem Speichern mit API-Token.</p>
+          <button type="button" (click)="openAdmin()">Admin</button>
+        </section>
+      }
     } @else {
       <section class="station">
         <button class="back-button" type="button" (click)="back()" aria-label="Zurueck">
-          ‹
+          &lt;
         </button>
 
         <div class="person">
@@ -146,9 +154,10 @@
               <h2>Import</h2>
               <div class="kimai-user-list">
                 @for (user of kimaiUsers(); track user.id) {
-                  <button type="button" (click)="addKimaiUser(user)">
+                  <button type="button" [class.imported]="isKimaiUserConfigured(user)" (click)="addKimaiUser(user)">
                     <span>{{ user.displayName }}</span>
                     <small>{{ user.username || user.email }}</small>
+                    <strong>{{ isKimaiUserConfigured(user) ? 'Uebernommen' : 'Uebernehmen' }}</strong>
                   </button>
                 }
               </div>
@@ -227,6 +236,11 @@
               </article>
             }
           </section>
+
+          <div class="admin-savebar">
+            <span>{{ adminDirty() ? 'Ungespeicherte Aenderungen' : 'Gespeichert' }}</span>
+            <button type="button" class="primary" (click)="saveAdminSettings()" [disabled]="adminBusy()">Speichern</button>
+          </div>
         </div>
       }
 
