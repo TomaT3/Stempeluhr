@@ -1,0 +1,21 @@
+# Build output
+bin/
+obj/
+TestResults/
+
+# User-specific IDE files
+*.user
+*.rsuser
+*.suo
+*.userosscache
+
+# Local runtime configuration
+appsettings.Local.json
+appsettings.*.Local.json
+appsettings.Secrets.json
+appsettings.Development.json
+!appsettings.Development.example.json
+data/
+
+# Logs
+*.log

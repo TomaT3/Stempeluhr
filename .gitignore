@@ -1,0 +1,55 @@
+# Build output
+**/bin/
+**/obj/
+**/out/
+**/dist/
+**/tmp/
+**/coverage/
+
+# Node / Angular
+**/node_modules/
+**/.angular/
+**/.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# .NET / Visual Studio
+.vs/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+TestResults/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+**/appsettings.Local.json
+**/appsettings.*.Local.json
+**/appsettings.Secrets.json
+**/appsettings.Development.json
+!**/appsettings.Development.example.json
+**/data/
+
+# Docker / compose local overrides
+docker-compose.override.yml
+*.local.yml
+
+# Editor state
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/mcp.json
+.history/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

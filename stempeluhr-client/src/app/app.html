@@ -1,0 +1,238 @@
+<main class="shell">
+  <section class="topbar">
+    <div>
+      <p class="eyebrow">Kimai</p>
+      <h1>Stempeluhr</h1>
+    </div>
+    <div class="top-actions">
+      <button class="mode-button" type="button" (click)="openClock()">Uhr</button>
+      <button class="mode-button" type="button" (click)="openAdmin()">Admin</button>
+      <div class="clock">{{ formatDuration(elapsed()) }}</div>
+    </div>
+  </section>
+
+  @if (mode() === 'clock') {
+    @if (!selectedEmployee()) {
+      <section class="employee-grid" aria-label="Mitarbeiter">
+        @for (employee of employees(); track employee.id) {
+          <button class="employee-tile" type="button" (click)="selectEmployee(employee)">
+            <span class="avatar" [style.background]="employee.imageUrl ? 'transparent' : employee.color">
+              @if (employee.imageUrl) {
+                <img [src]="employee.imageUrl" [alt]="employee.displayName">
+              } @else {
+                {{ employee.initials }}
+              }
+            </span>
+            <span class="employee-name">{{ employee.displayName }}</span>
+          </button>
+        }
+      </section>
+    } @else {
+      <section class="station">
+        <button class="back-button" type="button" (click)="back()" aria-label="Zurueck">
+          ‹
+        </button>
+
+        <div class="person">
+          <span class="avatar avatar-large" [style.background]="selectedEmployee()?.imageUrl ? 'transparent' : selectedEmployee()?.color">
+            @if (selectedEmployee()?.imageUrl) {
+              <img [src]="selectedEmployee()?.imageUrl ?? ''" [alt]="selectedEmployee()?.displayName ?? ''">
+            } @else {
+              {{ selectedEmployee()?.initials }}
+            }
+          </span>
+          <h2>{{ selectedEmployee()?.displayName }}</h2>
+        </div>
+
+        @if (!isUnlocked()) {
+          <div class="pin-panel">
+            <div class="pin-dots" aria-label="PIN">
+              @for (_ of [0, 1, 2, 3]; track $index) {
+                <span [class.filled]="$index < pin().length"></span>
+              }
+            </div>
+
+            <div class="keypad">
+              @for (digit of ['1','2','3','4','5','6','7','8','9']; track digit) {
+                <button type="button" (click)="pressDigit(digit)">{{ digit }}</button>
+              }
+              <button type="button" class="key-muted" (click)="clearPin()">C</button>
+              <button type="button" (click)="pressDigit('0')">0</button>
+              <button type="button" class="key-ok" (click)="confirmPin()" [disabled]="isBusy()">OK</button>
+            </div>
+          </div>
+        } @else {
+          <div class="status-row" [class.running]="status()?.isRunning">
+            <span class="status-dot"></span>
+            <span>{{ status()?.stateText }}</span>
+          </div>
+
+          @if (status()?.isRunning) {
+            <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+              <span class="stamp-icon square"></span>
+              Ausstempeln
+            </button>
+          } @else {
+            <button class="stamp-button start" type="button" (click)="start()" [disabled]="isBusy()">
+              <span class="stamp-icon play"></span>
+              Einstempeln
+            </button>
+          }
+        }
+
+        @if (message()) {
+          <p class="message">{{ message() }}</p>
+        }
+      </section>
+    }
+  } @else {
+    <section class="admin">
+      <div class="admin-login">
+        <label>
+          Admin-Passwort
+          <input
+            type="password"
+            [value]="adminPassword()"
+            (input)="adminPassword.set($any($event.target).value)"
+            autocomplete="current-password">
+        </label>
+        <button type="button" (click)="loadAdminSettings()" [disabled]="adminBusy()">Laden</button>
+      </div>
+
+      @if (adminSettings(); as settings) {
+        <div class="admin-layout">
+          <section class="admin-section">
+            <h2>Kimai</h2>
+            <div class="form-grid">
+              <label>
+                Kimai-URL
+                <input type="url" [value]="settings.baseUrl" (input)="updateBaseUrl($any($event.target).value)">
+              </label>
+              <label>
+                Admin-API-Token
+                <input
+                  type="password"
+                  [placeholder]="settings.hasAdminApiToken ? 'gespeichert' : 'eintragen'"
+                  (input)="updateAdminApiToken($any($event.target).value)"
+                  autocomplete="off">
+              </label>
+              <label>
+                Neues Admin-Passwort
+                <input
+                  type="password"
+                  [placeholder]="settings.hasAdminPassword ? 'unveraendert lassen' : 'setzen'"
+                  (input)="updateAdminPassword($any($event.target).value)"
+                  autocomplete="new-password">
+              </label>
+              <label>
+                Standard-Projekt-ID
+                <input type="number" min="1" [value]="settings.defaultProjectId ?? ''" (input)="updateDefaultProjectId($any($event.target).value)">
+              </label>
+              <label>
+                Standard-Aktivitaet-ID
+                <input type="number" min="1" [value]="settings.defaultActivityId ?? ''" (input)="updateDefaultActivityId($any($event.target).value)">
+              </label>
+            </div>
+
+            <div class="admin-actions">
+              <button type="button" (click)="importKimaiUsers()" [disabled]="adminBusy()">Kimai-Mitarbeiter laden</button>
+              <button type="button" (click)="addEmployee()">Manuell hinzufuegen</button>
+              <button type="button" class="primary" (click)="saveAdminSettings()" [disabled]="adminBusy()">Speichern</button>
+            </div>
+          </section>
+
+          @if (kimaiUsers().length > 0) {
+            <section class="admin-section">
+              <h2>Import</h2>
+              <div class="kimai-user-list">
+                @for (user of kimaiUsers(); track user.id) {
+                  <button type="button" (click)="addKimaiUser(user)">
+                    <span>{{ user.displayName }}</span>
+                    <small>{{ user.username || user.email }}</small>
+                  </button>
+                }
+              </div>
+            </section>
+          }
+
+          <section class="admin-section employee-admin-list">
+            <h2>Mitarbeiter</h2>
+            @for (employee of settings.employees; track employee.id; let index = $index) {
+              <article class="employee-admin-card">
+                <div class="employee-admin-head">
+                  <span class="avatar small" [style.background]="employee.imageUrl ? 'transparent' : employee.color">
+                    @if (employee.imageUrl) {
+                      <img [src]="employee.imageUrl" [alt]="employee.displayName">
+                    } @else {
+                      {{ employee.displayName.slice(0, 2).toUpperCase() }}
+                    }
+                  </span>
+                  <label class="toggle">
+                    <input type="checkbox" [checked]="employee.isEnabled" (change)="updateEmployee(index, { isEnabled: $any($event.target).checked })">
+                    aktiv
+                  </label>
+                  <button type="button" class="danger" (click)="removeEmployee(index)">Entfernen</button>
+                </div>
+
+                <div class="form-grid">
+                  <label>
+                    Name
+                    <input [value]="employee.displayName" (input)="updateEmployee(index, { displayName: $any($event.target).value })">
+                  </label>
+                  <label>
+                    PIN
+                    <input [value]="employee.pin ?? ''" (input)="updateEmployee(index, { pin: $any($event.target).value || null })" inputmode="numeric">
+                  </label>
+                  <label>
+                    API-Token
+                    <input
+                      type="password"
+                      [placeholder]="employee.hasApiToken ? 'gespeichert' : 'eintragen'"
+                      (input)="updateEmployee(index, { apiToken: $any($event.target).value })"
+                      autocomplete="off">
+                  </label>
+                  <label>
+                    Farbe
+                    <input type="color" [value]="employee.color" (input)="updateEmployee(index, { color: $any($event.target).value })">
+                  </label>
+                  <label>
+                    Projekt-ID
+                    <input type="number" min="1" [value]="employee.projectId ?? ''" (input)="updateEmployee(index, { projectId: $any($event.target).value ? +$any($event.target).value : null })">
+                  </label>
+                  <label>
+                    Aktivitaet-ID
+                    <input type="number" min="1" [value]="employee.activityId ?? ''" (input)="updateEmployee(index, { activityId: $any($event.target).value ? +$any($event.target).value : null })">
+                  </label>
+                  <label>
+                    Beschreibung
+                    <input [value]="employee.description ?? ''" (input)="updateEmployee(index, { description: $any($event.target).value || null })">
+                  </label>
+                  <label>
+                    Tags
+                    <input [value]="employee.tags.join(', ')" (input)="updateEmployeeTags(index, $any($event.target).value)">
+                  </label>
+                </div>
+
+                <div class="image-actions">
+                  <label class="file-button">
+                    Bild
+                    <input type="file" accept="image/*" (change)="setEmployeeImage(index, $event)">
+                  </label>
+                  <button type="button" (click)="clearEmployeeImage(index)">Bild entfernen</button>
+                  <label class="toggle">
+                    <input type="checkbox" [checked]="employee.billable" (change)="updateEmployee(index, { billable: $any($event.target).checked })">
+                    abrechenbar
+                  </label>
+                </div>
+              </article>
+            }
+          </section>
+        </div>
+      }
+
+      @if (adminMessage()) {
+        <p class="message">{{ adminMessage() }}</p>
+      }
+    </section>
+  }
+</main>
