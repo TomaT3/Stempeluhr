@@ -10,11 +10,17 @@ export class ClockState {
   private loadedAt = Date.now();
 
   readonly status = signal<ClockStatus | null>(null);
+  readonly now = computed(() => new Date(this.tick()));
 
   readonly elapsed = computed(() => {
     const status = this.status();
     if (!status?.isRunning) {
       return status?.durationSeconds ?? 0;
+    }
+
+    const startedAt = this.parseStartedAt(status.startedAt);
+    if (startedAt !== null) {
+      return Math.max(0, Math.floor((this.tick() - startedAt) / 1000));
     }
 
     return Math.max(0, status.durationSeconds + Math.floor((this.tick() - this.loadedAt) / 1000));
@@ -31,5 +37,14 @@ export class ClockState {
 
   clear(): void {
     this.status.set(null);
+  }
+
+  private parseStartedAt(value: string | null): number | null {
+    if (!value) {
+      return null;
+    }
+
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
   }
 }

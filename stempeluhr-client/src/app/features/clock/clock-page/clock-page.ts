@@ -1,3 +1,4 @@
+import { DatePipe } from '@angular/common';
 import { Component, inject, signal } from '@angular/core';
 
 import { Employee } from '../../../core/models/kiosk.models';
@@ -6,10 +7,11 @@ import { ClockState } from '../../../core/services/clock-state';
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { Avatar } from '../../../shared/components/avatar/avatar';
 import { StatusBadge } from '../../../shared/components/status-badge/status-badge';
+import { DurationPipe } from '../../../shared/pipes/duration-pipe';
 
 @Component({
   selector: 'app-clock-page',
-  imports: [Avatar, StatusBadge],
+  imports: [Avatar, DatePipe, DurationPipe, StatusBadge],
   templateUrl: './clock-page.html',
   styleUrl: './clock-page.scss',
 })

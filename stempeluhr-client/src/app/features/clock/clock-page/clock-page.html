@@ -47,6 +47,24 @@
         [text]="clockState.status()?.stateText ?? ''"
         [running]="clockState.status()?.isRunning ?? false" />
 
+      <dl class="time-info" aria-label="Zeitinformationen">
+        @if (clockState.status()?.isRunning) {
+          <div>
+            <dt>Eingestempelt seit</dt>
+            <dd>{{ clockState.status()?.startedAt | date: 'HH:mm' }}</dd>
+          </div>
+          <div>
+            <dt>Dauer</dt>
+            <dd>{{ clockState.elapsed() | duration }}</dd>
+          </div>
+        } @else {
+          <div>
+            <dt>Status</dt>
+            <dd>Nicht eingestempelt</dd>
+          </div>
+        }
+      </dl>
+
       @if (clockState.status()?.isRunning) {
         <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
           <span class="stamp-icon square"></span>

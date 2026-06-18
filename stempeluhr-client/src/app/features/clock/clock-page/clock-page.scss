@@ -114,6 +114,42 @@ h2 {
   text-align: center;
 }
 
+.time-info {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 12px;
+  width: min(680px, 100%);
+  margin: 0;
+}
+
+.time-info div {
+  display: grid;
+  gap: 6px;
+  min-height: 82px;
+  align-content: center;
+  padding: 14px 18px;
+  border: 1px solid #d9e0e9;
+  border-radius: 8px;
+  background: #ffffff;
+  text-align: center;
+}
+
+.time-info dt {
+  color: #657083;
+  font-size: 0.88rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.time-info dd {
+  margin: 0;
+  color: #172033;
+  font-size: clamp(1.35rem, 4vw, 2.2rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  line-height: 1;
+}
+
 .stamp-button {
   display: inline-grid;
   grid-template-columns: auto 1fr;
@@ -186,5 +222,9 @@ h2 {
   .back-button {
     width: 50px;
     height: 50px;
+  }
+
+  .time-info {
+    grid-template-columns: 1fr;
   }
 }
