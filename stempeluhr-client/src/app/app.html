@@ -13,28 +13,29 @@
 
   @if (mode() === 'clock') {
     @if (!selectedEmployee()) {
-      @if (employees().length > 0) {
-        <section class="employee-grid" aria-label="Mitarbeiter">
-          @for (employee of employees(); track employee.id) {
-            <button class="employee-tile" type="button" (click)="selectEmployee(employee)">
-              <span class="avatar" [style.background]="employee.imageUrl ? 'transparent' : employee.color">
-                @if (employee.imageUrl) {
-                  <img [src]="employee.imageUrl" [alt]="employee.displayName">
-                } @else {
-                  {{ employee.initials }}
-                }
-              </span>
-              <span class="employee-name">{{ employee.displayName }}</span>
-            </button>
-          }
-        </section>
-      } @else {
-        <section class="empty-state">
-          <h2>Keine Mitarbeiter</h2>
-          <p>Mitarbeiter erscheinen hier nach dem Speichern mit API-Token.</p>
-          <button type="button" (click)="openAdmin()">Admin</button>
-        </section>
-      }
+      <section class="kiosk-login" aria-label="PIN-Anmeldung">
+        <h2>PIN eingeben</h2>
+        <div class="pin-panel">
+          <div class="pin-dots" aria-label="PIN">
+            @for (_ of [0, 1, 2, 3]; track $index) {
+              <span [class.filled]="$index < pin().length"></span>
+            }
+          </div>
+
+          <div class="keypad">
+            @for (digit of ['1','2','3','4','5','6','7','8','9']; track digit) {
+              <button type="button" (click)="pressDigit(digit)">{{ digit }}</button>
+            }
+            <button type="button" class="key-muted" (click)="clearPin()">C</button>
+            <button type="button" (click)="pressDigit('0')">0</button>
+            <button type="button" class="key-ok" (click)="confirmPin()" [disabled]="isBusy()">OK</button>
+          </div>
+        </div>
+
+        @if (message()) {
+          <p class="message">{{ message() }}</p>
+        }
+      </section>
     } @else {
       <section class="station">
         <button class="back-button" type="button" (click)="back()" aria-label="Zurueck">
@@ -53,22 +54,7 @@
         </div>
 
         @if (!isUnlocked()) {
-          <div class="pin-panel">
-            <div class="pin-dots" aria-label="PIN">
-              @for (_ of [0, 1, 2, 3]; track $index) {
-                <span [class.filled]="$index < pin().length"></span>
-              }
-            </div>
-
-            <div class="keypad">
-              @for (digit of ['1','2','3','4','5','6','7','8','9']; track digit) {
-                <button type="button" (click)="pressDigit(digit)">{{ digit }}</button>
-              }
-              <button type="button" class="key-muted" (click)="clearPin()">C</button>
-              <button type="button" (click)="pressDigit('0')">0</button>
-              <button type="button" class="key-ok" (click)="confirmPin()" [disabled]="isBusy()">OK</button>
-            </div>
-          </div>
+          <p class="message">Bitte erneut mit PIN anmelden.</p>
         } @else {
           <div class="status-row" [class.running]="status()?.isRunning">
             <span class="status-dot"></span>
@@ -176,6 +162,12 @@
                       {{ employee.displayName.slice(0, 2).toUpperCase() }}
                     }
                   </span>
+                  @if (statusFor(employee.id); as employeeStatus) {
+                    <span class="admin-status" [class.running]="employeeStatus.isRunning" [class.unavailable]="!employeeStatus.isAvailable">
+                      <span class="status-dot"></span>
+                      {{ employeeStatus.stateText }}
+                    </span>
+                  }
                   <label class="toggle">
                     <input type="checkbox" [checked]="employee.isEnabled" (change)="updateEmployee(index, { isEnabled: $any($event.target).checked })">
                     aktiv

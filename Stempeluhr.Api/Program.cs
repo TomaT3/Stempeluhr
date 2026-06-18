@@ -63,8 +63,13 @@ app.MapGet("/api/health", (RuntimeSettingsStore settingsStore) =>
     });
 });
 
-app.MapGet("/api/employees", (RuntimeSettingsStore settingsStore) =>
+app.MapGet("/api/employees", (HttpRequest request, RuntimeSettingsStore settingsStore, IConfiguration configuration) =>
 {
+    if (!IsAdmin(request, settingsStore, configuration))
+    {
+        return Results.Unauthorized();
+    }
+
     var settings = settingsStore.Load();
     var employees = settings.Employees
         .Where(employee => employee.IsEnabled && !string.IsNullOrWhiteSpace(employee.ApiToken))
@@ -78,6 +83,49 @@ app.MapGet("/api/employees", (RuntimeSettingsStore settingsStore) =>
         .ToArray();
 
     return Results.Ok(employees);
+});
+
+app.MapPost("/api/kiosk/pin-login", async (
+    KioskPinLoginRequest request,
+    KimaiClient kimai,
+    RuntimeSettingsStore settingsStore,
+    CancellationToken cancellationToken) =>
+{
+    var settings = settingsStore.Load();
+    var employee = FindEmployeeByPin(settings, request.Pin);
+    if (employee is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+    return Results.Ok(new KioskEmployeeSessionDto(ToEmployeeDto(employee), status));
+});
+
+app.MapPost("/api/kiosk/clock", async (
+    KioskClockRequest request,
+    KimaiClient kimai,
+    RuntimeSettingsStore settingsStore,
+    CancellationToken cancellationToken) =>
+{
+    var settings = settingsStore.Load();
+    var employee = FindEmployee(settings, new ClockRequest(request.EmployeeId, request.Pin));
+    if (employee is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    if (string.Equals(request.Action, "start", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Ok(await StartClockAsync(settings, employee, kimai, cancellationToken));
+    }
+
+    if (string.Equals(request.Action, "stop", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Ok(await StopClockAsync(settings, employee, kimai, cancellationToken));
+    }
+
+    return Results.BadRequest(new { message = "Unbekannte Stempelaktion." });
 });
 
 app.MapPost("/api/clock/status", async (ClockRequest request, KimaiClient kimai, RuntimeSettingsStore settingsStore) =>
@@ -102,15 +150,7 @@ app.MapPost("/api/clock/start", async (ClockRequest request, KimaiClient kimai, 
         return Results.Unauthorized();
     }
 
-    var running = await kimai.GetStatusAsync(settings, employee);
-    if (running.IsRunning)
-    {
-        return Results.Ok(running with { StateText = "Schon eingestempelt" });
-    }
-
-    await kimai.StartAsync(settings, employee);
-    var status = await kimai.GetStatusAsync(settings, employee);
-    return Results.Ok(status with { StateText = "Eingestempelt" });
+    return Results.Ok(await StartClockAsync(settings, employee, kimai));
 });
 
 app.MapPost("/api/clock/stop", async (ClockRequest request, KimaiClient kimai, RuntimeSettingsStore settingsStore) =>
@@ -122,15 +162,7 @@ app.MapPost("/api/clock/stop", async (ClockRequest request, KimaiClient kimai, R
         return Results.Unauthorized();
     }
 
-    var running = await kimai.GetStatusAsync(settings, employee);
-    if (!running.IsRunning || running.ActiveTimesheetId is null)
-    {
-        return Results.Ok(running with { StateText = "Nicht eingestempelt" });
-    }
-
-    await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value);
-    var status = await kimai.GetStatusAsync(settings, employee);
-    return Results.Ok(status with { StateText = "Ausgestempelt" });
+    return Results.Ok(await StopClockAsync(settings, employee, kimai));
 });
 
 app.MapGet("/api/admin/settings", (HttpRequest request, RuntimeSettingsStore settingsStore, IConfiguration configuration) =>
@@ -141,6 +173,24 @@ app.MapGet("/api/admin/settings", (HttpRequest request, RuntimeSettingsStore set
     }
 
     return Results.Ok(AdminSettingsDto.FromSettings(settingsStore.Load()));
+});
+
+app.MapGet("/api/admin/employee-statuses", async (
+    HttpRequest request,
+    RuntimeSettingsStore settingsStore,
+    IConfiguration configuration,
+    KimaiClient kimai,
+    CancellationToken cancellationToken) =>
+{
+    if (!IsAdmin(request, settingsStore, configuration))
+    {
+        return Results.Unauthorized();
+    }
+
+    var settings = settingsStore.Load();
+    var statusTasks = settings.Employees.Select(employee => GetAdminEmployeeStatusAsync(settings, employee, kimai, cancellationToken));
+    var statuses = await Task.WhenAll(statusTasks);
+    return Results.Ok(statuses);
 });
 
 app.MapPut("/api/admin/settings", async (
@@ -156,6 +206,11 @@ app.MapPut("/api/admin/settings", async (
 
     var current = settingsStore.Load();
     var settings = update.ToSettings(current);
+    if (HasDuplicatePins(settings.Employees))
+    {
+        return Results.Conflict(new { message = "PINs muessen eindeutig sein." });
+    }
+
     await settingsStore.SaveAsync(settings);
 
     return Results.Ok(AdminSettingsDto.FromSettings(settings));
@@ -207,6 +262,110 @@ static EmployeeSettings? FindEmployee(RuntimeSettings settings, ClockRequest req
     }
 
     return string.Equals(employee.Pin, request.Pin, StringComparison.Ordinal) ? employee : null;
+}
+
+static EmployeeSettings? FindEmployeeByPin(RuntimeSettings settings, string? pin)
+{
+    if (string.IsNullOrWhiteSpace(pin))
+    {
+        return null;
+    }
+
+    var matches = settings.Employees
+        .Where(employee =>
+            employee.IsEnabled &&
+            !string.IsNullOrWhiteSpace(employee.ApiToken) &&
+            string.Equals(employee.Pin, pin.Trim(), StringComparison.Ordinal))
+        .Take(2)
+        .ToArray();
+
+    return matches.Length == 1 ? matches[0] : null;
+}
+
+static async Task<ClockStatusDto> StartClockAsync(
+    RuntimeSettings settings,
+    EmployeeSettings employee,
+    KimaiClient kimai,
+    CancellationToken cancellationToken = default)
+{
+    var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+    if (running.IsRunning)
+    {
+        return running with { StateText = "Schon eingestempelt" };
+    }
+
+    await kimai.StartAsync(settings, employee, cancellationToken);
+    var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+    return status with { StateText = "Eingestempelt" };
+}
+
+static async Task<ClockStatusDto> StopClockAsync(
+    RuntimeSettings settings,
+    EmployeeSettings employee,
+    KimaiClient kimai,
+    CancellationToken cancellationToken = default)
+{
+    var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+    if (!running.IsRunning || running.ActiveTimesheetId is null)
+    {
+        return running with { StateText = "Nicht eingestempelt" };
+    }
+
+    await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
+    var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+    return status with { StateText = "Ausgestempelt" };
+}
+
+static EmployeeDto ToEmployeeDto(EmployeeSettings employee)
+{
+    return new EmployeeDto(
+        employee.Id,
+        employee.DisplayName,
+        Initials(employee.DisplayName),
+        employee.Color,
+        employee.ImageUrl,
+        !string.IsNullOrWhiteSpace(employee.Pin));
+}
+
+static bool HasDuplicatePins(IEnumerable<EmployeeSettings> employees)
+{
+    return employees
+        .Where(employee => !string.IsNullOrWhiteSpace(employee.Pin))
+        .GroupBy(employee => employee.Pin!.Trim(), StringComparer.Ordinal)
+        .Any(group => group.Count() > 1);
+}
+
+static async Task<AdminEmployeeStatusDto> GetAdminEmployeeStatusAsync(
+    RuntimeSettings settings,
+    EmployeeSettings employee,
+    KimaiClient kimai,
+    CancellationToken cancellationToken)
+{
+    if (!employee.IsEnabled)
+    {
+        return new AdminEmployeeStatusDto(employee.Id, false, null, 0, "Inaktiv", false);
+    }
+
+    if (string.IsNullOrWhiteSpace(employee.ApiToken))
+    {
+        return new AdminEmployeeStatusDto(employee.Id, false, null, 0, "API-Token fehlt", false);
+    }
+
+    try
+    {
+        var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+        return new AdminEmployeeStatusDto(
+            employee.Id,
+            status.IsRunning,
+            status.StartedAt,
+            status.DurationSeconds,
+            status.StateText,
+            true);
+    }
+    catch
+    {
+        return new AdminEmployeeStatusDto(employee.Id, false, null, 0, "Status nicht verfuegbar", false);
+    }
 }
 
 static bool IsAdmin(HttpRequest request, RuntimeSettingsStore settingsStore, IConfiguration configuration)
@@ -477,7 +636,10 @@ public sealed class EmployeeSettings
 }
 
 public sealed record ClockRequest(string EmployeeId, string? Pin);
+public sealed record KioskPinLoginRequest(string? Pin);
+public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action);
 public sealed record EmployeeDto(string Id, string DisplayName, string Initials, string Color, string? ImageUrl, bool RequiresPin);
+public sealed record KioskEmployeeSessionDto(EmployeeDto Employee, ClockStatusDto Status);
 public sealed record ClockStatusDto(
     bool IsRunning,
     int? ActiveTimesheetId,
@@ -487,6 +649,13 @@ public sealed record ClockStatusDto(
 
 public sealed record KimaiImportRequest(string? BaseUrl, string? AdminApiToken);
 public sealed record KimaiUserDto(int Id, string? Username, string? Email, string DisplayName, string? AvatarUrl);
+public sealed record AdminEmployeeStatusDto(
+    string EmployeeId,
+    bool IsRunning,
+    string? StartedAt,
+    int DurationSeconds,
+    string StateText,
+    bool IsAvailable);
 
 public sealed record AdminSettingsDto(
     string BaseUrl,
@@ -592,7 +761,7 @@ public sealed record AdminEmployeeUpdateDto(
             Id = id,
             KimaiUserId = KimaiUserId,
             DisplayName = DisplayName?.Trim() ?? string.Empty,
-            Pin = string.IsNullOrWhiteSpace(Pin) ? null : Pin,
+            Pin = string.IsNullOrWhiteSpace(Pin) ? null : Pin.Trim(),
             ApiToken = KeepApiToken && string.IsNullOrWhiteSpace(ApiToken) ? existing?.ApiToken ?? string.Empty : ApiToken ?? string.Empty,
             ProjectId = ProjectId,
             ActivityId = ActivityId,

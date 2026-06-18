@@ -18,6 +18,20 @@ interface ClockStatus {
   stateText: string;
 }
 
+interface KioskEmployeeSession {
+  employee: Employee;
+  status: ClockStatus;
+}
+
+interface AdminEmployeeStatus {
+  employeeId: string;
+  isRunning: boolean;
+  startedAt: string | null;
+  durationSeconds: number;
+  stateText: string;
+  isAvailable: boolean;
+}
+
 interface AdminSettings {
   baseUrl: string;
   hasAdminPassword: boolean;
@@ -64,7 +78,6 @@ export class App {
   private readonly http = inject(HttpClient);
 
   readonly mode = signal<ViewMode>('clock');
-  readonly employees = signal<Employee[]>([]);
   readonly selectedEmployee = signal<Employee | null>(null);
   readonly status = signal<ClockStatus | null>(null);
   readonly pin = signal('');
@@ -75,6 +88,7 @@ export class App {
 
   readonly adminPassword = signal('');
   readonly adminSettings = signal<AdminSettings | null>(null);
+  readonly adminStatuses = signal<AdminEmployeeStatus[]>([]);
   readonly kimaiUsers = signal<KimaiUser[]>([]);
   readonly adminMessage = signal('');
   readonly adminBusy = signal(false);
@@ -90,32 +104,21 @@ export class App {
   });
 
   private loadedAt = Date.now();
+  private resetTimer: number | null = null;
 
   constructor() {
-    this.loadEmployees();
     window.setInterval(() => this.tick.set(Date.now()), 1000);
   }
 
   openClock(): void {
     this.mode.set('clock');
     this.adminMessage.set('');
-    this.loadEmployees();
+    this.back();
   }
 
   openAdmin(): void {
     this.mode.set('admin');
     this.back();
-  }
-
-  selectEmployee(employee: Employee): void {
-    this.selectedEmployee.set(employee);
-    this.message.set('');
-    this.pin.set('');
-    this.isUnlocked.set(!employee.requiresPin);
-
-    if (!employee.requiresPin) {
-      this.refreshStatus();
-    }
   }
 
   pressDigit(digit: string): void {
@@ -130,7 +133,29 @@ export class App {
   }
 
   confirmPin(): void {
-    this.refreshStatus(true);
+    if (!this.pin()) {
+      return;
+    }
+
+    this.isBusy.set(true);
+    this.message.set('');
+    this.http.post<KioskEmployeeSession>('/api/kiosk/pin-login', { pin: this.pin() }).subscribe({
+      next: session => {
+        this.loadedAt = Date.now();
+        this.selectedEmployee.set(session.employee);
+        this.status.set(session.status);
+        this.isUnlocked.set(true);
+        this.message.set('');
+        this.isBusy.set(false);
+      },
+      error: () => {
+        this.message.set('PIN nicht gefunden');
+        this.pin.set('');
+        this.isUnlocked.set(false);
+        this.isBusy.set(false);
+        this.playBeeps(2);
+      }
+    });
   }
 
   start(): void {
@@ -142,6 +167,11 @@ export class App {
   }
 
   back(): void {
+    if (this.resetTimer) {
+      window.clearTimeout(this.resetTimer);
+      this.resetTimer = null;
+    }
+
     this.selectedEmployee.set(null);
     this.status.set(null);
     this.pin.set('');
@@ -157,6 +187,7 @@ export class App {
         this.adminMessage.set('');
         this.adminDirty.set(false);
         this.adminBusy.set(false);
+        this.loadAdminEmployeeStatuses();
       },
       error: (error: HttpErrorResponse) => {
         this.adminMessage.set(this.adminLoginErrorMessage(error));
@@ -171,6 +202,11 @@ export class App {
       return;
     }
 
+    if (this.findDuplicatePin(settings)) {
+      this.adminMessage.set('PINs muessen eindeutig sein.');
+      return;
+    }
+
     this.adminBusy.set(true);
     this.http.put<AdminSettings>('/api/admin/settings', this.toUpdatePayload(settings), { headers: this.adminHeaders() }).subscribe({
       next: saved => {
@@ -178,10 +214,10 @@ export class App {
         this.adminMessage.set('Gespeichert');
         this.adminDirty.set(false);
         this.adminBusy.set(false);
-        this.loadEmployees();
+        this.loadAdminEmployeeStatuses();
       },
-      error: () => {
-        this.adminMessage.set('Speichern fehlgeschlagen');
+      error: (error: HttpErrorResponse) => {
+        this.adminMessage.set(error.status === 409 ? 'PINs muessen eindeutig sein.' : 'Speichern fehlgeschlagen');
         this.adminBusy.set(false);
       }
     });
@@ -231,6 +267,10 @@ export class App {
   isKimaiUserConfigured(user: KimaiUser): boolean {
     const settings = this.adminSettings();
     return settings ? this.hasKimaiUser(settings, user) : false;
+  }
+
+  statusFor(employeeId: string): AdminEmployeeStatus | null {
+    return this.adminStatuses().find(status => status.employeeId === employeeId) ?? null;
   }
 
   addEmployee(): void {
@@ -325,58 +365,72 @@ export class App {
       .join(':');
   }
 
-  private loadEmployees(): void {
-    this.http.get<Employee[]>('/api/employees').subscribe({
-      next: employees => this.employees.set(employees),
-      error: () => this.message.set('Backend nicht erreichbar')
-    });
-  }
-
-  private refreshStatus(unlock = false): void {
-    const employee = this.selectedEmployee();
-    if (!employee) {
-      return;
-    }
-
-    this.isBusy.set(true);
-    this.http.post<ClockStatus>('/api/clock/status', this.requestBody()).subscribe({
-      next: status => {
-        this.loadedAt = Date.now();
-        this.status.set(status);
-        this.isUnlocked.set(unlock || this.isUnlocked());
-        this.message.set('');
-        this.isBusy.set(false);
-      },
-      error: () => {
-        this.message.set('PIN oder Verbindung stimmt nicht');
-        this.pin.set('');
-        this.isUnlocked.set(false);
-        this.isBusy.set(false);
-      }
-    });
-  }
-
   private sendClockAction(action: 'start' | 'stop'): void {
     this.isBusy.set(true);
-    this.http.post<ClockStatus>(`/api/clock/${action}`, this.requestBody()).subscribe({
+    this.http.post<ClockStatus>('/api/kiosk/clock', this.requestBody(action)).subscribe({
       next: status => {
         this.loadedAt = Date.now();
         this.status.set(status);
         this.message.set(status.stateText);
         this.isBusy.set(false);
+        this.playBeeps(1);
+        this.scheduleReset();
       },
       error: () => {
         this.message.set('Kimai konnte nicht speichern');
         this.isBusy.set(false);
+        this.playBeeps(2);
+        this.scheduleReset();
       }
     });
   }
 
-  private requestBody(): { employeeId: string; pin: string } {
+  private requestBody(action: 'start' | 'stop'): { employeeId: string; pin: string; action: 'start' | 'stop' } {
     return {
       employeeId: this.selectedEmployee()?.id ?? '',
-      pin: this.pin()
+      pin: this.pin(),
+      action
     };
+  }
+
+  private scheduleReset(): void {
+    if (this.resetTimer) {
+      window.clearTimeout(this.resetTimer);
+    }
+
+    this.resetTimer = window.setTimeout(() => this.back(), 2200);
+  }
+
+  private playBeeps(count: number): void {
+    const AudioContextType = window.AudioContext;
+    if (!AudioContextType) {
+      return;
+    }
+
+    const context = new AudioContextType();
+    for (let index = 0; index < count; index++) {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const startAt = context.currentTime + index * 0.22;
+      const stopAt = startAt + 0.11;
+
+      oscillator.type = 'sine';
+      oscillator.frequency.value = count === 1 ? 880 : 360;
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(0.2, startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(startAt);
+      oscillator.stop(stopAt);
+    }
+  }
+
+  private loadAdminEmployeeStatuses(): void {
+    this.http.get<AdminEmployeeStatus[]>('/api/admin/employee-statuses', { headers: this.adminHeaders() }).subscribe({
+      next: statuses => this.adminStatuses.set(statuses),
+      error: () => this.adminStatuses.set([])
+    });
   }
 
   private adminHeaders(): HttpHeaders {
@@ -429,6 +483,24 @@ export class App {
         isEnabled: employee.isEnabled
       }))
     };
+  }
+
+  private findDuplicatePin(settings: AdminSettings): boolean {
+    const pins = new Set<string>();
+    for (const employee of settings.employees) {
+      const pin = employee.pin?.trim();
+      if (!pin) {
+        continue;
+      }
+
+      if (pins.has(pin)) {
+        return true;
+      }
+
+      pins.add(pin);
+    }
+
+    return false;
   }
 
   private updateSettings(update: (settings: AdminSettings) => AdminSettings): void {
