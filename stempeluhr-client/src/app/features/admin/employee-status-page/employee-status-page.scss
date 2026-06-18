@@ -16,15 +16,16 @@ input {
 
 .status-page {
   display: grid;
-  gap: 18px;
+  gap: 16px;
 }
 
 .status-toolbar,
 .status-summary,
 .employee-status-row {
-  border: 1px solid #d6dde7;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 24px rgba(24, 39, 75, 0.07);
 }
 
 .status-toolbar {
@@ -35,7 +36,7 @@ input {
 
 .back-link {
   width: fit-content;
-  color: #204ecf;
+  color: var(--color-primary);
   font-weight: 850;
   text-decoration: none;
 }
@@ -59,9 +60,9 @@ input {
   width: 100%;
   min-height: 42px;
   padding: 8px 10px;
-  border: 1px solid #cfd8e4;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
   color: #172033;
   font-size: 1rem;
 }
@@ -69,9 +70,9 @@ input {
 button {
   min-height: 42px;
   padding: 0 16px;
-  border: 1px solid #204ecf;
-  border-radius: 8px;
-  background: #204ecf;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-primary);
   color: #ffffff;
   font-weight: 850;
   cursor: pointer;
@@ -93,7 +94,7 @@ button:disabled {
   display: grid;
   gap: 4px;
   padding: 16px;
-  background: #f8fafc;
+  background: var(--color-surface-muted);
 }
 
 .status-summary span {
@@ -169,10 +170,21 @@ button:disabled {
 
 .empty-state {
   padding: 20px;
-  border: 1px solid #d6dde7;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
   color: #657083;
+}
+
+@media (min-width: 980px) {
+  .status-toolbar {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: end;
+  }
+
+  .status-login {
+    justify-self: end;
+  }
 }
 
 @media (max-width: 720px) {
@@ -182,6 +194,12 @@ button:disabled {
   }
 
   .status-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .status-details {
     grid-template-columns: 1fr;
   }
 }

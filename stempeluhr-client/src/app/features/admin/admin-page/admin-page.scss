@@ -13,15 +13,16 @@ button {
 
 .admin {
   display: grid;
-  gap: 18px;
+  gap: 16px;
 }
 
 .admin-login,
 .admin-section,
 .employee-admin-card {
-  border: 1px solid #d6dde7;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 24px rgba(24, 39, 75, 0.07);
 }
 
 .admin-login {
@@ -40,12 +41,22 @@ button {
 .file-button {
   display: inline-grid;
   min-height: 42px;
-  border: 1px solid #cfd8e4;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
   color: #243045;
   font-weight: 800;
   cursor: pointer;
+}
+
+.admin-login button:hover,
+.admin-actions button:hover,
+.admin-link-button:hover,
+.kimai-user-list button:hover,
+.employee-admin-card button:hover,
+.file-button:hover {
+  border-color: var(--color-border-strong);
+  background: #fdfefe;
 }
 
 .admin-link-button {
@@ -62,7 +73,7 @@ button {
 .admin-section {
   display: grid;
   gap: 16px;
-  padding: 18px;
+  padding: clamp(14px, 2vw, 20px);
 }
 
 .admin-section h2 {
@@ -91,11 +102,15 @@ input {
   width: 100%;
   min-height: 42px;
   padding: 8px 10px;
-  border: 1px solid #cfd8e4;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
   color: #172033;
   font-size: 1rem;
+}
+
+input:focus {
+  border-color: rgba(33, 87, 214, 0.56);
 }
 
 input[type="color"] {
@@ -112,7 +127,8 @@ input[type="color"] {
 }
 
 .admin-actions .primary {
-  background: #204ecf;
+  border-color: var(--color-primary);
+  background: var(--color-primary);
   color: #ffffff;
 }
 
@@ -125,10 +141,11 @@ input[type="color"] {
   justify-content: space-between;
   gap: 12px;
   padding: 12px;
-  border: 1px solid #cfd8e4;
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 12px 28px rgba(38, 51, 77, 0.18);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-raised);
+  backdrop-filter: blur(12px);
 }
 
 .admin-savebar span {
@@ -140,13 +157,13 @@ input[type="color"] {
   min-height: 44px;
   padding: 0 18px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius);
   font-weight: 850;
   cursor: pointer;
 }
 
 .admin-savebar .primary {
-  background: #204ecf;
+  background: var(--color-primary);
   color: #ffffff;
 }
 
@@ -198,7 +215,9 @@ input[type="color"] {
 }
 
 .employee-admin-head {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto minmax(140px, 1fr) auto auto;
+  justify-content: initial;
 }
 
 .toggle {
@@ -231,14 +250,68 @@ input[type="color"] {
 .message {
   min-height: 32px;
   color: #8a3a2f;
-  font-size: clamp(1.1rem, 2.4vw, 1.6rem);
+  font-size: clamp(1rem, 2.2vw, 1.35rem);
   font-weight: 800;
   text-align: center;
+}
+
+@media (min-width: 980px) {
+  .admin-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .employee-admin-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .employee-admin-list h2 {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 860px) {
+  .employee-admin-head {
+    grid-template-columns: auto minmax(120px, 1fr) auto;
+  }
+
+  .employee-admin-head .danger {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
 }
 
 @media (max-width: 640px) {
   .admin-login {
     align-items: stretch;
     grid-template-columns: 1fr;
+  }
+
+  .admin-actions,
+  .image-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-actions > *,
+  .image-actions > * {
+    width: 100%;
+  }
+
+  .employee-admin-head {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+  }
+
+  .employee-admin-head app-status-badge,
+  .employee-admin-head .toggle,
+  .employee-admin-head .danger {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
+  .admin-savebar {
+    bottom: 10px;
+    align-items: stretch;
+    flex-direction: column;
   }
 }

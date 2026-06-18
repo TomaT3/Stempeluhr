@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { Component, inject, signal } from '@angular/core';
+import { Component, OnDestroy, inject, signal } from '@angular/core';
 
 import { Employee } from '../../../core/models/kiosk.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
@@ -15,7 +15,7 @@ import { DurationPipe } from '../../../shared/pipes/duration-pipe';
   templateUrl: './clock-page.html',
   styleUrl: './clock-page.scss',
 })
-export class ClockPage {
+export class ClockPage implements OnDestroy {
   private readonly kioskApi = inject(KioskApi);
   private readonly audioFeedback = inject(AudioFeedback);
   readonly clockState = inject(ClockState);
@@ -50,6 +50,7 @@ export class ClockPage {
       next: session => {
         this.selectedEmployee.set(session.employee);
         this.clockState.setStatus(session.status);
+        this.clockState.setEmployeeMode(true);
         this.isUnlocked.set(true);
         this.message.set('');
         this.isBusy.set(false);
@@ -80,9 +81,14 @@ export class ClockPage {
 
     this.selectedEmployee.set(null);
     this.clockState.clear();
+    this.clockState.setEmployeeMode(false);
     this.pin.set('');
     this.isUnlocked.set(false);
     this.message.set('');
+  }
+
+  ngOnDestroy(): void {
+    this.clockState.setEmployeeMode(false);
   }
 
   private sendClockAction(action: 'start' | 'stop'): void {

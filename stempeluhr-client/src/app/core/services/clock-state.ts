@@ -7,9 +7,11 @@ import { ClockStatus } from '../models/kiosk.models';
 })
 export class ClockState {
   private readonly tick = signal(Date.now());
+  private readonly _employeeMode = signal(false);
   private loadedAt = Date.now();
 
   readonly status = signal<ClockStatus | null>(null);
+  readonly employeeMode = this._employeeMode.asReadonly();
   readonly now = computed(() => new Date(this.tick()));
 
   readonly elapsed = computed(() => {
@@ -37,6 +39,10 @@ export class ClockState {
 
   clear(): void {
     this.status.set(null);
+  }
+
+  setEmployeeMode(isEmployeeMode: boolean): void {
+    this._employeeMode.set(isEmployeeMode);
   }
 
   private parseStartedAt(value: string | null): number | null {
