@@ -1,0 +1,85 @@
+@if (!selectedEmployee()) {
+  <section class="kiosk-login" aria-label="PIN-Anmeldung">
+    <h2>PIN eingeben</h2>
+    <div class="pin-panel">
+      <div class="pin-dots" aria-label="PIN">
+        @for (_ of [0, 1, 2, 3]; track $index) {
+          <span [class.filled]="$index < pin().length"></span>
+        }
+      </div>
+
+      <div class="keypad">
+        @for (digit of ['1','2','3','4','5','6','7','8','9']; track digit) {
+          <button type="button" (click)="pressDigit(digit)">{{ digit }}</button>
+        }
+        <button type="button" class="key-muted" (click)="clearPin()">C</button>
+        <button type="button" (click)="pressDigit('0')">0</button>
+        <button type="button" class="key-ok" (click)="confirmPin()" [disabled]="isBusy()">OK</button>
+      </div>
+    </div>
+
+    @if (message()) {
+      <p class="message">{{ message() }}</p>
+    }
+  </section>
+} @else {
+  <section class="station">
+    <button class="back-button" type="button" (click)="back()" aria-label="Zurueck">
+      &lt;
+    </button>
+
+    <div class="person">
+      @if (selectedEmployee(); as employee) {
+        <app-avatar
+          size="large"
+          [displayName]="employee.displayName"
+          [initials]="employee.initials"
+          [color]="employee.color"
+          [imageUrl]="employee.imageUrl" />
+        <h2>{{ employee.displayName }}</h2>
+      }
+    </div>
+
+    @if (!isUnlocked()) {
+      <p class="message">Bitte erneut mit PIN anmelden.</p>
+    } @else {
+      <app-status-badge
+        [text]="clockState.status()?.stateText ?? ''"
+        [running]="clockState.status()?.isRunning ?? false" />
+
+      <dl class="time-info" aria-label="Zeitinformationen">
+        @if (clockState.status()?.isRunning) {
+          <div>
+            <dt>Eingestempelt seit</dt>
+            <dd>{{ clockState.status()?.startedAt | date: 'HH:mm' }}</dd>
+          </div>
+          <div>
+            <dt>Dauer</dt>
+            <dd>{{ clockState.elapsed() | duration }}</dd>
+          </div>
+        } @else {
+          <div>
+            <dt>Status</dt>
+            <dd>Nicht eingestempelt</dd>
+          </div>
+        }
+      </dl>
+
+      @if (clockState.status()?.isRunning) {
+        <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+          <span class="stamp-icon square"></span>
+          Ausstempeln
+        </button>
+      } @else {
+        <button class="stamp-button start" type="button" (click)="start()" [disabled]="isBusy()">
+          <span class="stamp-icon play"></span>
+          Einstempeln
+        </button>
+      }
+    }
+
+    @if (message()) {
+      <p class="message">{{ message() }}</p>
+    }
+  </section>
+}
