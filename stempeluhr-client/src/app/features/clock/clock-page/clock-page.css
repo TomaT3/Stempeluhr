@@ -1,0 +1,190 @@
+:host {
+  display: block;
+}
+
+h2,
+p {
+  margin: 0;
+}
+
+h2 {
+  color: #152033;
+  font-size: clamp(2rem, 5vw, 4rem);
+  font-weight: 850;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.kiosk-login {
+  display: grid;
+  justify-items: center;
+  gap: 26px;
+  min-height: 62vh;
+  align-content: start;
+  padding-top: clamp(12px, 5vh, 54px);
+  text-align: center;
+}
+
+.pin-panel {
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+  width: min(440px, 100%);
+}
+
+.pin-dots {
+  display: grid;
+  grid-template-columns: repeat(4, 24px);
+  gap: 16px;
+  min-height: 28px;
+}
+
+.pin-dots span {
+  width: 24px;
+  height: 24px;
+  border: 3px solid #9aa7b8;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.pin-dots span.filled {
+  border-color: #243045;
+  background: #243045;
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(82px, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+
+.keypad button {
+  min-height: 78px;
+  border: 1px solid #cfd8e4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  font: inherit;
+  font-size: 2rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.keypad .key-muted {
+  background: #f0f3f7;
+  color: #566277;
+}
+
+.keypad .key-ok {
+  background: #204ecf;
+  color: #ffffff;
+}
+
+.station {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 24px;
+  min-height: 65vh;
+  padding-top: 8px;
+}
+
+.back-button {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 58px;
+  height: 58px;
+  border: 1px solid #cfd8e4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #243045;
+  font: inherit;
+  font-size: 2.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.person {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  max-width: min(680px, 100%);
+  text-align: center;
+}
+
+.stamp-button {
+  display: inline-grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  justify-items: center;
+  gap: 18px;
+  width: min(680px, 100%);
+  min-height: clamp(148px, 26vh, 250px);
+  padding: clamp(20px, 4vw, 42px);
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  font: inherit;
+  font-size: clamp(2rem, 6vw, 5rem);
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 18px 36px rgba(38, 51, 77, 0.16);
+}
+
+.stamp-button.start {
+  background: #16865c;
+}
+
+.stamp-button.stop {
+  background: #c9432f;
+}
+
+.stamp-button:active,
+.keypad button:active {
+  transform: translateY(1px);
+}
+
+.stamp-button:disabled,
+.keypad button:disabled {
+  opacity: 0.64;
+  cursor: wait;
+}
+
+.stamp-icon {
+  display: inline-block;
+  width: clamp(34px, 7vw, 72px);
+  height: clamp(34px, 7vw, 72px);
+  flex: 0 0 auto;
+}
+
+.stamp-icon.play {
+  width: 0;
+  height: 0;
+  border-top: clamp(24px, 5vw, 52px) solid transparent;
+  border-bottom: clamp(24px, 5vw, 52px) solid transparent;
+  border-left: clamp(38px, 8vw, 82px) solid #ffffff;
+}
+
+.stamp-icon.square {
+  background: #ffffff;
+  border-radius: 4px;
+}
+
+.message {
+  min-height: 32px;
+  color: #8a3a2f;
+  font-size: clamp(1.1rem, 2.4vw, 1.6rem);
+  font-weight: 800;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .back-button {
+    width: 50px;
+    height: 50px;
+  }
+}

@@ -1,0 +1,7 @@
+<span class="avatar" [class.large]="size() === 'large'" [class.small]="size() === 'small'" [style.background]="imageUrl() ? 'transparent' : color()">
+  @if (imageUrl()) {
+    <img [src]="imageUrl() ?? ''" [alt]="displayName()">
+  } @else {
+    {{ fallbackText() }}
+  }
+</span>
