@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 import { AdminEmployee, AdminEmployeeStatus, AdminSettings, KimaiUser } from '../../../core/models/admin.models';
 import { AdminApi } from '../../../core/services/admin-api';
@@ -8,7 +9,7 @@ import { StatusBadge } from '../../../shared/components/status-badge/status-badg
 
 @Component({
   selector: 'app-admin-page',
-  imports: [Avatar, StatusBadge],
+  imports: [Avatar, RouterLink, StatusBadge],
   templateUrl: './admin-page.html',
   styleUrl: './admin-page.scss',
 })

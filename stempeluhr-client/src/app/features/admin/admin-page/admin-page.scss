@@ -34,9 +34,11 @@ button {
 
 .admin-login button,
 .admin-actions button,
+.admin-link-button,
 .kimai-user-list button,
 .employee-admin-card button,
 .file-button {
+  display: inline-grid;
   min-height: 42px;
   border: 1px solid #cfd8e4;
   border-radius: 8px;
@@ -44,6 +46,12 @@ button {
   color: #243045;
   font-weight: 800;
   cursor: pointer;
+}
+
+.admin-link-button {
+  place-items: center;
+  padding: 0 14px;
+  text-decoration: none;
 }
 
 .admin-layout {

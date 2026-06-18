@@ -2,6 +2,7 @@ namespace Stempeluhr.Api.Models;
 
 public sealed record AdminEmployeeStatusDto(
     string EmployeeId,
+    string DisplayName,
     bool IsRunning,
     string? StartedAt,
     int DurationSeconds,

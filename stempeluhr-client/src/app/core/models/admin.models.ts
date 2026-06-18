@@ -1,5 +1,6 @@
 export interface AdminEmployeeStatus {
   employeeId: string;
+  displayName: string;
   isRunning: boolean;
   startedAt: string | null;
   durationSeconds: number;

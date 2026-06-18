@@ -28,12 +28,12 @@ public sealed class AdminService(
     {
         if (!employee.IsEnabled)
         {
-            return new AdminEmployeeStatusDto(employee.Id, false, null, 0, "Inaktiv", false);
+            return new AdminEmployeeStatusDto(employee.Id, employee.DisplayName, false, null, 0, "Inaktiv", false);
         }
 
         if (string.IsNullOrWhiteSpace(employee.ApiToken))
         {
-            return new AdminEmployeeStatusDto(employee.Id, false, null, 0, "API-Token fehlt", false);
+            return new AdminEmployeeStatusDto(employee.Id, employee.DisplayName, false, null, 0, "API-Token fehlt", false);
         }
 
         try
@@ -41,6 +41,7 @@ public sealed class AdminService(
             var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
             return new AdminEmployeeStatusDto(
                 employee.Id,
+                employee.DisplayName,
                 status.IsRunning,
                 status.StartedAt,
                 status.DurationSeconds,
@@ -49,7 +50,7 @@ public sealed class AdminService(
         }
         catch
         {
-            return new AdminEmployeeStatusDto(employee.Id, false, null, 0, "Status nicht verfuegbar", false);
+            return new AdminEmployeeStatusDto(employee.Id, employee.DisplayName, false, null, 0, "Status nicht verfuegbar", false);
         }
     }
 }

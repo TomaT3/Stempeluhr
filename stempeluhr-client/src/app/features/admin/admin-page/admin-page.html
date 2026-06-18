@@ -49,6 +49,7 @@
         <div class="admin-actions">
           <button type="button" (click)="importKimaiUsers()" [disabled]="adminBusy()">Kimai-Mitarbeiter laden</button>
           <button type="button" (click)="addEmployee()">Manuell hinzufuegen</button>
+          <a class="admin-link-button" routerLink="/admin/status">Status anzeigen</a>
           <button type="button" class="primary" (click)="saveAdminSettings()" [disabled]="adminBusy()">Speichern</button>
         </div>
       </section>

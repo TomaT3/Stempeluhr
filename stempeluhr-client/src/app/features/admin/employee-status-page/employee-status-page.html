@@ -1,0 +1,65 @@
+<section class="status-page">
+  <div class="status-toolbar">
+    <a class="back-link" routerLink="/admin">&lt; Admin</a>
+    <div class="status-login">
+      <label>
+        Admin-Passwort
+        <input
+          type="password"
+          [value]="adminPassword()"
+          (input)="adminPassword.set($any($event.target).value)"
+          (keyup.enter)="loadStatuses()"
+          autocomplete="current-password">
+      </label>
+      <button type="button" (click)="loadStatuses()" [disabled]="isBusy()">Aktualisieren</button>
+    </div>
+  </div>
+
+  @if (hasLoaded()) {
+    <div class="status-summary" aria-label="Status-Zusammenfassung">
+      <div>
+        <span>{{ statuses().length }}</span>
+        <small>Mitarbeiter</small>
+      </div>
+      <div>
+        <span>{{ runningCount() }}</span>
+        <small>Eingestempelt</small>
+      </div>
+      <div>
+        <span>{{ availableCount() }}</span>
+        <small>Verfuegbar</small>
+      </div>
+    </div>
+
+    <section class="employee-status-list" aria-label="Mitarbeiterstatus">
+      @for (status of statuses(); track status.employeeId) {
+        <article class="employee-status-row">
+          <div class="employee-main">
+            <h2>{{ status.displayName }}</h2>
+            <app-status-badge
+              [compact]="true"
+              [text]="status.stateText"
+              [running]="status.isRunning"
+              [available]="status.isAvailable" />
+          </div>
+          <dl class="status-details">
+            <div>
+              <dt>Seit</dt>
+              <dd>{{ status.startedAt ? (status.startedAt | date: 'dd.MM.yyyy HH:mm') : '-' }}</dd>
+            </div>
+            <div>
+              <dt>Dauer</dt>
+              <dd>{{ status.durationSeconds | duration }}</dd>
+            </div>
+          </dl>
+        </article>
+      } @empty {
+        <p class="empty-state">Keine Mitarbeiter vorhanden.</p>
+      }
+    </section>
+  }
+
+  @if (message()) {
+    <p class="message">{{ message() }}</p>
+  }
+</section>

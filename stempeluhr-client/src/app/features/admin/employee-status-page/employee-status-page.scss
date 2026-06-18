@@ -1,0 +1,187 @@
+:host {
+  display: block;
+}
+
+h2,
+p,
+dl,
+dd {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.status-page {
+  display: grid;
+  gap: 18px;
+}
+
+.status-toolbar,
+.status-summary,
+.employee-status-row {
+  border: 1px solid #d6dde7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.status-toolbar {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.back-link {
+  width: fit-content;
+  color: #204ecf;
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.status-login {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: #435064;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+input {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #cfd8e4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  font-size: 1rem;
+}
+
+button {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid #204ecf;
+  border-radius: 8px;
+  background: #204ecf;
+  color: #ffffff;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.status-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+}
+
+.status-summary div {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  background: #f8fafc;
+}
+
+.status-summary span {
+  color: #152033;
+  font-size: 1.75rem;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.status-summary small {
+  color: #657083;
+  font-weight: 800;
+}
+
+.employee-status-list {
+  display: grid;
+  gap: 10px;
+}
+
+.employee-status-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, auto);
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+}
+
+.employee-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.employee-main h2 {
+  color: #152033;
+  font-size: 1.1rem;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.status-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(110px, 1fr));
+  gap: 12px;
+}
+
+.status-details div {
+  display: grid;
+  gap: 3px;
+}
+
+.status-details dt {
+  color: #657083;
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.status-details dd {
+  color: #243045;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.message,
+.empty-state {
+  color: #8a3a2f;
+  font-size: 1.05rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.empty-state {
+  padding: 20px;
+  border: 1px solid #d6dde7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #657083;
+}
+
+@media (max-width: 720px) {
+  .status-login,
+  .employee-status-row {
+    grid-template-columns: 1fr;
+  }
+
+  .status-summary {
+    grid-template-columns: 1fr;
+  }
+}
