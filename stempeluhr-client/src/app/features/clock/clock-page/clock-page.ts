@@ -11,7 +11,7 @@ import { StatusBadge } from '../../../shared/components/status-badge/status-badg
   selector: 'app-clock-page',
   imports: [Avatar, StatusBadge],
   templateUrl: './clock-page.html',
-  styleUrl: './clock-page.css',
+  styleUrl: './clock-page.scss',
 })
 export class ClockPage {
   private readonly kioskApi = inject(KioskApi);

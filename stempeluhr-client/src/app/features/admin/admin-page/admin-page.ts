@@ -10,7 +10,7 @@ import { StatusBadge } from '../../../shared/components/status-badge/status-badg
   selector: 'app-admin-page',
   imports: [Avatar, StatusBadge],
   templateUrl: './admin-page.html',
-  styleUrl: './admin-page.css',
+  styleUrl: './admin-page.scss',
 })
 export class AdminPage {
   private readonly adminApi = inject(AdminApi);

@@ -8,7 +8,7 @@ import { DurationPipe } from './shared/pipes/duration-pipe';
   selector: 'app-root',
   imports: [DurationPipe, RouterLink, RouterLinkActive, RouterOutlet],
   templateUrl: './app.html',
-  styleUrl: './app.css',
+  styleUrl: './app.scss',
 })
 export class App {
   readonly clockState = inject(ClockState);

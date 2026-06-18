@@ -4,7 +4,7 @@ import { Component, input } from '@angular/core';
   selector: 'app-status-badge',
   imports: [],
   templateUrl: './status-badge.html',
-  styleUrl: './status-badge.css',
+  styleUrl: './status-badge.scss',
 })
 export class StatusBadge {
   readonly text = input('');

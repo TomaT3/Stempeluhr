@@ -4,7 +4,7 @@ import { Component, computed, input } from '@angular/core';
   selector: 'app-avatar',
   imports: [],
   templateUrl: './avatar.html',
-  styleUrl: './avatar.css',
+  styleUrl: './avatar.scss',
 })
 export class Avatar {
   readonly displayName = input('');
