@@ -65,7 +65,9 @@ h2 {
 }
 
 .keypad button {
+  display: grid;
   min-height: clamp(64px, 10vh, 78px);
+  place-items: center;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   background: var(--color-surface);
@@ -104,11 +106,13 @@ h2 {
 }
 
 .back-button {
+  display: grid;
   position: absolute;
   left: 0;
   top: 0;
   width: clamp(46px, 7vw, 58px);
   height: clamp(46px, 7vw, 58px);
+  place-items: center;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   background: var(--color-surface);
