@@ -79,28 +79,28 @@
         <div class="stamp-actions">
           <button class="stamp-button pause" type="button" (click)="startPause()" [disabled]="isBusy()">
             <span class="stamp-icon pause"></span>
-            Pause
+            <span class="stamp-label">Pause</span>
           </button>
           <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
             <span class="stamp-icon square"></span>
-            Ausstempeln
+            <span class="stamp-label">Ausstempeln</span>
           </button>
         </div>
       } @else if (clockState.isPaused()) {
         <div class="stamp-actions">
           <button class="stamp-button start" type="button" (click)="endPause()" [disabled]="isBusy()">
             <span class="stamp-icon play"></span>
-            Pause beenden
+            <span class="stamp-label">Pause beenden</span>
           </button>
           <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
             <span class="stamp-icon square"></span>
-            Ausstempeln
+            <span class="stamp-label">Ausstempeln</span>
           </button>
         </div>
       } @else {
         <button class="stamp-button start" type="button" (click)="start()" [disabled]="isBusy()">
           <span class="stamp-icon play"></span>
-          Einstempeln
+          <span class="stamp-label">Einstempeln</span>
         </button>
       }
     }
