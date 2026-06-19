@@ -45,16 +45,26 @@
     } @else {
       <app-status-badge
         [text]="clockState.status()?.stateText ?? ''"
-        [running]="clockState.status()?.isRunning ?? false" />
+        [running]="clockState.status()?.state === 'working'"
+        [paused]="clockState.status()?.state === 'paused'" />
 
       <dl class="time-info" [class.single]="!clockState.status()?.isRunning" aria-label="Zeitinformationen">
-        @if (clockState.status()?.isRunning) {
+        @if (clockState.isWorking()) {
           <div>
             <dt>Eingestempelt seit</dt>
             <dd>{{ clockState.status()?.startedAt | date: 'HH:mm' }}</dd>
           </div>
           <div>
             <dt>Dauer</dt>
+            <dd>{{ clockState.elapsed() | duration }}</dd>
+          </div>
+        } @else if (clockState.isPaused()) {
+          <div>
+            <dt>In Pause seit</dt>
+            <dd>{{ clockState.status()?.startedAt | date: 'HH:mm' }}</dd>
+          </div>
+          <div>
+            <dt>Pausendauer</dt>
             <dd>{{ clockState.elapsed() | duration }}</dd>
           </div>
         } @else {
@@ -65,11 +75,28 @@
         }
       </dl>
 
-      @if (clockState.status()?.isRunning) {
-        <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
-          <span class="stamp-icon square"></span>
-          Ausstempeln
-        </button>
+      @if (clockState.isWorking()) {
+        <div class="stamp-actions">
+          <button class="stamp-button pause" type="button" (click)="startPause()" [disabled]="isBusy()">
+            <span class="stamp-icon pause"></span>
+            Pause
+          </button>
+          <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+            <span class="stamp-icon square"></span>
+            Ausstempeln
+          </button>
+        </div>
+      } @else if (clockState.isPaused()) {
+        <div class="stamp-actions">
+          <button class="stamp-button start" type="button" (click)="endPause()" [disabled]="isBusy()">
+            <span class="stamp-icon play"></span>
+            Pause beenden
+          </button>
+          <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+            <span class="stamp-icon square"></span>
+            Ausstempeln
+          </button>
+        </div>
       } @else {
         <button class="stamp-button start" type="button" (click)="start()" [disabled]="isBusy()">
           <span class="stamp-icon play"></span>

@@ -39,7 +39,8 @@
             <app-status-badge
               [compact]="true"
               [text]="status.stateText"
-              [running]="status.isRunning"
+              [running]="status.state === 'working'"
+              [paused]="status.state === 'paused'"
               [available]="status.isAvailable" />
           </div>
           <dl class="status-details">

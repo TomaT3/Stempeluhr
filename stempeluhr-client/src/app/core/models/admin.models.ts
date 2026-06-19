@@ -4,6 +4,7 @@ export interface AdminEmployeeStatus {
   isRunning: boolean;
   startedAt: string | null;
   durationSeconds: number;
+  state: 'clockedOut' | 'working' | 'paused';
   stateText: string;
   isAvailable: boolean;
 }
@@ -14,6 +15,7 @@ export interface AdminSettings {
   hasAdminApiToken: boolean;
   defaultProjectId: number | null;
   defaultActivityId: number | null;
+  pauseActivityId: number | null;
   employees: AdminEmployee[];
 }
 

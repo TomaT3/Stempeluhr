@@ -73,6 +73,14 @@ export class ClockPage implements OnDestroy {
     this.sendClockAction('stop');
   }
 
+  startPause(): void {
+    this.sendClockAction('pauseStart');
+  }
+
+  endPause(): void {
+    this.sendClockAction('pauseEnd');
+  }
+
   back(): void {
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
@@ -91,7 +99,7 @@ export class ClockPage implements OnDestroy {
     this.clockState.setEmployeeMode(false);
   }
 
-  private sendClockAction(action: 'start' | 'stop'): void {
+  private sendClockAction(action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd'): void {
     this.isBusy.set(true);
     this.kioskApi.clock(this.selectedEmployee()?.id ?? '', this.pin(), action).subscribe({
       next: status => {

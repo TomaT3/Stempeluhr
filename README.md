@@ -35,9 +35,11 @@ Danach in der App oben `Admin` oeffnen:
 - Kimai-URL und Admin-API-Token setzen
 - Kimai-Mitarbeiter laden
 - pro Mitarbeiter API-Token, PIN, Farbe und optional Bild pflegen
-- Standard-Projekt-ID und Standard-Aktivitaet-ID setzen
+- Standard-Projekt-ID, Standard-Aktivitaet-ID und Pause-Aktivitaet-ID setzen
 
 `Pin` ist optional. Ohne PIN kann ein Mitarbeiter direkt ein- und ausstempeln.
+Die Pause-Aktivitaet-ID verweist auf eine normale Kimai-Taetigkeit, die als Pause genutzt wird.
+Aktive Timesheets mit dieser Taetigkeit werden in der Stempeluhr als `In Pause` angezeigt.
 
 ## Starten
 

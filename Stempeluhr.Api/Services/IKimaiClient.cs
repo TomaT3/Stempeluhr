@@ -11,6 +11,8 @@ public interface IKimaiClient
 
     Task StartAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default);
 
+    Task StartPauseAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default);
+
     Task StopAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,

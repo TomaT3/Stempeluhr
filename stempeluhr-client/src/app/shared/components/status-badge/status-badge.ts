@@ -9,6 +9,7 @@ import { Component, input } from '@angular/core';
 export class StatusBadge {
   readonly text = input('');
   readonly running = input(false);
+  readonly paused = input(false);
   readonly available = input(true);
   readonly compact = input(false);
 }

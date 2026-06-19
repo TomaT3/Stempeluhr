@@ -12,6 +12,7 @@ export interface ClockStatus {
   activeTimesheetId: number | null;
   startedAt: string | null;
   durationSeconds: number;
+  state: 'clockedOut' | 'working' | 'paused';
   stateText: string;
 }
 
@@ -20,4 +21,4 @@ export interface KioskEmployeeSession {
   status: ClockStatus;
 }
 
-export type ClockAction = 'start' | 'stop';
+export type ClockAction = 'start' | 'stop' | 'pauseStart' | 'pauseEnd';

@@ -167,6 +167,10 @@ export class AdminPage {
     this.updateSettings(settings => ({ ...settings, defaultActivityId: this.toNumber(value) }));
   }
 
+  updatePauseActivityId(value: string): void {
+    this.updateSettings(settings => ({ ...settings, pauseActivityId: this.toNumber(value) }));
+  }
+
   updateEmployee(index: number, patch: Partial<AdminEmployee>): void {
     this.updateSettings(settings => ({
       ...settings,
@@ -233,6 +237,7 @@ export class AdminPage {
       keepAdminApiToken: settings.hasAdminApiToken && !extended.adminApiToken,
       defaultProjectId: settings.defaultProjectId,
       defaultActivityId: settings.defaultActivityId,
+      pauseActivityId: settings.pauseActivityId,
       employees: settings.employees.map(employee => ({
         id: employee.id,
         kimaiUserId: employee.kimaiUserId,
