@@ -140,6 +140,11 @@ h2 {
   margin: 0;
 }
 
+.time-info.single {
+  grid-template-columns: minmax(132px, 420px);
+  justify-content: center;
+}
+
 .time-info div {
   display: grid;
   gap: 6px;

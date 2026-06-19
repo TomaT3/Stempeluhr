@@ -47,7 +47,7 @@
         [text]="clockState.status()?.stateText ?? ''"
         [running]="clockState.status()?.isRunning ?? false" />
 
-      <dl class="time-info" aria-label="Zeitinformationen">
+      <dl class="time-info" [class.single]="!clockState.status()?.isRunning" aria-label="Zeitinformationen">
         @if (clockState.status()?.isRunning) {
           <div>
             <dt>Eingestempelt seit</dt>
