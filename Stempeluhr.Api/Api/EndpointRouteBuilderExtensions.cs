@@ -4,7 +4,7 @@ public static class EndpointRouteBuilderExtensions
 {
     public static IEndpointRouteBuilder MapApiEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/", () => Results.Redirect("/api/health"));
+        app.MapGet("/", () => Results.Redirect("/clock"));
 
         app.MapHealthEndpoints();
         app.MapEmployeeEndpoints();
