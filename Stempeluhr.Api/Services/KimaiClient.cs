@@ -19,7 +19,7 @@ public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
 
         if (current.ValueKind is JsonValueKind.Undefined)
         {
-            return new ClockStatusDto(false, null, null, 0, "Nicht eingestempelt");
+            return new ClockStatusDto(false, null, null, 0, "clockedOut", "Nicht eingestempelt");
         }
 
         var id = current.GetProperty("id").GetInt32();
@@ -27,8 +27,16 @@ public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
         var durationSeconds = current.TryGetProperty("duration", out var duration) && duration.ValueKind == JsonValueKind.Number
             ? duration.GetInt32()
             : 0;
+        var activityId = GetId(current, "activity");
+        var isPaused = settings.PauseActivityId is not null && activityId == settings.PauseActivityId;
 
-        return new ClockStatusDto(true, id, startedAt, durationSeconds, "Eingestempelt");
+        return new ClockStatusDto(
+            true,
+            id,
+            startedAt,
+            durationSeconds,
+            isPaused ? "paused" : "working",
+            isPaused ? "In Pause" : "Eingestempelt");
     }
 
     public Task StartAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default)
@@ -41,16 +49,34 @@ public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
             throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.");
         }
 
-        var body = new
-        {
-            project = projectId,
-            activity = activityId,
-            description = string.IsNullOrWhiteSpace(employee.Description) ? "Stempeluhr" : employee.Description,
-            tags = employee.Tags.Length == 0 ? null : string.Join(",", employee.Tags),
-            billable = employee.Billable
-        };
+        return StartTimesheetAsync(
+            settings,
+            employee,
+            projectId.Value,
+            activityId.Value,
+            string.IsNullOrWhiteSpace(employee.Description) ? "Stempeluhr" : employee.Description,
+            employee.Billable,
+            cancellationToken);
+    }
 
-        return SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Post, "api/timesheets?full=true", body, cancellationToken);
+    public Task StartPauseAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default)
+    {
+        var projectId = employee.ProjectId ?? settings.DefaultProjectId;
+        var activityId = settings.PauseActivityId;
+
+        if (projectId is null || activityId is null)
+        {
+            throw new InvalidOperationException("Projekt und Pausen-Aktivitaet muessen konfiguriert sein.");
+        }
+
+        return StartTimesheetAsync(
+            settings,
+            employee,
+            projectId.Value,
+            activityId.Value,
+            "Pause",
+            false,
+            cancellationToken);
     }
 
     public Task StopAsync(
@@ -101,6 +127,27 @@ public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
             ?? throw new InvalidOperationException("Kimai returned an empty response.");
     }
 
+    private Task StartTimesheetAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int projectId,
+        int activityId,
+        string description,
+        bool billable,
+        CancellationToken cancellationToken)
+    {
+        var body = new
+        {
+            project = projectId,
+            activity = activityId,
+            description,
+            tags = employee.Tags.Length == 0 ? null : string.Join(",", employee.Tags),
+            billable
+        };
+
+        return SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Post, "api/timesheets?full=true", body, cancellationToken);
+    }
+
     private static KimaiUserDto ParseKimaiUser(JsonElement user)
     {
         var id = user.TryGetProperty("id", out var idProperty) && idProperty.ValueKind == JsonValueKind.Number
@@ -125,6 +172,28 @@ public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
         return element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
             ? property.GetString()
             : null;
+    }
+
+    private static int? GetId(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number)
+        {
+            return property.GetInt32();
+        }
+
+        if (property.ValueKind == JsonValueKind.Object
+            && property.TryGetProperty("id", out var id)
+            && id.ValueKind == JsonValueKind.Number)
+        {
+            return id.GetInt32();
+        }
+
+        return null;
     }
 
     private static string FirstNonEmpty(params string?[] values)

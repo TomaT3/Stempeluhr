@@ -39,7 +39,8 @@
             <app-status-badge
               [compact]="true"
               [text]="status.stateText"
-              [running]="status.isRunning"
+              [running]="status.state === 'working'"
+              [paused]="status.state === 'paused'"
               [available]="status.isAvailable" />
           </div>
           <dl class="status-details">
@@ -49,7 +50,7 @@
             </div>
             <div>
               <dt>Dauer</dt>
-              <dd>{{ status.durationSeconds | duration }}</dd>
+              <dd>{{ durationFor(status) | duration }}</dd>
             </div>
           </dl>
         </article>

@@ -7,6 +7,7 @@ public sealed class RuntimeSettings
     public string? AdminApiToken { get; init; }
     public int? DefaultProjectId { get; init; }
     public int? DefaultActivityId { get; init; }
+    public int? PauseActivityId { get; init; }
     public List<EmployeeSettings> Employees { get; init; } = [];
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(BaseUrl) && Employees.Any(employee => employee.IsEnabled);

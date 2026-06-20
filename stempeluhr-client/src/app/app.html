@@ -5,14 +5,12 @@
         <p class="eyebrow">Kimai</p>
         <h1>Stempeluhr</h1>
       </div>
-      <nav class="top-actions" aria-label="Hauptnavigation">
-        <a class="mode-button" routerLink="/clock" routerLinkActive="active">Uhr</a>
-        <a class="mode-button" routerLink="/admin" routerLinkActive="active">Admin</a>
+      <div class="top-actions">
         <div class="clock" aria-label="Aktuelle Uhrzeit und Datum">
           <span class="clock-time">{{ clockState.now() | date: 'HH:mm:ss' }}</span>
           <span class="clock-date">{{ clockState.now() | date: 'dd.MM.yyyy' }}</span>
         </div>
-      </nav>
+      </div>
     </section>
   }
 

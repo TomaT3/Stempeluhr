@@ -13,10 +13,13 @@ export class ClockState {
   readonly status = signal<ClockStatus | null>(null);
   readonly employeeMode = this._employeeMode.asReadonly();
   readonly now = computed(() => new Date(this.tick()));
+  readonly isWorking = computed(() => this.status()?.state === 'working');
+  readonly isPaused = computed(() => this.status()?.state === 'paused');
+  readonly isClockedOut = computed(() => !this.status() || this.status()?.state === 'clockedOut');
 
   readonly elapsed = computed(() => {
     const status = this.status();
-    if (!status?.isRunning) {
+    if (!status?.isRunning || status.state === 'clockedOut') {
       return status?.durationSeconds ?? 0;
     }
 

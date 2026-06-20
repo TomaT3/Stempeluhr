@@ -6,6 +6,7 @@ public sealed record AdminEmployeeStatusDto(
     bool IsRunning,
     string? StartedAt,
     int DurationSeconds,
+    string State,
     string StateText,
     bool IsAvailable);
 
@@ -15,6 +16,7 @@ public sealed record AdminSettingsDto(
     bool HasAdminApiToken,
     int? DefaultProjectId,
     int? DefaultActivityId,
+    int? PauseActivityId,
     IReadOnlyCollection<AdminEmployeeDto> Employees)
 {
     public static AdminSettingsDto FromSettings(RuntimeSettings settings)
@@ -25,6 +27,7 @@ public sealed record AdminSettingsDto(
             !string.IsNullOrWhiteSpace(settings.AdminApiToken),
             settings.DefaultProjectId,
             settings.DefaultActivityId,
+            settings.PauseActivityId,
             settings.Employees.Select(AdminEmployeeDto.FromSettings).ToArray());
     }
 }
@@ -70,6 +73,7 @@ public sealed record AdminSettingsUpdateDto(
     bool KeepAdminApiToken,
     int? DefaultProjectId,
     int? DefaultActivityId,
+    int? PauseActivityId,
     IReadOnlyCollection<AdminEmployeeUpdateDto> Employees)
 {
     public RuntimeSettings ToSettings(RuntimeSettings current)
@@ -82,6 +86,7 @@ public sealed record AdminSettingsUpdateDto(
             AdminApiToken = KeepAdminApiToken && string.IsNullOrWhiteSpace(AdminApiToken) ? current.AdminApiToken : AdminApiToken,
             DefaultProjectId = DefaultProjectId,
             DefaultActivityId = DefaultActivityId,
+            PauseActivityId = PauseActivityId,
             Employees = employees
         };
     }

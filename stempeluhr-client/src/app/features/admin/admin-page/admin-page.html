@@ -44,6 +44,10 @@
             Standard-Aktivitaet-ID
             <input type="number" min="1" [value]="settings.defaultActivityId ?? ''" (input)="updateDefaultActivityId($any($event.target).value)">
           </label>
+          <label>
+            Pause-Aktivitaet-ID
+            <input type="number" min="1" [value]="settings.pauseActivityId ?? ''" (input)="updatePauseActivityId($any($event.target).value)">
+          </label>
         </div>
 
         <div class="admin-actions">
@@ -83,7 +87,8 @@
                 <app-status-badge
                   [compact]="true"
                   [text]="employeeStatus.stateText"
-                  [running]="employeeStatus.isRunning"
+                  [running]="employeeStatus.state === 'working'"
+                  [paused]="employeeStatus.state === 'paused'"
                   [available]="employeeStatus.isAvailable" />
               }
               <label class="toggle">

@@ -18,6 +18,7 @@ describe('ClockState', () => {
       activeTimesheetId: 42,
       startedAt: '2026-06-18T08:15:00.000Z',
       durationSeconds: 0,
+      state: 'working',
       stateText: 'Eingestempelt',
     });
 
@@ -36,6 +37,7 @@ describe('ClockState', () => {
       activeTimesheetId: 42,
       startedAt: null,
       durationSeconds: 30,
+      state: 'working',
       stateText: 'Eingestempelt',
     });
 

@@ -44,6 +44,16 @@
   background: #21a66f;
 }
 
+.status-badge.paused {
+  border-color: #e7c47d;
+  background: #fff8e8;
+  color: #865c13;
+}
+
+.status-badge.paused .status-dot {
+  background: #c98a17;
+}
+
 .status-badge.unavailable {
   border-color: #e6c8bf;
   background: #fff7f4;

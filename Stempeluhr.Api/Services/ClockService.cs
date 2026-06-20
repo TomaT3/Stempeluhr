@@ -66,6 +66,20 @@ public sealed class ClockService(
                 await StopClockAsync(context.Settings, context.Employee, cancellationToken));
         }
 
+        if (string.Equals(request.Action, "pauseStart", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ClockActionResponse(
+                ClockActionResult.Success,
+                await StartPauseAsync(context.Settings, context.Employee, cancellationToken));
+        }
+
+        if (string.Equals(request.Action, "pauseEnd", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ClockActionResponse(
+                ClockActionResult.Success,
+                await EndPauseAsync(context.Settings, context.Employee, cancellationToken));
+        }
+
         return new ClockActionResponse(ClockActionResult.BadRequest, null);
     }
 
@@ -84,7 +98,10 @@ public sealed class ClockService(
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         if (running.IsRunning)
         {
-            return running with { StateText = "Schon eingestempelt" };
+            return running with
+            {
+                StateText = running.State == "paused" ? "Aktuell in Pause" : "Schon eingestempelt"
+            };
         }
 
         await kimai.StartAsync(settings, employee, cancellationToken);
@@ -106,6 +123,61 @@ public sealed class ClockService(
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Ausgestempelt" };
+    }
+
+    private async Task<ClockStatusDto> StartPauseAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken)
+    {
+        var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+        if (!running.IsRunning || running.ActiveTimesheetId is null)
+        {
+            return running with { StateText = "Nicht eingestempelt" };
+        }
+
+        if (running.State == "paused")
+        {
+            return running with { StateText = "Schon in Pause" };
+        }
+
+        if ((employee.ProjectId ?? settings.DefaultProjectId) is null || settings.PauseActivityId is null)
+        {
+            return running with { StateText = "Pausen-Aktivitaet fehlt" };
+        }
+
+        await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
+        await kimai.StartPauseAsync(settings, employee, cancellationToken);
+        var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+        return status with { StateText = "In Pause" };
+    }
+
+    private async Task<ClockStatusDto> EndPauseAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken)
+    {
+        var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+        if (!running.IsRunning || running.ActiveTimesheetId is null)
+        {
+            return running with { StateText = "Nicht in Pause" };
+        }
+
+        if (running.State != "paused")
+        {
+            return running with { StateText = "Nicht in Pause" };
+        }
+
+        if ((employee.ProjectId ?? settings.DefaultProjectId) is null
+            || (employee.ActivityId ?? settings.DefaultActivityId) is null)
+        {
+            return running with { StateText = "Arbeits-Aktivitaet fehlt" };
+        }
+
+        await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
+        await kimai.StartAsync(settings, employee, cancellationToken);
+        var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+        return status with { StateText = "Eingestempelt" };
     }
 
     private sealed record EmployeeContext(RuntimeSettings Settings, EmployeeSettings Employee);

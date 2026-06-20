@@ -28,12 +28,12 @@ public sealed class AdminService(
     {
         if (!employee.IsEnabled)
         {
-            return new AdminEmployeeStatusDto(employee.Id, employee.DisplayName, false, null, 0, "Inaktiv", false);
+            return new AdminEmployeeStatusDto(employee.Id, employee.DisplayName, false, null, 0, "clockedOut", "Inaktiv", false);
         }
 
         if (string.IsNullOrWhiteSpace(employee.ApiToken))
         {
-            return new AdminEmployeeStatusDto(employee.Id, employee.DisplayName, false, null, 0, "API-Token fehlt", false);
+            return new AdminEmployeeStatusDto(employee.Id, employee.DisplayName, false, null, 0, "clockedOut", "API-Token fehlt", false);
         }
 
         try
@@ -45,12 +45,13 @@ public sealed class AdminService(
                 status.IsRunning,
                 status.StartedAt,
                 status.DurationSeconds,
+                status.State,
                 status.StateText,
                 true);
         }
         catch
         {
-            return new AdminEmployeeStatusDto(employee.Id, employee.DisplayName, false, null, 0, "Status nicht verfuegbar", false);
+            return new AdminEmployeeStatusDto(employee.Id, employee.DisplayName, false, null, 0, "clockedOut", "Status nicht verfuegbar", false);
         }
     }
 }

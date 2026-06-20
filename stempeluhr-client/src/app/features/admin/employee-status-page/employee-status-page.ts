@@ -1,6 +1,6 @@
 import { DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, DestroyRef, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { AdminEmployeeStatus } from '../../../core/models/admin.models';
@@ -16,6 +16,9 @@ import { DurationPipe } from '../../../shared/pipes/duration-pipe';
 })
 export class EmployeeStatusPage {
   private readonly adminApi = inject(AdminApi);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly tick = signal(Date.now());
+  private loadedAt = Date.now();
 
   readonly adminPassword = signal('');
   readonly statuses = signal<AdminEmployeeStatus[]>([]);
@@ -25,6 +28,11 @@ export class EmployeeStatusPage {
 
   readonly runningCount = computed(() => this.statuses().filter(status => status.isRunning).length);
   readonly availableCount = computed(() => this.statuses().filter(status => status.isAvailable).length);
+
+  constructor() {
+    const intervalId = window.setInterval(() => this.tick.set(Date.now()), 1000);
+    this.destroyRef.onDestroy(() => window.clearInterval(intervalId));
+  }
 
   loadStatuses(): void {
     const password = this.adminPassword().trim();
@@ -37,6 +45,7 @@ export class EmployeeStatusPage {
     this.message.set('');
     this.adminApi.getEmployeeStatuses(password).subscribe({
       next: statuses => {
+        this.loadedAt = Date.now();
         this.statuses.set(statuses);
         this.hasLoaded.set(true);
         this.isBusy.set(false);
@@ -50,6 +59,19 @@ export class EmployeeStatusPage {
     });
   }
 
+  durationFor(status: AdminEmployeeStatus): number {
+    if (!status.isRunning) {
+      return status.durationSeconds;
+    }
+
+    const startedAt = this.parseStartedAt(status.startedAt);
+    if (startedAt !== null) {
+      return Math.max(0, Math.floor((this.tick() - startedAt) / 1000));
+    }
+
+    return Math.max(0, status.durationSeconds + Math.floor((this.tick() - this.loadedAt) / 1000));
+  }
+
   private errorMessage(error: HttpErrorResponse): string {
     if (error.status === 401) {
       return 'Admin-Passwort stimmt nicht.';
@@ -60,5 +82,14 @@ export class EmployeeStatusPage {
     }
 
     return `Status konnte nicht geladen werden (${error.status}).`;
+  }
+
+  private parseStartedAt(value: string | null): number | null {
+    if (!value) {
+      return null;
+    }
+
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
   }
 }

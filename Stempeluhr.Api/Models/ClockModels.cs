@@ -21,6 +21,7 @@ public sealed record ClockStatusDto(
     int? ActiveTimesheetId,
     string? StartedAt,
     int DurationSeconds,
+    string State,
     string StateText);
 
 public enum ClockActionResult

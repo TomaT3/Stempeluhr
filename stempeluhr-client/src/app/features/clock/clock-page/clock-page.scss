@@ -140,6 +140,11 @@ h2 {
   margin: 0;
 }
 
+.time-info.single {
+  grid-template-columns: minmax(132px, 420px);
+  justify-content: center;
+}
+
 .time-info div {
   display: grid;
   gap: 6px;
@@ -171,7 +176,7 @@ h2 {
 
 .stamp-button {
   display: inline-grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   justify-items: center;
   gap: 18px;
@@ -190,8 +195,34 @@ h2 {
   box-shadow: 0 18px 36px rgba(38, 51, 77, 0.16);
 }
 
+.stamp-label {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.stamp-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(10px, 2vw, 14px);
+  width: min(680px, 100%);
+}
+
+.stamp-actions .stamp-button {
+  width: 100%;
+  min-height: clamp(98px, 18vh, 168px);
+  gap: clamp(10px, 1.4vw, 16px);
+  padding: clamp(16px, 2vw, 26px);
+  font-size: clamp(1.35rem, 2.7vw, 2.35rem);
+}
+
 .stamp-button.start {
   background: linear-gradient(180deg, #199968, var(--color-success));
+}
+
+.stamp-button.pause {
+  background: linear-gradient(180deg, #d09221, #b7791f);
 }
 
 .stamp-button.stop {
@@ -229,6 +260,29 @@ h2 {
   border-radius: 4px;
 }
 
+.stamp-icon.pause {
+  position: relative;
+}
+
+.stamp-icon.pause::before,
+.stamp-icon.pause::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 32%;
+  height: 100%;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.stamp-icon.pause::before {
+  left: 12%;
+}
+
+.stamp-icon.pause::after {
+  right: 12%;
+}
+
 .message {
   min-height: 32px;
   color: #8a3a2f;
@@ -262,6 +316,10 @@ h2 {
     grid-template-columns: auto 1fr;
     gap: 12px;
     min-height: clamp(96px, 17vh, 132px);
+  }
+
+  .stamp-actions {
+    grid-template-columns: 1fr;
   }
 
   .back-button {
