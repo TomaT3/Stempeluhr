@@ -9,6 +9,8 @@ import { Avatar } from '../../../shared/components/avatar/avatar';
 import { StatusBadge } from '../../../shared/components/status-badge/status-badge';
 import { DurationPipe } from '../../../shared/pipes/duration-pipe';
 
+const PIN_LENGTH = 4;
+
 @Component({
   selector: 'app-clock-page',
   imports: [Avatar, DatePipe, DurationPipe, StatusBadge],
@@ -29,8 +31,15 @@ export class ClockPage implements OnDestroy {
   private resetTimer: number | null = null;
 
   pressDigit(digit: string): void {
-    if (this.pin().length < 8) {
-      this.pin.update(current => current + digit);
+    if (this.isBusy() || this.pin().length >= PIN_LENGTH) {
+      return;
+    }
+
+    const nextPin = `${this.pin()}${digit}`;
+    this.pin.set(nextPin);
+
+    if (nextPin.length === PIN_LENGTH) {
+      this.confirmPin();
     }
   }
 
@@ -40,7 +49,7 @@ export class ClockPage implements OnDestroy {
   }
 
   confirmPin(): void {
-    if (!this.pin()) {
+    if (!this.pin() || this.isBusy()) {
       return;
     }
 
