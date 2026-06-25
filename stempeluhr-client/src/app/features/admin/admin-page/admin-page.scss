@@ -100,7 +100,8 @@ label {
   font-weight: 800;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 42px;
   padding: 8px 10px;
@@ -111,7 +112,8 @@ input {
   font-size: 1rem;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: rgba(33, 87, 214, 0.56);
 }
 

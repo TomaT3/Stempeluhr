@@ -37,21 +37,47 @@
               autocomplete="new-password">
           </label>
           <label>
-            Standard-Projekt-ID
-            <input type="number" min="1" [value]="settings.defaultProjectId ?? ''" (input)="updateDefaultProjectId($any($event.target).value)">
+            Standard-Projekt
+            <select [value]="projectSelectValue(settings.defaultProjectId)" (change)="updateDefaultProjectId($any($event.target).value)">
+              <option value="" [selected]="settings.defaultProjectId === null">Keine Auswahl</option>
+              @if (settings.defaultProjectId !== null && !hasKimaiProject(settings.defaultProjectId)) {
+                <option [value]="settings.defaultProjectId" selected>{{ missingProjectLabel(settings.defaultProjectId) }}</option>
+              }
+              @for (project of kimaiProjects(); track project.id) {
+                <option [value]="project.id" [selected]="settings.defaultProjectId === project.id">{{ projectOptionLabel(project) }}</option>
+              }
+            </select>
           </label>
           <label>
-            Standard-Aktivitaet-ID
-            <input type="number" min="1" [value]="settings.defaultActivityId ?? ''" (input)="updateDefaultActivityId($any($event.target).value)">
+            Standard-Aktivitaet
+            <select [value]="activitySelectValue(settings.defaultActivityId)" (change)="updateDefaultActivityId($any($event.target).value)">
+              <option value="" [selected]="settings.defaultActivityId === null">Keine Auswahl</option>
+              @if (settings.defaultActivityId !== null && !hasKimaiActivity(settings.defaultActivityId)) {
+                <option [value]="settings.defaultActivityId" selected>{{ missingActivityLabel(settings.defaultActivityId) }}</option>
+              }
+              @for (activity of kimaiActivities(); track activity.id) {
+                <option [value]="activity.id" [selected]="settings.defaultActivityId === activity.id">{{ activityOptionLabel(activity) }}</option>
+              }
+            </select>
           </label>
           <label>
-            Pause-Aktivitaet-ID
-            <input type="number" min="1" [value]="settings.pauseActivityId ?? ''" (input)="updatePauseActivityId($any($event.target).value)">
+            Pause-Aktivitaet
+            <select [value]="activitySelectValue(settings.pauseActivityId)" (change)="updatePauseActivityId($any($event.target).value)">
+              <option value="" [selected]="settings.pauseActivityId === null">Keine Auswahl</option>
+              @if (settings.pauseActivityId !== null && !hasKimaiActivity(settings.pauseActivityId)) {
+                <option [value]="settings.pauseActivityId" selected>{{ missingActivityLabel(settings.pauseActivityId) }}</option>
+              }
+              @for (activity of kimaiActivities(); track activity.id) {
+                <option [value]="activity.id" [selected]="settings.pauseActivityId === activity.id">{{ activityOptionLabel(activity) }}</option>
+              }
+            </select>
           </label>
         </div>
 
         <div class="admin-actions">
           <button type="button" (click)="importKimaiUsers()" [disabled]="adminBusy()">Kimai-Mitarbeiter laden</button>
+          <button type="button" (click)="importKimaiProjects()" [disabled]="adminBusy()">Kimai-Projekte laden</button>
+          <button type="button" (click)="importKimaiActivities()" [disabled]="adminBusy()">Kimai-Aktivitaeten laden</button>
           <button type="button" (click)="addEmployee()">Manuell hinzufuegen</button>
           <a class="admin-link-button" routerLink="/admin/status">Status anzeigen</a>
           <button type="button" class="primary" (click)="saveAdminSettings()" [disabled]="adminBusy()">Speichern</button>
@@ -120,12 +146,28 @@
                 <input type="color" [value]="employee.color" (input)="updateEmployee(index, { color: $any($event.target).value })">
               </label>
               <label>
-                Projekt-ID
-                <input type="number" min="1" [value]="employee.projectId ?? ''" (input)="updateEmployee(index, { projectId: $any($event.target).value ? +$any($event.target).value : null })">
+                Projekt
+                <select [value]="projectSelectValue(employee.projectId)" (change)="updateEmployee(index, { projectId: $any($event.target).value ? +$any($event.target).value : null })">
+                  <option value="" [selected]="employee.projectId === null">Standard verwenden</option>
+                  @if (employee.projectId !== null && !hasKimaiProject(employee.projectId)) {
+                    <option [value]="employee.projectId" selected>{{ missingProjectLabel(employee.projectId) }}</option>
+                  }
+                  @for (project of kimaiProjects(); track project.id) {
+                    <option [value]="project.id" [selected]="employee.projectId === project.id">{{ projectOptionLabel(project) }}</option>
+                  }
+                </select>
               </label>
               <label>
-                Aktivitaet-ID
-                <input type="number" min="1" [value]="employee.activityId ?? ''" (input)="updateEmployee(index, { activityId: $any($event.target).value ? +$any($event.target).value : null })">
+                Aktivitaet
+                <select [value]="activitySelectValue(employee.activityId)" (change)="updateEmployee(index, { activityId: $any($event.target).value ? +$any($event.target).value : null })">
+                  <option value="" [selected]="employee.activityId === null">Standard verwenden</option>
+                  @if (employee.activityId !== null && !hasKimaiActivity(employee.activityId)) {
+                    <option [value]="employee.activityId" selected>{{ missingActivityLabel(employee.activityId) }}</option>
+                  }
+                  @for (activity of kimaiActivities(); track activity.id) {
+                    <option [value]="activity.id" [selected]="employee.activityId === activity.id">{{ activityOptionLabel(activity) }}</option>
+                  }
+                </select>
               </label>
               <label>
                 Beschreibung

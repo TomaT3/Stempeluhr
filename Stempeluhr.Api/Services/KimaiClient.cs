@@ -97,6 +97,38 @@ public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
         return users.Select(ParseKimaiUser).OrderBy(user => user.DisplayName).ToArray();
     }
 
+    public async Task<IReadOnlyCollection<KimaiActivityDto>> GetActivitiesAsync(
+        string baseUrl,
+        string apiToken,
+        CancellationToken cancellationToken = default)
+    {
+        var activities = await SendAsync<JsonElement[]>(
+            baseUrl,
+            apiToken,
+            HttpMethod.Get,
+            "api/activities?visible=1&orderBy=name&order=ASC",
+            null,
+            cancellationToken);
+
+        return activities.Select(ParseKimaiActivity).OrderBy(activity => activity.Name).ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<KimaiProjectDto>> GetProjectsAsync(
+        string baseUrl,
+        string apiToken,
+        CancellationToken cancellationToken = default)
+    {
+        var projects = await SendAsync<JsonElement[]>(
+            baseUrl,
+            apiToken,
+            HttpMethod.Get,
+            "api/projects?visible=1&orderBy=name&order=ASC",
+            null,
+            cancellationToken);
+
+        return projects.Select(ParseKimaiProject).OrderBy(project => project.Name).ToArray();
+    }
+
     private async Task<T> SendAsync<T>(
         string baseUrl,
         string apiToken,
@@ -165,6 +197,42 @@ public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
             $"Kimai #{id}");
 
         return new KimaiUserDto(id, username, email, displayName, GetString(user, "avatar"));
+    }
+
+    private static KimaiActivityDto ParseKimaiActivity(JsonElement activity)
+    {
+        var id = activity.TryGetProperty("id", out var idProperty) && idProperty.ValueKind == JsonValueKind.Number
+            ? idProperty.GetInt32()
+            : 0;
+
+        var name = FirstNonEmpty(GetString(activity, "name"), $"Aktivitaet #{id}");
+        var visible = !activity.TryGetProperty("visible", out var visibleProperty)
+            || visibleProperty.ValueKind is not JsonValueKind.False;
+
+        return new KimaiActivityDto(
+            id,
+            name,
+            GetString(activity, "parentTitle"),
+            GetId(activity, "project"),
+            visible);
+    }
+
+    private static KimaiProjectDto ParseKimaiProject(JsonElement project)
+    {
+        var id = project.TryGetProperty("id", out var idProperty) && idProperty.ValueKind == JsonValueKind.Number
+            ? idProperty.GetInt32()
+            : 0;
+
+        var name = FirstNonEmpty(GetString(project, "name"), $"Projekt #{id}");
+        var visible = !project.TryGetProperty("visible", out var visibleProperty)
+            || visibleProperty.ValueKind is not JsonValueKind.False;
+
+        return new KimaiProjectDto(
+            id,
+            name,
+            GetString(project, "parentTitle"),
+            GetId(project, "customer"),
+            visible);
     }
 
     private static string? GetString(JsonElement element, string name)

@@ -1,7 +1,7 @@
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 
-import { AdminEmployeeStatus, AdminSettings, KimaiUser } from '../models/admin.models';
+import { AdminEmployeeStatus, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../models/admin.models';
 
 @Injectable({
   providedIn: 'root',
@@ -20,6 +20,22 @@ export class AdminApi {
   importKimaiUsers(adminPassword: string, baseUrl: string) {
     return this.http.post<KimaiUser[]>(
       '/api/admin/kimai-users',
+      { baseUrl, adminApiToken: '' },
+      { headers: this.headers(adminPassword) },
+    );
+  }
+
+  importKimaiActivities(adminPassword: string, baseUrl: string) {
+    return this.http.post<KimaiActivity[]>(
+      '/api/admin/kimai-activities',
+      { baseUrl, adminApiToken: '' },
+      { headers: this.headers(adminPassword) },
+    );
+  }
+
+  importKimaiProjects(adminPassword: string, baseUrl: string) {
+    return this.http.post<KimaiProject[]>(
+      '/api/admin/kimai-projects',
       { baseUrl, adminApiToken: '' },
       { headers: this.headers(adminPassword) },
     );
