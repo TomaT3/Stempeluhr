@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { AdminEmployee, AdminEmployeeStatus, AdminSettings, KimaiUser } from '../../../core/models/admin.models';
+import { AdminEmployee, AdminEmployeeStatus, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../../../core/models/admin.models';
 import { AdminApi } from '../../../core/services/admin-api';
 import { Avatar } from '../../../shared/components/avatar/avatar';
 import { StatusBadge } from '../../../shared/components/status-badge/status-badge';
@@ -19,6 +19,8 @@ export class AdminPage {
   readonly adminPassword = signal('');
   readonly adminSettings = signal<AdminSettings | null>(null);
   readonly adminStatuses = signal<AdminEmployeeStatus[]>([]);
+  readonly kimaiActivities = signal<KimaiActivity[]>([]);
+  readonly kimaiProjects = signal<KimaiProject[]>([]);
   readonly kimaiUsers = signal<KimaiUser[]>([]);
   readonly adminMessage = signal('');
   readonly adminBusy = signal(false);
@@ -33,6 +35,8 @@ export class AdminPage {
         this.adminDirty.set(false);
         this.adminBusy.set(false);
         this.loadAdminEmployeeStatuses();
+        this.loadKimaiActivities(false);
+        this.loadKimaiProjects(false);
       },
       error: (error: HttpErrorResponse) => {
         this.adminMessage.set(this.adminLoginErrorMessage(error));
@@ -78,8 +82,7 @@ export class AdminPage {
     this.adminApi.importKimaiUsers(this.adminPassword(), settings.baseUrl).subscribe({
       next: users => {
         this.kimaiUsers.set(users);
-        const added = this.mergeKimaiUsers(users);
-        this.adminMessage.set(`${users.length} Kimai-Mitarbeiter geladen, ${added} uebernommen`);
+        this.adminMessage.set(`${users.length} Kimai-Mitarbeiter geladen`);
         this.adminBusy.set(false);
       },
       error: () => {
@@ -87,6 +90,14 @@ export class AdminPage {
         this.adminBusy.set(false);
       },
     });
+  }
+
+  importKimaiActivities(): void {
+    this.loadKimaiActivities(true);
+  }
+
+  importKimaiProjects(): void {
+    this.loadKimaiProjects(true);
   }
 
   addKimaiUser(user: KimaiUser): void {
@@ -113,6 +124,38 @@ export class AdminPage {
 
   statusFor(employeeId: string): AdminEmployeeStatus | null {
     return this.adminStatuses().find(status => status.employeeId === employeeId) ?? null;
+  }
+
+  hasKimaiActivity(activityId: number | null): boolean {
+    return activityId !== null && this.kimaiActivities().some(activity => activity.id === activityId);
+  }
+
+  activitySelectValue(activityId: number | null): string {
+    return activityId?.toString() ?? '';
+  }
+
+  activityOptionLabel(activity: KimaiActivity): string {
+    return activity.parentTitle ? `${activity.parentTitle} - ${activity.name}` : activity.name;
+  }
+
+  missingActivityLabel(activityId: number): string {
+    return `Gespeicherte Aktivitaet ${activityId}`;
+  }
+
+  hasKimaiProject(projectId: number | null): boolean {
+    return projectId !== null && this.kimaiProjects().some(project => project.id === projectId);
+  }
+
+  projectSelectValue(projectId: number | null): string {
+    return projectId?.toString() ?? '';
+  }
+
+  projectOptionLabel(project: KimaiProject): string {
+    return project.parentTitle ? `${project.parentTitle} - ${project.name}` : project.name;
+  }
+
+  missingProjectLabel(projectId: number): string {
+    return `Gespeichertes Projekt ${projectId}`;
   }
 
   addEmployee(): void {
@@ -208,6 +251,62 @@ export class AdminPage {
     });
   }
 
+  private loadKimaiActivities(showMessage: boolean): void {
+    const settings = this.adminSettings();
+    if (!settings) {
+      return;
+    }
+
+    if (showMessage) {
+      this.adminBusy.set(true);
+    }
+
+    this.adminApi.importKimaiActivities(this.adminPassword(), settings.baseUrl).subscribe({
+      next: activities => {
+        this.kimaiActivities.set(activities);
+        if (showMessage) {
+          this.adminMessage.set(`${activities.length} Kimai-Aktivitaeten geladen`);
+          this.adminBusy.set(false);
+        }
+      },
+      error: () => {
+        this.kimaiActivities.set([]);
+        if (showMessage) {
+          this.adminMessage.set('Kimai-Aktivitaeten konnten nicht geladen werden');
+          this.adminBusy.set(false);
+        }
+      },
+    });
+  }
+
+  private loadKimaiProjects(showMessage: boolean): void {
+    const settings = this.adminSettings();
+    if (!settings) {
+      return;
+    }
+
+    if (showMessage) {
+      this.adminBusy.set(true);
+    }
+
+    this.adminApi.importKimaiProjects(this.adminPassword(), settings.baseUrl).subscribe({
+      next: projects => {
+        this.kimaiProjects.set(projects);
+        if (showMessage) {
+          this.adminMessage.set(`${projects.length} Kimai-Projekte geladen`);
+          this.adminBusy.set(false);
+        }
+      },
+      error: () => {
+        this.kimaiProjects.set([]);
+        if (showMessage) {
+          this.adminMessage.set('Kimai-Projekte konnten nicht geladen werden');
+          this.adminBusy.set(false);
+        }
+      },
+    });
+  }
+
   private adminLoginErrorMessage(error: HttpErrorResponse): string {
     if (error.status === 0 || error.status === 404) {
       return 'Backend nicht erreichbar. Lokal bitte .NET auf Port 5100 starten und Angular mit Proxy verwenden.';
@@ -283,30 +382,6 @@ export class AdminPage {
 
     this.adminSettings.set(update(settings));
     this.adminDirty.set(true);
-  }
-
-  private mergeKimaiUsers(users: KimaiUser[]): number {
-    let added = 0;
-    const settings = this.adminSettings();
-    if (!settings) {
-      return 0;
-    }
-
-    const employees = [...settings.employees];
-    for (const user of users) {
-      if (employees.some(employee => employee.kimaiUserId === user.id)) {
-        continue;
-      }
-
-      employees.push(this.createEmployeeFromKimaiUser(user, employees.length));
-      added++;
-    }
-
-    if (added > 0) {
-      this.updateSettings(current => ({ ...current, employees }));
-    }
-
-    return added;
   }
 
   private hasKimaiUser(settings: AdminSettings, user: KimaiUser): boolean {

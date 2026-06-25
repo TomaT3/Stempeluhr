@@ -36,6 +36,22 @@ export interface AdminEmployee {
   isEnabled: boolean;
 }
 
+export interface KimaiActivity {
+  id: number;
+  name: string;
+  parentTitle: string | null;
+  projectId: number | null;
+  visible: boolean;
+}
+
+export interface KimaiProject {
+  id: number;
+  name: string;
+  parentTitle: string | null;
+  customerId: number | null;
+  visible: boolean;
+}
+
 export interface KimaiUser {
   id: number;
   username: string | null;

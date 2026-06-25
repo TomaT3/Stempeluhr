@@ -86,6 +86,58 @@ public static class AdminEndpoints
             return Results.Ok(users);
         });
 
+        app.MapPost("/api/admin/kimai-activities", async (
+            HttpRequest request,
+            KimaiImportRequest importRequest,
+            IKimaiClient kimai,
+            IRuntimeSettingsStore settingsStore,
+            IAdminAuthorizationService authorization,
+            CancellationToken cancellationToken) =>
+        {
+            if (!authorization.IsAdmin(request))
+            {
+                return Results.Unauthorized();
+            }
+
+            var settings = settingsStore.Load();
+            var baseUrl = FirstNonEmpty(importRequest.BaseUrl, settings.BaseUrl);
+            var token = FirstNonEmpty(importRequest.AdminApiToken, settings.AdminApiToken);
+
+            if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(token))
+            {
+                return Results.BadRequest(new { message = "Kimai-URL und Admin-API-Token fehlen." });
+            }
+
+            var activities = await kimai.GetActivitiesAsync(baseUrl, token, cancellationToken);
+            return Results.Ok(activities);
+        });
+
+        app.MapPost("/api/admin/kimai-projects", async (
+            HttpRequest request,
+            KimaiImportRequest importRequest,
+            IKimaiClient kimai,
+            IRuntimeSettingsStore settingsStore,
+            IAdminAuthorizationService authorization,
+            CancellationToken cancellationToken) =>
+        {
+            if (!authorization.IsAdmin(request))
+            {
+                return Results.Unauthorized();
+            }
+
+            var settings = settingsStore.Load();
+            var baseUrl = FirstNonEmpty(importRequest.BaseUrl, settings.BaseUrl);
+            var token = FirstNonEmpty(importRequest.AdminApiToken, settings.AdminApiToken);
+
+            if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(token))
+            {
+                return Results.BadRequest(new { message = "Kimai-URL und Admin-API-Token fehlen." });
+            }
+
+            var projects = await kimai.GetProjectsAsync(baseUrl, token, cancellationToken);
+            return Results.Ok(projects);
+        });
+
         return app;
     }
 

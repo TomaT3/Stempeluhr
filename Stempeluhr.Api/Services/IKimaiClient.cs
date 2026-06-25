@@ -23,4 +23,14 @@ public interface IKimaiClient
         string baseUrl,
         string apiToken,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyCollection<KimaiActivityDto>> GetActivitiesAsync(
+        string baseUrl,
+        string apiToken,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyCollection<KimaiProjectDto>> GetProjectsAsync(
+        string baseUrl,
+        string apiToken,
+        CancellationToken cancellationToken = default);
 }
