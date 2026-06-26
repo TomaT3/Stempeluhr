@@ -21,4 +21,19 @@ export interface KioskEmployeeSession {
   status: ClockStatus;
 }
 
+export interface NfcClockEvent {
+  eventId: string;
+  occurredAt: string;
+  terminalId: string;
+  cardId: string | null;
+  employee: Employee | null;
+  status: ClockStatus | null;
+  message: string;
+  success: boolean;
+}
+
+export interface NfcLatestEvent {
+  event: NfcClockEvent | null;
+}
+
 export type ClockAction = 'start' | 'stop' | 'pauseStart' | 'pauseEnd';

@@ -6,6 +6,8 @@ public sealed record KioskPinLoginRequest(string? Pin);
 
 public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action);
 
+public sealed record NfcClockRequest(string? CardId, string? Action, string? TerminalId);
+
 public sealed record EmployeeDto(
     string Id,
     string DisplayName,
@@ -15,6 +17,18 @@ public sealed record EmployeeDto(
     bool RequiresPin);
 
 public sealed record KioskEmployeeSessionDto(EmployeeDto Employee, ClockStatusDto Status);
+
+public sealed record NfcClockEventDto(
+    string EventId,
+    DateTimeOffset OccurredAt,
+    string TerminalId,
+    string? CardId,
+    EmployeeDto? Employee,
+    ClockStatusDto? Status,
+    string Message,
+    bool Success);
+
+public sealed record NfcLatestEventDto(NfcClockEventDto? Event);
 
 public sealed record ClockStatusDto(
     bool IsRunning,

@@ -49,6 +49,25 @@ public sealed class EmployeeService : IEmployeeService
         return matches.Length == 1 ? matches[0] : null;
     }
 
+    public EmployeeSettings? FindEmployeeByNfcCardId(RuntimeSettings settings, string? cardId)
+    {
+        var normalizedCardId = NfcCardIdNormalizer.Normalize(cardId);
+        if (normalizedCardId is null)
+        {
+            return null;
+        }
+
+        var matches = settings.Employees
+            .Where(employee =>
+                employee.IsEnabled &&
+                !string.IsNullOrWhiteSpace(employee.ApiToken) &&
+                string.Equals(NfcCardIdNormalizer.Normalize(employee.NfcCardId), normalizedCardId, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
     public EmployeeDto ToEmployeeDto(EmployeeSettings employee)
     {
         return new EmployeeDto(

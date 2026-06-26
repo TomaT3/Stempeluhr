@@ -35,11 +35,18 @@ Danach in der App oben `Admin` oeffnen:
 - Kimai-URL und Admin-API-Token setzen
 - Kimai-Mitarbeiter laden
 - pro Mitarbeiter API-Token, PIN, Farbe und optional Bild pflegen
+- optional pro Mitarbeiter NFC-Karten-ID fuer ein Raspberry-Pi-Terminal pflegen
 - Standard-Projekt-ID, Standard-Aktivitaet-ID und Pause-Aktivitaet-ID setzen
 
 `Pin` ist optional. Ohne PIN kann ein Mitarbeiter direkt ein- und ausstempeln.
 Die Pause-Aktivitaet-ID verweist auf eine normale Kimai-Taetigkeit, die als Pause genutzt wird.
 Aktive Timesheets mit dieser Taetigkeit werden in der Stempeluhr als `In Pause` angezeigt.
+
+## Raspberry Pi NFC-Terminal
+
+Fuer ein Terminal mit Raspberry Pi 5, Touchdisplay und ACR122U gibt es einen
+separaten Agenten unter `tools/pi-nfc-agent`. Die Einrichtung ist in
+`docs/raspberry-pi-kiosk-nfc.md` beschrieben.
 
 ## Starten
 

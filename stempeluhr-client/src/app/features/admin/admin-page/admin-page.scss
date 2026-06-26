@@ -63,6 +63,13 @@ button {
   background: #fdfefe;
 }
 
+.admin-login button:disabled,
+.admin-actions button:disabled,
+.employee-admin-card button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
 .admin-link-button {
   text-decoration: none;
 }
@@ -119,6 +126,13 @@ select:focus {
 
 input[type="color"] {
   padding: 4px;
+}
+
+.nfc-card-id {
+  color: #152033;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-weight: 850;
+  letter-spacing: 0.04em;
 }
 
 .admin-actions,

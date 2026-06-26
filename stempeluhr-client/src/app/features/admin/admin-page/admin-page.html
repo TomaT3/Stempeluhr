@@ -84,6 +84,37 @@
         </div>
       </section>
 
+      <section class="admin-section nfc-admin-section">
+        <h2>NFC-Kartenleser</h2>
+        <div class="form-grid">
+          <label>
+            Terminal-ID
+            <input
+              [value]="nfcTerminalId()"
+              (input)="updateNfcTerminalId($any($event.target).value)"
+              autocomplete="off"
+              spellcheck="false">
+          </label>
+          <label>
+            Letzte Karten-ID
+            <input class="nfc-card-id" readonly [value]="latestNfcCardId() ?? 'Keine Karte gelesen'">
+          </label>
+          <label>
+            Status
+            <input readonly [value]="latestNfcEvent()?.message ?? 'Keine Daten'">
+          </label>
+          <label>
+            Gelesen um
+            <input readonly [value]="(latestNfcEvent()?.occurredAt | date: 'HH:mm:ss') ?? '-'">
+          </label>
+        </div>
+
+        <div class="admin-actions">
+          <button type="button" (click)="refreshLatestNfcEvent()">Aktualisieren</button>
+          <button type="button" (click)="copyLatestNfcCardId()" [disabled]="!latestNfcCardId()">Kopieren</button>
+        </div>
+      </section>
+
       @if (kimaiUsers().length > 0) {
         <section class="admin-section">
           <h2>Import</h2>
@@ -132,6 +163,15 @@
               <label>
                 PIN
                 <input [value]="employee.pin ?? ''" (input)="updateEmployee(index, { pin: $any($event.target).value || null })" inputmode="numeric">
+              </label>
+              <label>
+                NFC-Karten-ID
+                <input
+                  [value]="employee.nfcCardId ?? ''"
+                  (input)="updateEmployee(index, { nfcCardId: $any($event.target).value || null })"
+                  autocomplete="off"
+                  autocapitalize="characters"
+                  spellcheck="false">
               </label>
               <label>
                 API-Token
@@ -185,6 +225,7 @@
                 <input type="file" accept="image/*" (change)="setEmployeeImage(index, $event)">
               </label>
               <button type="button" (click)="clearEmployeeImage(index)">Bild entfernen</button>
+              <button type="button" (click)="assignLatestNfcCardId(index)" [disabled]="!latestNfcCardId()">Letzte NFC-Karte zuweisen</button>
               <label class="toggle">
                 <input type="checkbox" [checked]="employee.billable" (change)="updateEmployee(index, { billable: $any($event.target).checked })">
                 abrechenbar

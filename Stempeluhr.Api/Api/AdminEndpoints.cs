@@ -55,6 +55,11 @@ public static class AdminEndpoints
                 return Results.Conflict(new { message = "PINs muessen eindeutig sein." });
             }
 
+            if (adminService.HasDuplicateNfcCardIds(settings.Employees))
+            {
+                return Results.Conflict(new { message = "NFC-Karten muessen eindeutig sein." });
+            }
+
             await settingsStore.SaveAsync(settings, cancellationToken);
 
             return Results.Ok(AdminSettingsDto.FromSettings(settings));

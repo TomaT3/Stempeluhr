@@ -1,19 +1,23 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, inject, signal } from '@angular/core';
+import { DatePipe } from '@angular/common';
+import { Component, OnDestroy, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { AdminEmployee, AdminEmployeeStatus, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../../../core/models/admin.models';
+import { NfcClockEvent } from '../../../core/models/kiosk.models';
 import { AdminApi } from '../../../core/services/admin-api';
 import { Avatar } from '../../../shared/components/avatar/avatar';
 import { StatusBadge } from '../../../shared/components/status-badge/status-badge';
 
 @Component({
   selector: 'app-admin-page',
-  imports: [Avatar, RouterLink, StatusBadge],
+  imports: [Avatar, DatePipe, RouterLink, StatusBadge],
   templateUrl: './admin-page.html',
   styleUrl: './admin-page.scss',
 })
-export class AdminPage {
+export class AdminPage implements OnDestroy {
+  private static readonly NfcTerminalStorageKey = 'stempeluhr.admin.nfcTerminalId';
+
   private readonly adminApi = inject(AdminApi);
 
   readonly adminPassword = signal('');
@@ -22,9 +26,13 @@ export class AdminPage {
   readonly kimaiActivities = signal<KimaiActivity[]>([]);
   readonly kimaiProjects = signal<KimaiProject[]>([]);
   readonly kimaiUsers = signal<KimaiUser[]>([]);
+  readonly nfcTerminalId = signal(this.readStoredNfcTerminalId());
+  readonly latestNfcEvent = signal<NfcClockEvent | null>(null);
   readonly adminMessage = signal('');
   readonly adminBusy = signal(false);
   readonly adminDirty = signal(false);
+
+  private nfcPollTimer: number | null = null;
 
   loadAdminSettings(): void {
     this.adminBusy.set(true);
@@ -37,6 +45,7 @@ export class AdminPage {
         this.loadAdminEmployeeStatuses();
         this.loadKimaiActivities(false);
         this.loadKimaiProjects(false);
+        this.startNfcPolling();
       },
       error: (error: HttpErrorResponse) => {
         this.adminMessage.set(this.adminLoginErrorMessage(error));
@@ -56,6 +65,11 @@ export class AdminPage {
       return;
     }
 
+    if (this.findDuplicateNfcCardId(settings)) {
+      this.adminMessage.set('NFC-Karten muessen eindeutig sein.');
+      return;
+    }
+
     this.adminBusy.set(true);
     this.adminApi.saveSettings(this.adminPassword(), this.toUpdatePayload(settings)).subscribe({
       next: saved => {
@@ -66,7 +80,7 @@ export class AdminPage {
         this.loadAdminEmployeeStatuses();
       },
       error: (error: HttpErrorResponse) => {
-        this.adminMessage.set(error.status === 409 ? 'PINs muessen eindeutig sein.' : 'Speichern fehlgeschlagen');
+        this.adminMessage.set(error.status === 409 ? this.conflictMessage(error) : 'Speichern fehlgeschlagen');
         this.adminBusy.set(false);
       },
     });
@@ -168,6 +182,7 @@ export class AdminPage {
           kimaiUserId: null,
           displayName: 'Neuer Mitarbeiter',
           pin: null,
+          nfcCardId: null,
           hasApiToken: false,
           apiToken: '',
           projectId: null,
@@ -242,6 +257,62 @@ export class AdminPage {
 
   clearEmployeeImage(index: number): void {
     this.updateEmployee(index, { imageUrl: null });
+  }
+
+  updateNfcTerminalId(value: string): void {
+    const terminalId = value.trim();
+    this.nfcTerminalId.set(terminalId);
+    localStorage.setItem(AdminPage.NfcTerminalStorageKey, terminalId);
+    this.latestNfcEvent.set(null);
+    this.refreshLatestNfcEvent();
+  }
+
+  refreshLatestNfcEvent(): void {
+    const terminalId = this.nfcTerminalId().trim();
+    if (!terminalId) {
+      this.latestNfcEvent.set(null);
+      return;
+    }
+
+    this.adminApi.latestNfcEvent(terminalId).subscribe({
+      next: latest => this.latestNfcEvent.set(latest.event),
+      error: () => this.latestNfcEvent.set(null),
+    });
+  }
+
+  latestNfcCardId(): string | null {
+    return this.normalizeNfcCardId(this.latestNfcEvent()?.cardId);
+  }
+
+  assignLatestNfcCardId(index: number): void {
+    const cardId = this.latestNfcCardId();
+    if (!cardId) {
+      this.adminMessage.set('Keine NFC-Karte gelesen.');
+      return;
+    }
+
+    this.updateEmployee(index, { nfcCardId: cardId });
+    this.adminMessage.set('NFC-Karte zugewiesen. Bitte speichern.');
+  }
+
+  async copyLatestNfcCardId(): Promise<void> {
+    const cardId = this.latestNfcCardId();
+    if (!cardId) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(cardId);
+      this.adminMessage.set('NFC-Karten-ID kopiert.');
+    } catch {
+      this.adminMessage.set('Kopieren nicht erlaubt. Karten-ID kann manuell markiert werden.');
+    }
+  }
+
+  ngOnDestroy(): void {
+    if (this.nfcPollTimer) {
+      window.clearInterval(this.nfcPollTimer);
+    }
   }
 
   private loadAdminEmployeeStatuses(): void {
@@ -342,6 +413,7 @@ export class AdminPage {
         kimaiUserId: employee.kimaiUserId,
         displayName: employee.displayName,
         pin: employee.pin,
+        nfcCardId: this.normalizeNfcCardId(employee.nfcCardId),
         apiToken: employee.apiToken ?? '',
         keepApiToken: employee.hasApiToken && !employee.apiToken,
         projectId: employee.projectId,
@@ -374,6 +446,47 @@ export class AdminPage {
     return false;
   }
 
+  private startNfcPolling(): void {
+    if (this.nfcPollTimer) {
+      window.clearInterval(this.nfcPollTimer);
+    }
+
+    this.refreshLatestNfcEvent();
+    this.nfcPollTimer = window.setInterval(() => this.refreshLatestNfcEvent(), 1500);
+  }
+
+  private findDuplicateNfcCardId(settings: AdminSettings): boolean {
+    const cardIds = new Set<string>();
+    for (const employee of settings.employees) {
+      const cardId = this.normalizeNfcCardId(employee.nfcCardId);
+      if (!cardId) {
+        continue;
+      }
+
+      if (cardIds.has(cardId)) {
+        return true;
+      }
+
+      cardIds.add(cardId);
+    }
+
+    return false;
+  }
+
+  private normalizeNfcCardId(cardId: string | null | undefined): string | null {
+    const normalized = cardId?.replace(/[^0-9a-f]/gi, '').toUpperCase() ?? '';
+    return normalized || null;
+  }
+
+  private conflictMessage(error: HttpErrorResponse): string {
+    const body = error.error as { message?: string } | null;
+    return body?.message ?? 'PINs oder NFC-Karten muessen eindeutig sein.';
+  }
+
+  private readStoredNfcTerminalId(): string {
+    return localStorage.getItem(AdminPage.NfcTerminalStorageKey) ?? 'stempeluhr-pi-01';
+  }
+
   private updateSettings(update: (settings: AdminSettings) => AdminSettings): void {
     const settings = this.adminSettings();
     if (!settings) {
@@ -394,6 +507,7 @@ export class AdminPage {
       kimaiUserId: user.id,
       displayName: user.displayName,
       pin: null,
+      nfcCardId: null,
       hasApiToken: false,
       apiToken: '',
       projectId: null,

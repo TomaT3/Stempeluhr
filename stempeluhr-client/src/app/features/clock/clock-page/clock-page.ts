@@ -1,7 +1,8 @@
 import { DatePipe } from '@angular/common';
 import { Component, OnDestroy, inject, signal } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
 
-import { Employee } from '../../../core/models/kiosk.models';
+import { Employee, NfcClockEvent } from '../../../core/models/kiosk.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { ClockState } from '../../../core/services/clock-state';
 import { KioskApi } from '../../../core/services/kiosk-api';
@@ -20,6 +21,7 @@ const PIN_LENGTH = 4;
 export class ClockPage implements OnDestroy {
   private readonly kioskApi = inject(KioskApi);
   private readonly audioFeedback = inject(AudioFeedback);
+  private readonly route = inject(ActivatedRoute);
   readonly clockState = inject(ClockState);
 
   readonly selectedEmployee = signal<Employee | null>(null);
@@ -29,6 +31,19 @@ export class ClockPage implements OnDestroy {
   readonly message = signal('');
 
   private resetTimer: number | null = null;
+  private nfcPollTimer: number | null = null;
+  private lastNfcEventId: string | null = null;
+  private hasInitializedNfcPolling = false;
+  private readonly terminalId = this.readTerminalId();
+
+  constructor() {
+    if (!this.terminalId) {
+      return;
+    }
+
+    this.pollNfcEvents();
+    this.nfcPollTimer = window.setInterval(() => this.pollNfcEvents(), 1000);
+  }
 
   pressDigit(digit: string): void {
     if (this.isBusy() || this.pin().length >= PIN_LENGTH) {
@@ -105,7 +120,61 @@ export class ClockPage implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.resetTimer) {
+      window.clearTimeout(this.resetTimer);
+    }
+
+    if (this.nfcPollTimer) {
+      window.clearInterval(this.nfcPollTimer);
+    }
+
     this.clockState.setEmployeeMode(false);
+  }
+
+  private pollNfcEvents(): void {
+    if (this.isBusy() || !this.terminalId) {
+      return;
+    }
+
+    this.kioskApi.latestNfcEvent(this.terminalId).subscribe({
+      next: latest => this.handleLatestNfcEvent(latest.event),
+      error: () => {
+        this.hasInitializedNfcPolling = true;
+      },
+    });
+  }
+
+  private handleLatestNfcEvent(event: NfcClockEvent | null): void {
+    if (!this.hasInitializedNfcPolling) {
+      this.lastNfcEventId = event?.eventId ?? null;
+      this.hasInitializedNfcPolling = true;
+      return;
+    }
+
+    if (!event || event.eventId === this.lastNfcEventId) {
+      return;
+    }
+
+    this.lastNfcEventId = event.eventId;
+    if (event.success && event.employee && event.status) {
+      this.selectedEmployee.set(event.employee);
+      this.clockState.setStatus(event.status);
+      this.clockState.setEmployeeMode(true);
+      this.isUnlocked.set(true);
+      this.pin.set('');
+      this.message.set(event.message);
+      this.audioFeedback.playBeeps(1);
+      this.scheduleReset();
+      return;
+    }
+
+    this.selectedEmployee.set(null);
+    this.clockState.clear();
+    this.clockState.setEmployeeMode(false);
+    this.isUnlocked.set(false);
+    this.pin.set('');
+    this.message.set(event.message || 'NFC-Karte nicht erkannt');
+    this.audioFeedback.playBeeps(2);
   }
 
   private sendClockAction(action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd'): void {
@@ -133,5 +202,10 @@ export class ClockPage implements OnDestroy {
     }
 
     this.resetTimer = window.setTimeout(() => this.back(), 2200);
+  }
+
+  private readTerminalId(): string | null {
+    const terminalId = this.route.snapshot.queryParamMap.get('terminalId')?.trim();
+    return terminalId || null;
   }
 }

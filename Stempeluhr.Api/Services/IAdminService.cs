@@ -7,4 +7,6 @@ public interface IAdminService
     Task<IReadOnlyCollection<AdminEmployeeStatusDto>> GetEmployeeStatusesAsync(CancellationToken cancellationToken = default);
 
     bool HasDuplicatePins(IEnumerable<EmployeeSettings> employees);
+
+    bool HasDuplicateNfcCardIds(IEnumerable<EmployeeSettings> employees);
 }

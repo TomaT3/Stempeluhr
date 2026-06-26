@@ -83,6 +83,45 @@ public sealed class ClockService(
         return new ClockActionResponse(ClockActionResult.BadRequest, null);
     }
 
+    public async Task<NfcClockEventDto> ClockWithNfcCardAsync(
+        NfcClockRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedCardId = NfcCardIdNormalizer.Normalize(request.CardId);
+        var terminalId = NormalizeTerminalId(request.TerminalId);
+        if (normalizedCardId is null)
+        {
+            return CreateNfcEvent(terminalId, null, null, null, "NFC-Karte konnte nicht gelesen werden.", false);
+        }
+
+        var settings = settingsStore.Load();
+        var employee = employees.FindEmployeeByNfcCardId(settings, normalizedCardId);
+        if (employee is null)
+        {
+            return CreateNfcEvent(terminalId, normalizedCardId, null, null, "NFC-Karte ist keinem Mitarbeiter zugeordnet.", false);
+        }
+
+        var status = await ClockByNfcActionAsync(settings, employee, request.Action, cancellationToken);
+        if (status is null)
+        {
+            return CreateNfcEvent(
+                terminalId,
+                normalizedCardId,
+                employees.ToEmployeeDto(employee),
+                null,
+                "Unbekannte NFC-Stempelaktion.",
+                false);
+        }
+
+        return CreateNfcEvent(
+            terminalId,
+            normalizedCardId,
+            employees.ToEmployeeDto(employee),
+            status,
+            status.StateText,
+            true);
+    }
+
     private EmployeeContext? FindEmployee(ClockRequest request)
     {
         var settings = settingsStore.Load();
@@ -107,6 +146,45 @@ public sealed class ClockService(
         await kimai.StartAsync(settings, employee, cancellationToken);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
+    }
+
+    private async Task<ClockStatusDto?> ClockByNfcActionAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        string? action,
+        CancellationToken cancellationToken)
+    {
+        var normalizedAction = string.IsNullOrWhiteSpace(action) ? "toggle" : action.Trim();
+
+        if (string.Equals(normalizedAction, "toggle", StringComparison.OrdinalIgnoreCase))
+        {
+            var current = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+            return current.IsRunning
+                ? await StopClockAsync(settings, employee, cancellationToken)
+                : await StartClockAsync(settings, employee, cancellationToken);
+        }
+
+        if (string.Equals(normalizedAction, "start", StringComparison.OrdinalIgnoreCase))
+        {
+            return await StartClockAsync(settings, employee, cancellationToken);
+        }
+
+        if (string.Equals(normalizedAction, "stop", StringComparison.OrdinalIgnoreCase))
+        {
+            return await StopClockAsync(settings, employee, cancellationToken);
+        }
+
+        if (string.Equals(normalizedAction, "pauseStart", StringComparison.OrdinalIgnoreCase))
+        {
+            return await StartPauseAsync(settings, employee, cancellationToken);
+        }
+
+        if (string.Equals(normalizedAction, "pauseEnd", StringComparison.OrdinalIgnoreCase))
+        {
+            return await EndPauseAsync(settings, employee, cancellationToken);
+        }
+
+        return null;
     }
 
     private async Task<ClockStatusDto> StopClockAsync(
@@ -178,6 +256,30 @@ public sealed class ClockService(
         await kimai.StartAsync(settings, employee, cancellationToken);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
+    }
+
+    private static NfcClockEventDto CreateNfcEvent(
+        string terminalId,
+        string? cardId,
+        EmployeeDto? employee,
+        ClockStatusDto? status,
+        string message,
+        bool success)
+    {
+        return new NfcClockEventDto(
+            Guid.NewGuid().ToString("N"),
+            DateTimeOffset.UtcNow,
+            terminalId,
+            cardId,
+            employee,
+            status,
+            message,
+            success);
+    }
+
+    private static string NormalizeTerminalId(string? terminalId)
+    {
+        return string.IsNullOrWhiteSpace(terminalId) ? "default" : terminalId.Trim();
     }
 
     private sealed record EmployeeContext(RuntimeSettings Settings, EmployeeSettings Employee);
