@@ -1,239 +1,205 @@
-# Raspberry Pi NFC-Kiosk
+# Raspberry Pi 5 NFC-Kiosk (Bookworm)
 
-Diese Anleitung beschreibt ein Terminal mit Raspberry Pi 5, 7-Zoll-Touchdisplay,
-Chromium im Kiosk-Modus und ACR122U NFC-Reader.
+## Ziel
 
-## Empfehlung
+Diese Anleitung richtet einen Raspberry Pi 5 mit Raspberry Pi OS
+Bookworm als NFC-Stempeluhr-Terminal ein.
 
-- Raspberry Pi OS 64-bit mit Desktop verwenden.
-- Die Stempeluhr-Anwendung auf dem NAS betreiben und per URL erreichbar machen.
-- Chromium nur als Kiosk-Oberflaeche starten.
-- Den ACR122U nicht aus dem Browser ansprechen, sondern ueber den lokalen
-  `stempeluhr-nfc-agent`.
+**Eigenschaften**
 
-Der Agent liest die Karten-UID ueber PC/SC und sendet sie an
-`POST /api/nfc/clock` auf der NAS-Stempeluhr. Die Weboberflaeche im
-Kiosk-Browser fragt das letzte NFC-Ereignis ueber `GET /api/nfc/events/latest`
-ab und zeigt das Ergebnis auf dem Display an. Wichtig: Das passiert nur, wenn
-der Browser mit einer `terminalId` gestartet wurde. Normale Clients auf
-`/clock` reagieren nicht auf NFC-Ereignisse.
+-   Raspberry Pi OS 64-bit mit Desktop
+-   Chromium im Kioskmodus
+-   ACR122U NFC-Leser
+-   Lokaler NFC-Agent
+-   Automatische Anmeldung
+-   Eigener Kiosk-Benutzer ohne sudo
+-   Wartung per SSH über Admin-Benutzer
 
-```text
-ACR122U -> Pi NFC-Agent -- terminal_id=stempeluhr-pi-01 --> NAS/Stempeluhr API
-Chromium Kiosk -- /clock?terminalId=stempeluhr-pi-01 --> NAS/Stempeluhr Weboberflaeche
-```
+------------------------------------------------------------------------
 
-## Warum nicht den PIN auf den Chip schreiben?
+# 1. Raspberry Pi OS installieren
 
-PINs gehoeren nicht auf den Chip. Ein einfacher NFC-Tag kann ausgelesen werden;
-waere dort der Mitarbeiter-PIN gespeichert, ist der PIN sofort kompromittiert.
+Im Raspberry Pi Imager:
 
-Besser:
+-   Raspberry Pi OS (64-bit) mit Desktop
+-   Hostname z.B. `stempeluhr-01`
+-   Benutzer `stempeluhradmin`
+-   SSH aktivieren
+-   WLAN/LAN konfigurieren
 
-- Der Chip liefert nur seine UID, zum Beispiel `04AABBCCDD1180`.
-- In der Admin-Oberflaeche wird diese Karten-ID einem Mitarbeiter zugeordnet.
-- Die API entscheidet serverseitig, welcher Mitarbeiter damit stempeln darf.
-- Bei Verlust wird die Karten-ID beim Mitarbeiter entfernt oder ersetzt.
+Nach dem ersten Start:
 
-Die UID ist fuer Zutrittskontrolle nicht stark genug, weil einfache Tags
-kopierbar sein koennen. Fuer eine Stempeluhr ist das meistens pragmatisch
-ausreichend. Wenn Missbrauch ein echtes Risiko ist, spaeter DESFire- oder
-andere sichere Karten mit Challenge/Response einplanen.
-
-## Betriebssystem installieren
-
-1. Raspberry Pi Imager installieren:
-   <https://www.raspberrypi.com/software/>
-2. Raspberry Pi OS 64-bit mit Desktop auswaehlen.
-3. In den erweiterten Imager-Optionen direkt setzen:
-   - Hostname, zum Beispiel `stempeluhr-pi-01`
-   - Benutzer mit starkem Passwort
-   - SSH nur aktivieren, wenn Fernwartung gebraucht wird
-   - WLAN oder LAN konfigurieren
-4. Pi starten, Updates installieren:
-
-```bash
+``` bash
 sudo apt update
 sudo apt full-upgrade -y
 sudo reboot
 ```
 
-## ACR122U testen
+------------------------------------------------------------------------
 
-Pakete installieren:
+# 2. Chromium installieren
 
-```bash
+``` bash
+sudo apt install -y chromium
+```
+
+------------------------------------------------------------------------
+
+# 3. NFC-Pakete installieren
+
+``` bash
 sudo apt install -y pcscd pcsc-tools python3-pyscard
 sudo systemctl enable --now pcscd
 ```
 
-Reader pruefen:
+Test:
 
-```bash
+``` bash
 pcsc_scan
 ```
 
-Beim Auflegen eines Chips sollte `pcsc_scan` eine Karte erkennen. Abbrechen mit
-`Ctrl+C`.
+Mit `Ctrl+C` beenden.
 
-## Stempeluhr API auf dem NAS fuer NFC absichern
+------------------------------------------------------------------------
 
-In der API-Konfiguration auf dem NAS sollte ein Reader-Token gesetzt werden.
-Beispiel fuer Docker auf dem NAS:
+# 4. Service-Benutzer anlegen
 
-```bash
-docker run --rm \
-  -p 8080:8080 \
-  -v stempeluhr-data:/app/data \
-  -e Admin__Password='admin-passwort-aendern' \
-  -e Stempeluhr__NfcReaderToken='langes-zufaelliges-token' \
-  stempeluhr:local
+``` bash
+sudo useradd --system \
+  --home /nonexistent \
+  --shell /usr/sbin/nologin \
+  stempeluhr
 ```
 
-Wenn kein `Stempeluhr:NfcReaderToken` gesetzt ist, akzeptiert die API
-NFC-Buchungen nur von `localhost`. Fuer ein echtes Terminal ist ein Token
-deshalb erforderlich, weil der Pi die NAS-URL aus dem Netzwerk aufruft.
+PC/SC-Zugriff erlauben:
 
-## NFC-Agent installieren
+``` bash
+sudo tee /etc/polkit-1/rules.d/50-stempeluhr-pcsc.rules >/dev/null <<'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.debian.pcsc-lite.access_pcsc" &&
+        subject.user == "stempeluhr") {
+        return polkit.Result.YES;
+    }
+});
+EOF
 
-Systembenutzer anlegen:
-
-```bash
-sudo useradd --system --home /nonexistent --shell /usr/sbin/nologin stempeluhr
+sudo systemctl restart polkit
+sudo systemctl restart pcscd
 ```
 
-Agent-Dateien kopieren:
+Test:
 
-```bash
-sudo mkdir -p /opt/stempeluhr-nfc-agent /etc/stempeluhr-nfc-agent
-sudo cp tools/pi-nfc-agent/stempeluhr_nfc_agent.py /opt/stempeluhr-nfc-agent/
-sudo cp tools/pi-nfc-agent/config.example.json /etc/stempeluhr-nfc-agent/config.json
-sudo cp tools/pi-nfc-agent/stempeluhr-nfc-agent.service /etc/systemd/system/
+``` bash
+sudo -u stempeluhr python3 - <<'PY'
+from smartcard.System import readers
+print(readers())
+PY
+```
+
+------------------------------------------------------------------------
+
+# 5. Agent installieren
+
+``` bash
+sudo mkdir -p /opt/stempeluhr-nfc-agent
+sudo mkdir -p /etc/stempeluhr-nfc-agent
+```
+
+Dateien kopieren.
+
+Rechte setzen:
+
+``` bash
 sudo chown -R root:root /opt/stempeluhr-nfc-agent
 sudo chmod 755 /opt/stempeluhr-nfc-agent/stempeluhr_nfc_agent.py
-sudo chmod 600 /etc/stempeluhr-nfc-agent/config.json
+
+sudo chown root:stempeluhr /etc/stempeluhr-nfc-agent/config.json
+sudo chmod 640 /etc/stempeluhr-nfc-agent/config.json
 ```
 
-`/etc/stempeluhr-nfc-agent/config.json` bearbeiten:
+Service aktivieren:
 
-```json
-{
-  "api_base_url": "https://stempeluhr.example.local",
-  "terminal_id": "stempeluhr-pi-01",
-  "action": "toggle",
-  "reader_token": "gleiches-token-wie-in-der-api",
-  "debounce_seconds": 3,
-  "reader_name_contains": "ACR122"
-}
-```
-
-Agent starten:
-
-```bash
+``` bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now stempeluhr-nfc-agent
-sudo journalctl -u stempeluhr-nfc-agent -f
 ```
 
-## Karten zuordnen
+------------------------------------------------------------------------
 
-1. In der Stempeluhr die Admin-Seite oeffnen.
-2. Im Bereich `NFC-Kartenleser` die Terminal-ID des Pi eintragen, zum Beispiel
-   `stempeluhr-pi-01`.
-3. Karte am NFC-Reader auflegen.
-4. Die Admin-Seite zeigt die letzte `NFC-Karten-ID` an.
-5. Beim passenden Mitarbeiter `Letzte NFC-Karte zuweisen` waehlen.
-6. Speichern.
+# 6. Kiosk-Benutzer anlegen
 
-Falls keine Karten-ID erscheint, Agent-Log ansehen:
-
-```bash
-sudo journalctl -u stempeluhr-nfc-agent -n 50
+``` bash
+sudo adduser kiosk
+sudo gpasswd -d kiosk sudo || true
 ```
 
-Die Karten-ID darf nur einmal vergeben sein. Die Admin-Seite und API pruefen
-Duplikate.
+------------------------------------------------------------------------
 
-## Chromium als Kiosk starten
+# 7. Desktop-Autologin
 
-Autostart-Datei fuer den Desktop-Benutzer anlegen:
-
-```bash
-mkdir -p ~/.config/autostart
-nano ~/.config/autostart/stempeluhr-kiosk.desktop
+``` bash
+sudo raspi-config
 ```
 
-Inhalt:
+System Options → Boot / Auto Login → Desktop Autologin
 
-```ini
+Falls nötig:
+
+    /etc/lightdm/lightdm.conf
+
+``` ini
+[Seat:*]
+autologin-user=kiosk
+autologin-user-timeout=0
+```
+
+------------------------------------------------------------------------
+
+# 8. Chromium-Autostart
+
+``` bash
+sudo -u kiosk mkdir -p /home/kiosk/.config/autostart
+```
+
+Datei:
+
+`/home/kiosk/.config/autostart/stempeluhr-kiosk.desktop`
+
+``` ini
 [Desktop Entry]
 Type=Application
 Name=Stempeluhr Kiosk
-Exec=chromium-browser --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --app=https://stempeluhr.example.local/clock?terminalId=stempeluhr-pi-01
+Exec=chromium --password-store=basic --no-first-run --no-default-browser-check --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --app=https://stempeluhr.example.local/clock?terminalId=stempeluhr-pi-01
 X-GNOME-Autostart-enabled=true
 ```
 
-Die `terminal_id` im Agenten und die `terminalId` in der Kiosk-URL muessen
-identisch sein. Wenn du spaeter mehrere Terminals hast, bekommt jedes Terminal
-einen eigenen Wert, zum Beispiel `lager-eingang` oder `buero-1`.
-
-Danach ab- und wieder anmelden oder neu starten.
-
-## Ausbruch aus dem Kiosk erschweren
-
-Das Ziel ist: Mitarbeitende sehen nur die Stempeluhr. Wartung erfolgt per SSH
-oder mit Admin-Tastatur/Benutzer.
-
-Empfohlene Massnahmen:
-
-- Eigenen Desktop-Benutzer fuer den Kiosk verwenden, ohne `sudo`.
-- Admin-Benutzer getrennt halten und nur diesem `sudo` erlauben.
-- Bildschirm automatisch anmelden lassen, aber nur in den Kiosk-Benutzer.
-- SSH nur mit Key-Login aktivieren, Passwort-Login deaktivieren.
-- NAS-Stempeluhr nur ueber HTTPS oder ein vertrauenswuerdiges internes Netz
-  erreichbar machen.
-- NFC-Reader-Token setzen, weil der Pi nicht als `localhost` beim NAS ankommt.
-- Keine Tastatur dauerhaft am Terminal lassen.
-- Chromium mit `--kiosk --app=...` starten.
-- Desktop-Panels und Dateimanager nicht in den Autostart legen.
-- Pi-Geraet physisch so montieren, dass USB/SD-Karte nicht frei erreichbar sind.
-- Admin-Passwort und NFC-Reader-Token lang und eindeutig setzen.
-
-Optional kann man den Kiosk-Benutzer weiter einschraenken:
-
-```bash
-sudo passwd -l kiosk
-sudo gpasswd -d kiosk sudo
+``` bash
+sudo chown kiosk:kiosk /home/kiosk/.config/autostart/stempeluhr-kiosk.desktop
 ```
 
-Dabei `kiosk` durch den echten Kiosk-Benutzernamen ersetzen. Nicht fuer den
-Admin-Benutzer ausfuehren.
+------------------------------------------------------------------------
 
-## Fehlerdiagnose
+# 9. Test
 
-Reader wird nicht gefunden:
+-   Chromium startet automatisch
+-   Kein Keyring-Dialog
+-   NFC-Agent läuft:
 
-```bash
-systemctl status pcscd
-pcsc_scan
+``` bash
+sudo systemctl status stempeluhr-nfc-agent
 ```
 
-Agent meldet API nicht erreichbar:
+-   Logs:
 
-```bash
-curl https://stempeluhr.example.local/api/health
+``` bash
+sudo journalctl -u stempeluhr-nfc-agent -f
 ```
 
-Token falsch:
+------------------------------------------------------------------------
 
-```bash
-sudo journalctl -u stempeluhr-nfc-agent -n 50
-```
+# Hinweise
 
-Karte wird erkannt, aber nicht gebucht:
-
-- Admin-Seite oeffnen.
-- Terminal-ID im Bereich `NFC-Kartenleser` pruefen.
-- Karte erneut auflegen.
-- Beim Mitarbeiter `Letzte NFC-Karte zuweisen` waehlen und speichern.
-- Karte erneut auflegen.
+-   `terminal_id` und `terminalId` müssen identisch sein.
+-   NFC-Reader-Token muss mit der API übereinstimmen.
+-   Für Wartung ausschließlich `stempeluhradmin` verwenden.
+-   `kiosk` sollte sich nie per SSH anmelden müssen.
