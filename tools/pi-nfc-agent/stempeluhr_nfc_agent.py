@@ -58,10 +58,16 @@ def main() -> int:
         default="/etc/stempeluhr-nfc-agent/config.json",
         help="Path to the JSON configuration file",
     )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, args.log_level),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
@@ -74,6 +80,7 @@ def main() -> int:
 def run(config: AgentConfig) -> None:
     last_uid: str | None = None
     last_submit_at = 0.0
+    selected_reader_name: str | None = None
 
     while True:
         try:
@@ -83,10 +90,17 @@ def run(config: AgentConfig) -> None:
                 time.sleep(3)
                 continue
 
+            reader_name = str(reader)
+            if reader_name != selected_reader_name:
+                selected_reader_name = reader_name
+                LOGGER.info("Using PC/SC reader: %s", reader_name)
+
             uid = read_uid(reader)
             if uid is None:
                 time.sleep(0.2)
                 continue
+
+            LOGGER.info("Read NFC card UID %s", uid)
 
             now = time.monotonic()
             if uid == last_uid and now - last_submit_at < config.debounce_seconds:
@@ -142,6 +156,7 @@ def wait_until_card_removed(reader) -> None:
 
 
 def submit_card(config: AgentConfig, uid: str) -> None:
+    url = f"{config.api_base_url}/api/nfc/clock"
     payload = json.dumps(
         {
             "cardId": uid,
@@ -151,11 +166,13 @@ def submit_card(config: AgentConfig, uid: str) -> None:
     ).encode("utf-8")
 
     request = urllib.request.Request(
-        f"{config.api_base_url}/api/nfc/clock",
+        url,
         data=payload,
         headers=create_headers(config),
         method="POST",
     )
+
+    LOGGER.info("Submitting card %s to %s", uid, url)
 
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -169,7 +186,10 @@ def submit_card(config: AgentConfig, uid: str) -> None:
 
 
 def create_headers(config: AgentConfig) -> dict[str, str]:
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "StempeluhrNfcAgent/1.0",
+    }
     if config.reader_token:
         headers["X-Nfc-Reader-Token"] = config.reader_token
 

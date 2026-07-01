@@ -77,7 +77,8 @@ PC/SC-Zugriff erlauben:
 ```bash
 sudo tee /etc/polkit-1/rules.d/50-stempeluhr-pcsc.rules >/dev/null <<'EOF'
 polkit.addRule(function(action, subject) {
-    if (action.id == "org.debian.pcsc-lite.access_pcsc" &&
+    if ((action.id == "org.debian.pcsc-lite.access_pcsc" ||
+         action.id == "org.debian.pcsc-lite.access_card") &&
         subject.user == "stempeluhr") {
         return polkit.Result.YES;
     }
@@ -96,6 +97,26 @@ from smartcard.System import readers
 print(readers())
 PY
 ```
+
+Dieser Test prueft nur, ob der Service-Benutzer den Reader sehen darf. Danach
+eine NFC-Karte auflegen und die UID-Abfrage pruefen:
+
+```bash
+sudo -u stempeluhr python3 - <<'PY'
+from smartcard.System import readers
+
+reader = readers()[0]
+connection = reader.createConnection()
+connection.connect()
+data, sw1, sw2 = connection.transmit([0xFF, 0xCA, 0x00, 0x00, 0x00])
+print(data, sw1, sw2)
+PY
+```
+
+Erwartet ist `144 0` am Ende (`0x90 0x00`). Wenn stattdessen
+`Access denied` erscheint, fehlt in der Polkit-Regel meist
+`org.debian.pcsc-lite.access_card` oder `pcscd` wurde nach der Regel-Aenderung
+noch nicht neu gestartet.
 
 ------------------------------------------------------------------------
 
