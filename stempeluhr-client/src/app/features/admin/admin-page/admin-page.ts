@@ -28,6 +28,8 @@ export class AdminPage implements OnDestroy {
   readonly kimaiUsers = signal<KimaiUser[]>([]);
   readonly nfcTerminalId = signal(this.readStoredNfcTerminalId());
   readonly latestNfcEvent = signal<NfcClockEvent | null>(null);
+  readonly nfcMessage = signal('');
+  readonly nfcRefreshBusy = signal(false);
   readonly adminMessage = signal('');
   readonly adminBusy = signal(false);
   readonly adminDirty = signal(false);
@@ -264,19 +266,32 @@ export class AdminPage implements OnDestroy {
     this.nfcTerminalId.set(terminalId);
     localStorage.setItem(AdminPage.NfcTerminalStorageKey, terminalId);
     this.latestNfcEvent.set(null);
-    this.refreshLatestNfcEvent();
+    this.refreshLatestNfcEvent(true);
   }
 
-  refreshLatestNfcEvent(): void {
+  refreshLatestNfcEvent(showFeedback = false): void {
     const terminalId = this.nfcTerminalId().trim();
     if (!terminalId) {
       this.latestNfcEvent.set(null);
+      this.nfcMessage.set('Terminal-ID fehlt.');
       return;
     }
 
-    this.adminApi.latestNfcEvent(terminalId).subscribe({
-      next: latest => this.latestNfcEvent.set(latest.event),
-      error: () => this.latestNfcEvent.set(null),
+    if (showFeedback) {
+      this.nfcRefreshBusy.set(true);
+    }
+
+    this.adminApi.latestNfcEvent(terminalId, true).subscribe({
+      next: latest => {
+        this.latestNfcEvent.set(latest.event);
+        this.nfcMessage.set(this.nfcStatusMessage(latest.event, terminalId));
+        this.nfcRefreshBusy.set(false);
+      },
+      error: () => {
+        this.latestNfcEvent.set(null);
+        this.nfcMessage.set('NFC-Status konnte nicht geladen werden.');
+        this.nfcRefreshBusy.set(false);
+      },
     });
   }
 
@@ -453,6 +468,22 @@ export class AdminPage implements OnDestroy {
 
     this.refreshLatestNfcEvent();
     this.nfcPollTimer = window.setInterval(() => this.refreshLatestNfcEvent(), 1500);
+  }
+
+  private nfcStatusMessage(event: NfcClockEvent | null, requestedTerminalId: string): string {
+    if (!event) {
+      return 'Noch kein NFC-Scan empfangen. Bitte Karte erneut scannen und Pi-Agent/Token pruefen.';
+    }
+
+    if (event.terminalId.trim().toLowerCase() !== requestedTerminalId.trim().toLowerCase()) {
+      return `Letzter Scan kam von Terminal "${event.terminalId}". Terminal-ID oben anpassen oder Pi-Agent-Konfiguration pruefen.`;
+    }
+
+    if (!event.cardId) {
+      return event.message || 'NFC-Scan empfangen, aber keine Karten-ID gelesen.';
+    }
+
+    return event.success ? 'NFC-Scan empfangen.' : event.message;
   }
 
   private findDuplicateNfcCardId(settings: AdminSettings): boolean {

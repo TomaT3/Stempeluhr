@@ -33,9 +33,10 @@ public static class NfcEndpoints
 
         app.MapGet("/api/nfc/events/latest", (
             string? terminalId,
+            bool? fallbackToAny,
             INfcClockEventStore eventStore) =>
         {
-            return Results.Ok(new NfcLatestEventDto(eventStore.GetLatest(terminalId)));
+            return Results.Ok(new NfcLatestEventDto(eventStore.GetLatest(terminalId, fallbackToAny == true)));
         });
 
         return app;

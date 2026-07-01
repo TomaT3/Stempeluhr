@@ -6,5 +6,5 @@ public interface INfcClockEventStore
 {
     void Publish(NfcClockEventDto clockEvent);
 
-    NfcClockEventDto? GetLatest(string? terminalId);
+    NfcClockEventDto? GetLatest(string? terminalId, bool fallbackToAny = false);
 }

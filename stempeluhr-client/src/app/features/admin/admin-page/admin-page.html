@@ -104,15 +104,25 @@
             <input readonly [value]="latestNfcEvent()?.message ?? 'Keine Daten'">
           </label>
           <label>
+            Scan-Terminal
+            <input readonly [value]="latestNfcEvent()?.terminalId ?? '-'">
+          </label>
+          <label>
             Gelesen um
             <input readonly [value]="(latestNfcEvent()?.occurredAt | date: 'HH:mm:ss') ?? '-'">
           </label>
         </div>
 
         <div class="admin-actions">
-          <button type="button" (click)="refreshLatestNfcEvent()">Aktualisieren</button>
+          <button type="button" (click)="refreshLatestNfcEvent(true)" [disabled]="nfcRefreshBusy()">
+            {{ nfcRefreshBusy() ? 'Aktualisiere...' : 'Aktualisieren' }}
+          </button>
           <button type="button" (click)="copyLatestNfcCardId()" [disabled]="!latestNfcCardId()">Kopieren</button>
         </div>
+
+        @if (nfcMessage()) {
+          <p class="nfc-message">{{ nfcMessage() }}</p>
+        }
       </section>
 
       @if (kimaiUsers().length > 0) {

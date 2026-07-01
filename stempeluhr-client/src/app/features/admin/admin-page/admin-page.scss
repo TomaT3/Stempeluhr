@@ -275,6 +275,12 @@ input[type="color"] {
   text-align: center;
 }
 
+.nfc-message {
+  color: #435064;
+  font-size: 0.96rem;
+  font-weight: 800;
+}
+
 @media (min-width: 980px) {
   .admin-layout {
     grid-template-columns: minmax(0, 1fr);

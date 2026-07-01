@@ -46,8 +46,13 @@ export class AdminApi {
     return this.http.get<AdminEmployeeStatus[]>('/api/admin/employee-statuses', { headers: this.headers(adminPassword) });
   }
 
-  latestNfcEvent(terminalId: string) {
-    return this.http.get<NfcLatestEvent>('/api/nfc/events/latest', { params: { terminalId } });
+  latestNfcEvent(terminalId: string, fallbackToAny = false) {
+    const params: Record<string, string> = { terminalId };
+    if (fallbackToAny) {
+      params['fallbackToAny'] = 'true';
+    }
+
+    return this.http.get<NfcLatestEvent>('/api/nfc/events/latest', { params });
   }
 
   private headers(adminPassword: string): HttpHeaders {
