@@ -10,5 +10,7 @@ public interface IEmployeeService
 
     EmployeeSettings? FindEmployeeByPin(RuntimeSettings settings, string? pin);
 
+    EmployeeSettings? FindEmployeeByNfcCardId(RuntimeSettings settings, string? cardId);
+
     EmployeeDto ToEmployeeDto(EmployeeSettings employee);
 }

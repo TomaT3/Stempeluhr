@@ -6,6 +6,7 @@ public sealed class EmployeeSettings
     public int? KimaiUserId { get; init; }
     public string DisplayName { get; init; } = string.Empty;
     public string? Pin { get; init; }
+    public string? NfcCardId { get; init; }
     public string ApiToken { get; init; } = string.Empty;
     public int? ProjectId { get; init; }
     public int? ActivityId { get; init; }

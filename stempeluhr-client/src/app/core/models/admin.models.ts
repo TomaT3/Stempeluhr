@@ -24,6 +24,7 @@ export interface AdminEmployee {
   kimaiUserId: number | null;
   displayName: string;
   pin: string | null;
+  nfcCardId: string | null;
   hasApiToken: boolean;
   apiToken?: string;
   projectId: number | null;

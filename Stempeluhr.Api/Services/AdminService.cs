@@ -21,6 +21,15 @@ public sealed class AdminService(
             .Any(group => group.Count() > 1);
     }
 
+    public bool HasDuplicateNfcCardIds(IEnumerable<EmployeeSettings> employees)
+    {
+        return employees
+            .Select(employee => NfcCardIdNormalizer.Normalize(employee.NfcCardId))
+            .Where(cardId => cardId is not null)
+            .GroupBy(cardId => cardId, StringComparer.Ordinal)
+            .Any(group => group.Count() > 1);
+    }
+
     private async Task<AdminEmployeeStatusDto> GetEmployeeStatusAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,

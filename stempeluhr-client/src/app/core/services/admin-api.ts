@@ -2,6 +2,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 
 import { AdminEmployeeStatus, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../models/admin.models';
+import { NfcLatestEvent } from '../models/kiosk.models';
 
 @Injectable({
   providedIn: 'root',
@@ -43,6 +44,10 @@ export class AdminApi {
 
   getEmployeeStatuses(adminPassword: string) {
     return this.http.get<AdminEmployeeStatus[]>('/api/admin/employee-statuses', { headers: this.headers(adminPassword) });
+  }
+
+  latestNfcEvent(terminalId: string) {
+    return this.http.get<NfcLatestEvent>('/api/nfc/events/latest', { params: { terminalId } });
   }
 
   private headers(adminPassword: string): HttpHeaders {
