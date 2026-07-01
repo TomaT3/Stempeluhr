@@ -1,15 +1,14 @@
 @baseUrl = http://localhost:5100
 @nfcToken = change-me
 
-### NFC card clocks with default toggle action
+### NFC card identifies employee and publishes latest terminal event
 POST {{baseUrl}}/api/nfc/clock
 Content-Type: application/json
 X-Nfc-Reader-Token: {{nfcToken}}
 
 {
   "cardId": "04 AA BB CC DD 11 80",
-  "terminalId": "stempeluhr-pi-01",
-  "action": "toggle"
+  "terminalId": "stempeluhr-pi-01"
 }
 
 ### Latest NFC event for kiosk display

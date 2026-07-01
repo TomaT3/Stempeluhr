@@ -13,8 +13,8 @@ export class KioskApi {
     return this.http.post<KioskEmployeeSession>('/api/kiosk/pin-login', { pin });
   }
 
-  clock(employeeId: string, pin: string, action: ClockAction) {
-    return this.http.post<ClockStatus>('/api/kiosk/clock', { employeeId, pin, action });
+  clock(employeeId: string, pin: string, action: ClockAction, nfcCardId: string | null = null) {
+    return this.http.post<ClockStatus>('/api/kiosk/clock', { employeeId, pin, action, nfcCardId });
   }
 
   latestNfcEvent(terminalId = 'default') {

@@ -46,7 +46,7 @@ public sealed class ClockService(
 
     public async Task<ClockActionResponse> ClockAsync(KioskClockRequest request, CancellationToken cancellationToken = default)
     {
-        var context = FindEmployee(new ClockRequest(request.EmployeeId, request.Pin));
+        var context = FindEmployeeForClockAction(request);
         if (context is null)
         {
             return new ClockActionResponse(ClockActionResult.Unauthorized, null);
@@ -83,7 +83,7 @@ public sealed class ClockService(
         return new ClockActionResponse(ClockActionResult.BadRequest, null);
     }
 
-    public async Task<NfcClockEventDto> ClockWithNfcCardAsync(
+    public async Task<NfcClockEventDto> IdentifyWithNfcCardAsync(
         NfcClockRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -101,24 +101,14 @@ public sealed class ClockService(
             return CreateNfcEvent(terminalId, normalizedCardId, null, null, "NFC-Karte ist keinem Mitarbeiter zugeordnet.", false);
         }
 
-        var status = await ClockByNfcActionAsync(settings, employee, request.Action, cancellationToken);
-        if (status is null)
-        {
-            return CreateNfcEvent(
-                terminalId,
-                normalizedCardId,
-                employees.ToEmployeeDto(employee),
-                null,
-                "Unbekannte NFC-Stempelaktion.",
-                false);
-        }
+        var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
 
         return CreateNfcEvent(
             terminalId,
             normalizedCardId,
             employees.ToEmployeeDto(employee),
             status,
-            status.StateText,
+            "NFC-Karte erkannt.",
             true);
     }
 
@@ -127,6 +117,26 @@ public sealed class ClockService(
         var settings = settingsStore.Load();
         var employee = employees.FindEmployee(settings, request);
         return employee is null ? null : new EmployeeContext(settings, employee);
+    }
+
+    private EmployeeContext? FindEmployeeForClockAction(KioskClockRequest request)
+    {
+        var settings = settingsStore.Load();
+        var pinEmployee = employees.FindEmployee(settings, new ClockRequest(request.EmployeeId, request.Pin));
+        if (pinEmployee is not null)
+        {
+            return new EmployeeContext(settings, pinEmployee);
+        }
+
+        var nfcEmployee = employees.FindEmployeeByNfcCardId(settings, request.NfcCardId);
+        if (nfcEmployee is null)
+        {
+            return null;
+        }
+
+        return string.Equals(nfcEmployee.Id, request.EmployeeId, StringComparison.OrdinalIgnoreCase)
+            ? new EmployeeContext(settings, nfcEmployee)
+            : null;
     }
 
     private async Task<ClockStatusDto> StartClockAsync(
@@ -146,45 +156,6 @@ public sealed class ClockService(
         await kimai.StartAsync(settings, employee, cancellationToken);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
-    }
-
-    private async Task<ClockStatusDto?> ClockByNfcActionAsync(
-        RuntimeSettings settings,
-        EmployeeSettings employee,
-        string? action,
-        CancellationToken cancellationToken)
-    {
-        var normalizedAction = string.IsNullOrWhiteSpace(action) ? "toggle" : action.Trim();
-
-        if (string.Equals(normalizedAction, "toggle", StringComparison.OrdinalIgnoreCase))
-        {
-            var current = await kimai.GetStatusAsync(settings, employee, cancellationToken);
-            return current.IsRunning
-                ? await StopClockAsync(settings, employee, cancellationToken)
-                : await StartClockAsync(settings, employee, cancellationToken);
-        }
-
-        if (string.Equals(normalizedAction, "start", StringComparison.OrdinalIgnoreCase))
-        {
-            return await StartClockAsync(settings, employee, cancellationToken);
-        }
-
-        if (string.Equals(normalizedAction, "stop", StringComparison.OrdinalIgnoreCase))
-        {
-            return await StopClockAsync(settings, employee, cancellationToken);
-        }
-
-        if (string.Equals(normalizedAction, "pauseStart", StringComparison.OrdinalIgnoreCase))
-        {
-            return await StartPauseAsync(settings, employee, cancellationToken);
-        }
-
-        if (string.Equals(normalizedAction, "pauseEnd", StringComparison.OrdinalIgnoreCase))
-        {
-            return await EndPauseAsync(settings, employee, cancellationToken);
-        }
-
-        return null;
     }
 
     private async Task<ClockStatusDto> StopClockAsync(

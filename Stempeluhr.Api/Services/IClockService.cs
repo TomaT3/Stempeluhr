@@ -14,5 +14,5 @@ public interface IClockService
 
     Task<ClockActionResponse> ClockAsync(KioskClockRequest request, CancellationToken cancellationToken = default);
 
-    Task<NfcClockEventDto> ClockWithNfcCardAsync(NfcClockRequest request, CancellationToken cancellationToken = default);
+    Task<NfcClockEventDto> IdentifyWithNfcCardAsync(NfcClockRequest request, CancellationToken cancellationToken = default);
 }

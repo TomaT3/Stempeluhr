@@ -137,7 +137,6 @@ Konfiguration:
 {
   "api_base_url": "https://stempeluhr.example.local",
   "terminal_id": "stempeluhr-pi-01",
-  "action": "toggle",
   "reader_token": "change-me",
   "debounce_seconds": 3,
   "reader_name_contains": "ACR122"
@@ -155,7 +154,6 @@ erreichbar ist, verwendet der Agent die externe Adresse:
 {
   "api_base_url": "https://stempeluhr.example.local",
   "terminal_id": "stempeluhr-pi-01",
-  "action": "toggle",
   "reader_token": "change-me-reader-token",
   "debounce_seconds": 3,
   "reader_name_contains": "ACR122"

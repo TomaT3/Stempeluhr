@@ -25,7 +25,7 @@ public static class NfcEndpoints
                 return Results.Unauthorized();
             }
 
-            var clockEvent = await clockService.ClockWithNfcCardAsync(request, cancellationToken);
+            var clockEvent = await clockService.IdentifyWithNfcCardAsync(request, cancellationToken);
             eventStore.Publish(clockEvent);
 
             return clockEvent.Success ? Results.Ok(clockEvent) : Results.BadRequest(clockEvent);

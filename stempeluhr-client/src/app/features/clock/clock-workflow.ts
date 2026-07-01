@@ -25,6 +25,7 @@ export abstract class ClockWorkflow implements OnDestroy {
   private nfcPollTimer: number | null = null;
   private lastNfcEventId: string | null = null;
   private hasInitializedNfcPolling = false;
+  private nfcCardId: string | null = null;
   private readonly terminalId = this.readTerminalId();
 
   constructor() {
@@ -67,6 +68,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.clockState.setStatus(session.status);
         this.clockState.setEmployeeMode(true);
         this.isUnlocked.set(true);
+        this.nfcCardId = null;
         this.message.set('');
         this.isBusy.set(false);
       },
@@ -106,6 +108,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clockState.clear();
     this.clockState.setEmployeeMode(this.keepFocusedShellAfterReset());
     this.pin.set('');
+    this.nfcCardId = null;
     this.isUnlocked.set(false);
     this.message.set('');
   }
@@ -153,9 +156,9 @@ export abstract class ClockWorkflow implements OnDestroy {
       this.clockState.setEmployeeMode(true);
       this.isUnlocked.set(true);
       this.pin.set('');
+      this.nfcCardId = event.cardId;
       this.message.set(event.message);
       this.audioFeedback.playBeeps(1);
-      this.scheduleReset();
       return;
     }
 
@@ -164,13 +167,14 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clockState.setEmployeeMode(this.keepFocusedShellAfterReset());
     this.isUnlocked.set(false);
     this.pin.set('');
+    this.nfcCardId = null;
     this.message.set(event.message || 'NFC-Karte nicht erkannt');
     this.audioFeedback.playBeeps(2);
   }
 
   private sendClockAction(action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd'): void {
     this.isBusy.set(true);
-    this.kioskApi.clock(this.selectedEmployee()?.id ?? '', this.pin(), action).subscribe({
+    this.kioskApi.clock(this.selectedEmployee()?.id ?? '', this.pin(), action, this.nfcCardId).subscribe({
       next: status => {
         this.clockState.setStatus(status);
         this.message.set(status.stateText);

@@ -4,7 +4,7 @@ public sealed record ClockRequest(string EmployeeId, string? Pin);
 
 public sealed record KioskPinLoginRequest(string? Pin);
 
-public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action);
+public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action, string? NfcCardId);
 
 public sealed record NfcClockRequest(string? CardId, string? Action, string? TerminalId);
 

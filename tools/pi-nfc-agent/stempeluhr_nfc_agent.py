@@ -26,7 +26,6 @@ GET_UID_APDU = [0xFF, 0xCA, 0x00, 0x00, 0x00]
 class AgentConfig:
     api_base_url: str
     terminal_id: str
-    action: str
     reader_token: str | None
     debounce_seconds: float
     reader_name_contains: str | None
@@ -44,7 +43,6 @@ class AgentConfig:
         return AgentConfig(
             api_base_url=api_base_url,
             terminal_id=str(raw.get("terminal_id") or "default"),
-            action=str(raw.get("action") or "toggle"),
             reader_token=str(reader_token) if reader_token else None,
             debounce_seconds=float(raw.get("debounce_seconds") or 3),
             reader_name_contains=raw.get("reader_name_contains"),
@@ -161,7 +159,6 @@ def submit_card(config: AgentConfig, uid: str) -> None:
         {
             "cardId": uid,
             "terminalId": config.terminal_id,
-            "action": config.action,
         }
     ).encode("utf-8")
 
