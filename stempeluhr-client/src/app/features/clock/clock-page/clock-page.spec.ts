@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { ActivatedRoute } from '@angular/router';
 import { Subject } from 'rxjs';
 
 import { KioskEmployeeSession } from '../../../core/models/kiosk.models';
@@ -17,6 +18,10 @@ describe('ClockPage', () => {
       providers: [
         { provide: KioskApi, useValue: { pinLogin } },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { queryParamMap: { get: () => null } } },
+        },
       ],
     }).compileComponents();
   });

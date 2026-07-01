@@ -1,0 +1,87 @@
+<section class="terminal" [class.session]="selectedEmployee()" aria-label="Stempeluhr Terminal">
+  <header class="terminal-clock" aria-label="Aktuelle Uhrzeit und Datum">
+    <span class="clock-time">{{ clockState.now() | date: 'HH:mm:ss' }}</span>
+    <span class="clock-date">{{ clockState.now() | date: 'dd.MM.yyyy' }}</span>
+  </header>
+
+  @if (!selectedEmployee()) {
+    <section class="login-panel" aria-label="PIN-Anmeldung">
+      <div class="login-header">
+        <h1>PIN</h1>
+        <div class="pin-dots" aria-label="PIN">
+          @for (_ of [0, 1, 2, 3]; track $index) {
+            <span [class.filled]="$index < pin().length"></span>
+          }
+        </div>
+      </div>
+
+      <div class="keypad">
+        @for (digit of ['1','2','3','4','5','6','7','8','9']; track digit) {
+          <button type="button" (click)="pressDigit(digit)">{{ digit }}</button>
+        }
+        <button type="button" class="key-muted" (click)="clearPin()">C</button>
+        <button type="button" (click)="pressDigit('0')">0</button>
+        <button type="button" class="key-ok" (click)="confirmPin()" [disabled]="isBusy()">OK</button>
+      </div>
+
+      <p class="message" aria-live="polite">{{ message() }}</p>
+    </section>
+  } @else {
+    <section class="session-panel" aria-label="Mitarbeiter">
+      <button class="back-button" type="button" (click)="back()" aria-label="Abmelden">X</button>
+
+      @if (selectedEmployee(); as employee) {
+        <div class="employee">
+          <span class="avatar" [style.background]="employee.color">{{ employee.initials }}</span>
+          <h1>{{ employee.displayName }}</h1>
+        </div>
+      }
+
+      @if (!isUnlocked()) {
+        <p class="message">Bitte erneut mit PIN anmelden.</p>
+      } @else {
+        <div class="status-line">
+          <strong>{{ clockState.status()?.stateText ?? '' }}</strong>
+          @if (clockState.isWorking()) {
+            <span>{{ clockState.elapsed() | duration }}</span>
+          } @else if (clockState.isPaused()) {
+            <span>Pause {{ clockState.elapsed() | duration }}</span>
+          } @else {
+            <span>Nicht eingestempelt</span>
+          }
+        </div>
+      }
+
+      <p class="message" aria-live="polite">{{ message() }}</p>
+    </section>
+
+    @if (isUnlocked()) {
+      <section class="action-panel" aria-label="Stempelaktionen">
+        @if (clockState.isWorking()) {
+          <button class="action-button pause" type="button" (click)="startPause()" [disabled]="isBusy()">
+            <span class="icon pause"></span>
+            <span>Pause</span>
+          </button>
+          <button class="action-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+            <span class="icon square"></span>
+            <span>Ausstempeln</span>
+          </button>
+        } @else if (clockState.isPaused()) {
+          <button class="action-button start" type="button" (click)="endPause()" [disabled]="isBusy()">
+            <span class="icon play"></span>
+            <span>Fortsetzen</span>
+          </button>
+          <button class="action-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+            <span class="icon square"></span>
+            <span>Ausstempeln</span>
+          </button>
+        } @else {
+          <button class="action-button start single" type="button" (click)="start()" [disabled]="isBusy()">
+            <span class="icon play"></span>
+            <span>Einstempeln</span>
+          </button>
+        }
+      </section>
+    }
+  }
+</section>

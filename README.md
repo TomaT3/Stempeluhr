@@ -47,6 +47,8 @@ Aktive Timesheets mit dieser Taetigkeit werden in der Stempeluhr als `In Pause` 
 Fuer ein Terminal mit Raspberry Pi 5, Touchdisplay und ACR122U gibt es einen
 separaten Agenten unter `tools/pi-nfc-agent`. Die Einrichtung ist in
 `docs/raspberry-pi-kiosk-nfc.md` beschrieben.
+Das Touchdisplay verwendet die kompakte Route `/terminal?terminalId=<id>`;
+die normale Mitarbeiteroberflaeche bleibt unter `/clock`.
 
 ## Starten
 
