@@ -126,6 +126,21 @@ Konfiguration:
 Wichtig: `api_base_url` ist nur die Basis-Adresse der Stempeluhr, ohne
 `/terminal` oder `/clock`. Der Agent ruft darunter die API-Endpunkte auf.
 
+Wenn der Server auf dem NAS per Docker Compose z.B. mit `8002:8080`
+veroeffentlicht wird, aber per Cloudflare/Cloudflared extern ueber HTTPS
+erreichbar ist, verwendet der Agent die externe Adresse:
+
+```json
+{
+  "api_base_url": "https://stempeluhr.example.local",
+  "terminal_id": "stempeluhr-pi-01",
+  "action": "toggle",
+  "reader_token": "change-me-reader-token",
+  "debounce_seconds": 3,
+  "reader_name_contains": "ACR122"
+}
+```
+
 Rechte setzen:
 
 ```bash
@@ -190,6 +205,13 @@ Type=Application
 Name=Stempeluhr Kiosk
 Exec=chromium --password-store=basic --no-first-run --no-default-browser-check --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --app=https://stempeluhr.example.local/terminal?terminalId=stempeluhr-pi-01
 X-GNOME-Autostart-enabled=true
+```
+
+Bei einem NAS-Setup hinter Cloudflare/Cloudflared bleibt auch fuer Chromium die
+externe HTTPS-Adresse die richtige URL:
+
+```ini
+Exec=chromium --password-store=basic --no-first-run --no-default-browser-check --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --app=https://stempeluhr.example.local/terminal?terminalId=stempeluhr-pi-01
 ```
 
 ```bash

@@ -86,6 +86,45 @@ docker run --rm -p 8080:8080 -v stempeluhr-data:/app/data -e Admin__Password=adm
 Die App ist dann unter `http://localhost:8080` erreichbar.
 Im Container werden Frontend und Backend vom selben .NET-Prozess ausgeliefert. Dadurch funktionieren API-Aufrufe relativ ueber `/api`, auch wenn der Container spaeter ueber Cloudflared unter einer externen Domain erreichbar ist.
 
+### Docker Compose auf NAS / Docker Desktop
+
+Beispiel fuer ein NAS, das intern auf Host-Port `8002` laeuft und extern per
+Cloudflare/Cloudflared unter `https://stempeluhr.example.local` erreichbar ist:
+
+```yaml
+services:
+  stempeluhr:
+    image: ghcr.io/tomat3/stempeluhr:0.4.0
+    container_name: stempeluhr
+    restart: unless-stopped
+    volumes:
+      - /volume1/docker/stempeluhr/data:/app/data
+    ports:
+      - 8002:8080
+    environment:
+      Admin__Password: "change-me"
+      Kimai__BaseUrl: "https://kimai.example.local"
+      Stempeluhr__NfcReaderToken: "change-me-reader-token"
+```
+
+Die App ist intern unter `http://<nas-ip>:8002/` erreichbar. Fuer Raspberry Pi,
+Tablet und normale Benutzer sollte die externe HTTPS-Adresse verwendet werden,
+also z.B. `https://stempeluhr.example.local/`.
+
+Fuer das Raspberry-Pi-Terminal:
+
+- Chromium-URL:
+  `https://stempeluhr.example.local/terminal?terminalId=stempeluhr-pi-01`
+- NFC-Agent `api_base_url`:
+  `https://stempeluhr.example.local`
+- NFC-Agent `reader_token`:
+  derselbe Wert wie `Stempeluhr__NfcReaderToken`
+- `terminal_id` im Agenten und `terminalId` in der Chromium-URL muessen identisch sein.
+
+Wichtig: Der Docker-Port `8002:8080` ist nur die interne NAS-Veroeffentlichung.
+Wenn Cloudflared davor liegt, bekommen Chromium und der NFC-Agent die externe
+HTTPS-Adresse. Der Agent bekommt trotzdem nur die Basis-Adresse ohne `/terminal`.
+
 ## Semantische Versionierung
 
 Versionen folgen SemVer: `MAJOR.MINOR.PATCH`. Die Release-Version ist der Git-Tag, zum Beispiel `v0.1.3`.
