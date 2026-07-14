@@ -257,6 +257,87 @@ sudo journalctl -u stempeluhr-nfc-agent -f
 
 ------------------------------------------------------------------------
 
+# 10. Automatische OS-Sicherheitsupdates
+
+Da der Pi beim Kunden steht, sollen Sicherheitsupdates des Betriebssystems
+automatisch eingespielt werden. Dafuer sorgt das Paket `unattended-upgrades`.
+
+**Paket installieren (falls nicht bereits vorhanden):**
+
+```bash
+sudo apt install -y unattended-upgrades
+```
+
+**Konfiguration – automatische Updates aktivieren:**
+
+`/etc/apt/apt.conf.d/20auto-upgrades`
+
+```text
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+```
+
+**Konfiguration – welche Updates und Reboot-Verhalten:**
+
+`/etc/apt/apt.conf.d/50unattended-upgrades`
+
+Die Datei ist auf dem Pi bereits vorhanden und umfangreich kommentiert.  
+Die wesentlichen Einstellungen findest du dort – oder ergaenze/aktualisiere
+folgende Bloecke:
+
+```text
+// Nur Sicherheitsupdates:
+// Origin- und Label-basierte Muster (anstelle des aelteren Allowed-Origins)
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename},label=Debian-Security";
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+
+// Automatischer Reboot nach Kernel-Updates (z.B. 02:00-04:00 Uhr)
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+
+// Nicht mehr benoetigte Kernel-Pakete und Abhaengigkeiten entfernen
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+
+// Keine E-Mail-Benachrichtigung (kein Mailserver auf dem Pi)
+Unattended-Upgrade::Mail "";
+```
+
+> **Hinweis:** Auf Raspberry Pi OS Bookworm (Debian-basiert) wird das
+> `-security`-Repo ueber `origin=Debian,...label=Debian-Security` erkannt.
+> Welche Origins auf deinem System verfuegbar sind, zeigt
+> `apt-cache policy`. Ein manueller Trockentest (s.u.) bestaetigt, ob die
+> gewuenschten Pakete gefunden werden.
+
+**Service-Status pruefen:**
+
+```bash
+sudo systemctl status unattended-upgrades
+```
+
+**Trockentest – ohne tatsaechliche Installation:**
+
+```bash
+sudo unattended-upgrade --dry-run --debug
+```
+
+Damit siehst du, welche Pakete beim naechsten Lauf installiert wuerrden.
+
+**Logs einsehen:**
+
+```bash
+sudo journalctl -u unattended-upgrades -f
+```
+
+Die Erklaerung der Konfigurationsoptionen findest du auch direkt in der
+Datei `/etc/apt/apt.conf.d/50unattended-upgrades` – dort ist alles
+ausfuehrlich kommentiert.
+
+------------------------------------------------------------------------
+
 # Hinweise
 
 - `terminal_id` und `terminalId` muessen identisch sein.
@@ -267,3 +348,8 @@ sudo journalctl -u stempeluhr-nfc-agent -f
 - NFC-Reader-Token muss mit der API uebereinstimmen.
 - Fuer Wartung ausschliesslich `stempeluhradmin` verwenden.
 - `kiosk` sollte sich nie per SSH anmelden muessen.
+- Automatische OS-Sicherheitsupdates sind via `unattended-upgrades` aktiviert
+  (siehe Kapitel 10). Der Pi aktualisiert sich taeglich nachts zwischen 02:00
+  und 04:00 Uhr und startet bei Kernel-Updates automatisch neu.
+- Die Web-App der Stempeluhr wird serverseitig (z.B. im Docker-Container)
+  aktualisiert. Dafuer ist kein Eingriff auf dem Pi noetig.
