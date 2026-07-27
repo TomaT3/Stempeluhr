@@ -338,6 +338,57 @@ ausfuehrlich kommentiert.
 
 ------------------------------------------------------------------------
 
+# 11. WLAN Power-Save deaktivieren
+
+Der Raspberry Pi verliert bei aktiviertem WLAN Power-Saving haeufig nach
+einiger Zeit (ca. 1–2 Stunden) die Verbindung. Der Befehl
+
+```bash
+iw dev wlan0 get power_save
+```
+
+zeigt den aktuellen Status an. Wenn die Ausgabe `Power save: on` lautet, ist
+Power-Saving aktiv und sollte deaktiviert werden.
+
+**Power-Save dauerhaft deaktivieren:**
+
+Eine Datei fuer NetworkManager anlegen:
+
+```bash
+sudo nano /etc/NetworkManager/conf.d/default-wifi-powersave-on.conf
+```
+
+Mit folgendem Inhalt:
+
+```ini
+[connection]
+wifi.powersave = 2
+```
+
+Die Werte bedeuten:
+
+| Wert | Bedeutung                     |
+|------|-------------------------------|
+| `1`  | Power-Save aktiv (Standard)   |
+| `2`  | Power-Save deaktiviert        |
+| `3`  | Power-Save aktiv (aggressiv)  |
+
+Danach NetworkManager neu starten:
+
+```bash
+sudo systemctl restart NetworkManager
+```
+
+Anschliessend pruefen, ob die Aenderung wirksam ist:
+
+```bash
+iw dev wlan0 get power_save
+```
+
+Die Ausgabe sollte nun `Power save: off` lauten.
+
+------------------------------------------------------------------------
+
 # Hinweise
 
 - `terminal_id` und `terminalId` muessen identisch sein.
