@@ -50,7 +50,7 @@ jobs:
 
       - name: Unit tests
         working-directory: stempeluhr-client
-        run: npx ng test --watch=false --browsers=ChromeHeadless
+        run: npx ng test --watch=false
 
   e2e-offline:
     name: E2E offline integration test
