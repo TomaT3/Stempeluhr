@@ -74,6 +74,18 @@ public sealed class OfflineClockService(
                         results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
                             "Kimai nicht erreichbar - wird automatisch nachgetragen."));
                     }
+                    catch (Exception ex) when (IsTransientNetworkError(ex))
+                    {
+                        // Kimai unreachable at the network level (connection refused,
+                        // DNS failure, timeout): keep for retry - exactly the outage
+                        // case the outbox exists for. HttpRequestException is NOT a
+                        // KimaiApiException, so it must be caught explicitly.
+                        eventIdStore.Remove(entry.EventId);
+                        _outbox.Enqueue(entry);
+                        buffered++;
+                        results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
+                            "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                    }
                     catch (Exception ex)
                     {
                         // Permanent failure (unknown card, missing config, ...): report
@@ -144,6 +156,15 @@ public sealed class OfflineClockService(
                 }
                 catch (KimaiApiException ex) when (IsRetryable(ex))
                 {
+                    eventIdStore.Remove(entry.EventId);
+                    _kioskOutbox.Enqueue(entry);
+                    buffered++;
+                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
+                        "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                }
+                catch (Exception ex) when (IsTransientNetworkError(ex))
+                {
+                    // Kimai unreachable at the network level - keep for retry.
                     eventIdStore.Remove(entry.EventId);
                     _kioskOutbox.Enqueue(entry);
                     buffered++;
@@ -323,6 +344,13 @@ public sealed class OfflineClockService(
                     _outbox.Enqueue(nfcEntry);
                     break;
                 }
+                catch (Exception ex) when (IsTransientNetworkError(ex))
+                {
+                    // Kimai unreachable at the network level - put back and retry later.
+                    eventIdStore.Remove(nfcEntry.EventId);
+                    _outbox.Enqueue(nfcEntry);
+                    break;
+                }
                 catch (Exception ex)
                 {
                     // Permanent failure: log and drop so one bad event cannot block the outbox.
@@ -352,6 +380,13 @@ public sealed class OfflineClockService(
                     _kioskOutbox.Enqueue(kioskEntry);
                     break;
                 }
+                catch (Exception ex) when (IsTransientNetworkError(ex))
+                {
+                    // Kimai unreachable at the network level - put back and retry later.
+                    eventIdStore.Remove(kioskEntry.EventId);
+                    _kioskOutbox.Enqueue(kioskEntry);
+                    break;
+                }
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Outbox: dropping kiosk event {EventId} after permanent error", kioskEntry.EventId);
@@ -374,5 +409,20 @@ public sealed class OfflineClockService(
     {
         var statusCode = (int)exception.StatusCode;
         return statusCode >= 500 || statusCode == 408 || statusCode == 429;
+    }
+
+    /// <summary>
+    /// True for network-level failures while talking to Kimai (host down,
+    /// DNS failure, connection reset, timeout). These are transient - the
+    /// event must be buffered, never rejected. HttpRequestException and
+    /// TaskCanceledException are NOT KimaiApiExceptions, so they would
+    /// otherwise fall into the "permanent" catch-all.
+    /// </summary>
+    private static bool IsTransientNetworkError(Exception exception)
+    {
+        return exception is HttpRequestException
+            or System.Net.Sockets.SocketException
+            or TaskCanceledException
+            or TimeoutException;
     }
 }
