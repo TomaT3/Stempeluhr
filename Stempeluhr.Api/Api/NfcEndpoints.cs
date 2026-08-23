@@ -31,6 +31,41 @@ public static class NfcEndpoints
             return clockEvent.Success ? Results.Ok(clockEvent) : Results.BadRequest(clockEvent);
         });
 
+        app.MapPost("/api/kiosk/clock/sync", async (
+            OfflineKioskSyncRequest request,
+            IOfflineClockService offlineClockService,
+            CancellationToken cancellationToken) =>
+        {
+            if (request.Events is { Count: > 0 })
+            {
+                var result = await offlineClockService.SyncKioskAsync(request.Events, cancellationToken);
+                return Results.Ok(result);
+            }
+
+            return Results.Ok(new OfflineSyncResultDto(0, 0, 0, Array.Empty<OfflineSyncEventResultDto>()));
+        });
+
+        app.MapPost("/api/nfc/clock/sync", async (
+            HttpRequest httpRequest,
+            OfflineSyncRequest request,
+            IConfiguration configuration,
+            IOfflineClockService offlineClockService,
+            CancellationToken cancellationToken) =>
+        {
+            if (!IsReaderAuthorized(httpRequest, configuration))
+            {
+                return Results.Unauthorized();
+            }
+
+            if (request.Events is { Count: > 0 })
+            {
+                var result = await offlineClockService.SyncAsync(request.Events, cancellationToken);
+                return Results.Ok(result);
+            }
+
+            return Results.Ok(new OfflineSyncResultDto(0, 0, 0, Array.Empty<OfflineSyncEventResultDto>()));
+        });
+
         app.MapGet("/api/nfc/events/latest", (
             string? terminalId,
             bool? fallbackToAny,

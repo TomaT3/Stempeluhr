@@ -5,6 +5,7 @@ import { Employee, NfcClockEvent } from '../../core/models/kiosk.models';
 import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState } from '../../core/services/clock-state';
 import { KioskApi } from '../../core/services/kiosk-api';
+import { OfflineQueueService } from '../../core/services/offline-queue';
 
 const PIN_LENGTH = 4;
 
@@ -13,6 +14,7 @@ export abstract class ClockWorkflow implements OnDestroy {
   private readonly kioskApi = inject(KioskApi);
   private readonly audioFeedback = inject(AudioFeedback);
   private readonly route = inject(ActivatedRoute);
+  protected readonly offlineQueue = inject(OfflineQueueService);
   readonly clockState = inject(ClockState);
 
   readonly selectedEmployee = signal<Employee | null>(null);
@@ -20,6 +22,9 @@ export abstract class ClockWorkflow implements OnDestroy {
   readonly isUnlocked = signal(false);
   readonly isBusy = signal(false);
   readonly message = signal('');
+
+  /** True while the backend cannot be reached; drives the offline banner. */
+  readonly isOffline = signal(false);
 
   private resetTimer: number | null = null;
   private nfcPollTimer: number | null = null;
@@ -131,9 +136,14 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
 
     this.kioskApi.latestNfcEvent(this.terminalId).subscribe({
-      next: latest => this.handleLatestNfcEvent(latest.event),
+      next: latest => {
+        this.isOffline.set(false);
+        this.handleLatestNfcEvent(latest.event);
+      },
       error: () => {
         this.hasInitializedNfcPolling = true;
+        // Backend unreachable: keep polling (it will recover automatically).
+        this.isOffline.set(true);
       },
     });
   }
@@ -176,6 +186,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.isBusy.set(true);
     this.kioskApi.clock(this.selectedEmployee()?.id ?? '', this.pin(), action, this.nfcCardId).subscribe({
       next: status => {
+        this.isOffline.set(false);
         this.clockState.setStatus(status);
         this.message.set(status.stateText);
         this.isBusy.set(false);
@@ -183,12 +194,32 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.scheduleReset();
       },
       error: () => {
-        this.message.set('Kimai konnte nicht speichern');
-        this.isBusy.set(false);
-        this.audioFeedback.playBeeps(2);
+        // Backend/Kimai unreachable: queue the action with its real timestamp
+        // so it is replayed once connectivity returns.
+        const employeeId = this.selectedEmployee()?.id ?? '';
+        this.offlineQueue.enqueueKiosk({
+          eventId: this.generateEventId(),
+          employeeId,
+          pin: this.pin(),
+          action,
+          performedAt: new Date().toISOString(),
+        });
+        this.isOffline.set(true);
+        this.message.set(
+          'Offline gespeichert - wird automatisch nachgetragen.',
+        );
+        this.audioFeedback.playBeeps(1);
         this.scheduleReset();
       },
     });
+  }
+
+  private generateEventId(): string {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      return crypto.randomUUID().replaceAll('-', '');
+    }
+
+    return `${Date.now().toString(16)}${Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')}`;
   }
 
   private scheduleReset(): void {

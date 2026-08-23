@@ -8,6 +8,9 @@ builder.Services.AddSingleton<IRuntimeSettingsStore, RuntimeSettingsStore>();
 builder.Services.AddSingleton<IEmployeeService, EmployeeService>();
 builder.Services.AddSingleton<IAdminAuthorizationService, AdminAuthorizationService>();
 builder.Services.AddSingleton<INfcClockEventStore, NfcClockEventStore>();
+builder.Services.AddSingleton<IOfflineEventIdStore>(_ => new FileOfflineEventIdStore(
+    Path.Combine(builder.Environment.ContentRootPath, "data", "offline-event-ids.json")));
+builder.Services.AddScoped<IOfflineClockService, OfflineClockService>();
 builder.Services.AddScoped<IClockService, ClockService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 builder.Services.AddHttpClient<IKimaiClient, KimaiClient>();

@@ -88,6 +88,71 @@ public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
         return SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Patch, $"api/timesheets/{timesheetId}/stop", null, cancellationToken);
     }
 
+    public async Task StartAtAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int projectId,
+        int activityId,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var body = new
+        {
+            project = projectId,
+            activity = activityId,
+            description = string.IsNullOrWhiteSpace(employee.Description) ? "Stempeluhr" : employee.Description,
+            tags = employee.Tags.Length == 0 ? null : string.Join(",", employee.Tags),
+            billable = employee.Billable,
+            // Kimai expects ISO 8601; with ?full=true the begin date is accepted on create.
+            begin = startedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz")
+        };
+
+        try
+        {
+            await SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Post, "api/timesheets?full=true", body, cancellationToken);
+        }
+        catch (KimaiApiException ex) when (ex.StatusCode == HttpStatusCode.BadRequest)
+        {
+            // Older Kimai versions reject `begin` on create. Fallback: create
+            // now, then edit the begin date on the new timesheet.
+            var created = await SendAsync<JsonElement>(
+                settings.BaseUrl, employee.ApiToken, HttpMethod.Post,
+                "api/timesheets?full=true",
+                new { project = projectId, activity = activityId, description = body.description, tags = body.tags, billable = body.billable },
+                cancellationToken);
+
+            if (created.ValueKind is JsonValueKind.Object && created.TryGetProperty("id", out var idProperty) && idProperty.ValueKind == JsonValueKind.Number)
+            {
+                var timesheetId = idProperty.GetInt32();
+                await SendAsync<JsonElement>(
+                    settings.BaseUrl, employee.ApiToken, HttpMethod.Patch,
+                    $"api/timesheets/{timesheetId}",
+                    new { begin = body.begin },
+                    cancellationToken);
+            }
+        }
+    }
+
+    public async Task StopAtAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int timesheetId,
+        DateTimeOffset stoppedAt,
+        CancellationToken cancellationToken = default)
+    {
+        // First stop the timesheet normally so Kimai computes a duration.
+        await SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Patch, $"api/timesheets/{timesheetId}/stop", null, cancellationToken);
+
+        // Then backdate the end timestamp to the real scan time.
+        await SendAsync<JsonElement>(
+            settings.BaseUrl,
+            employee.ApiToken,
+            HttpMethod.Patch,
+            $"api/timesheets/{timesheetId}",
+            new { end = stoppedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz") },
+            cancellationToken);
+    }
+
     public async Task<IReadOnlyCollection<KimaiUserDto>> GetUsersAsync(
         string baseUrl,
         string apiToken,
