@@ -116,6 +116,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.nfcCardId = null;
     this.isUnlocked.set(false);
     this.message.set('');
+    this.isBusy.set(false);
   }
 
   ngOnDestroy(): void {
@@ -219,6 +220,10 @@ export abstract class ClockWorkflow implements OnDestroy {
             'Offline gespeichert - wird automatisch nachgetragen.',
           );
           this.audioFeedback.playBeeps(1);
+          // Reset busy state - otherwise the terminal stays locked after the
+          // first offline-stamped action (all buttons and the NFC poll check
+          // isBusy()).
+          this.isBusy.set(false);
           this.scheduleReset();
           return;
         }

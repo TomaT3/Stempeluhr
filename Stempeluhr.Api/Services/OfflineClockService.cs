@@ -268,7 +268,13 @@ public sealed class OfflineClockService(
                     throw new InvalidOperationException("Pausen-Aktivitaet muss konfiguriert sein.");
                 }
 
-                // End work at the real time, then open the pause from that moment on.
+                // Two-step transaction: end work, then open the pause from that
+                // moment on. If the second call fails retryably, the employee
+                // is left stopped and a later replay sees IsRunning == false
+                // ("Lief nicht") - the pause is then lost rather than applied
+                // twice. Accepted trade-off: Kimai has no transactional
+                // stop+start; the alternative (compensating restart of the work
+                // timesheet) would risk double-applying on ambiguous failures.
                 await kimai.StopAtAsync(settings, employee, pauseStopId, timestamp, cancellationToken);
                 var pauseProject = employee.ProjectId
                     ?? settings.DefaultProjectId

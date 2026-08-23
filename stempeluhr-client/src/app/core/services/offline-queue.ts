@@ -40,6 +40,13 @@ export class OfflineQueueService {
     }
   }
 
+  /**
+   * Queues an NFC reader event for the /api/nfc/clock/sync replay. Note:
+   * this path requires a trusted X-Nfc-Reader-Token header, which browsers
+   * must not hold - it exists only for non-browser integrations that share
+   * this service. Kiosk/browser offline stamping goes through
+   * enqueueKiosk() instead.
+   */
   enqueueNfc(event: OfflineNfcClockEvent): void {
     this.enqueue({ kind: 'nfc', event });
   }

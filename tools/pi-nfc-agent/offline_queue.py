@@ -64,11 +64,11 @@ class OfflineQueue:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(raw, list):
                     queue._events = [
-                        item for item in (QueuedEvent.from_dict(e) for e in raw if isinstance(e, dict))
-                        if True  # keep ordering as stored
+                        QueuedEvent.from_dict(e) for e in raw if isinstance(e, dict)
                     ]
-            except (json.JSONDecodeError, KeyError, ValueError):
-                # Corrupted queue file: move it aside instead of crashing the agent.
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                # Corrupted queue file (bad JSON, missing keys or non-numeric
+                # scannedAt): move it aside instead of crashing the agent.
                 backup = path.with_suffix(".corrupt")
                 try:
                     os.replace(path, backup)

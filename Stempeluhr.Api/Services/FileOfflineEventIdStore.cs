@@ -53,6 +53,16 @@ public sealed class FileOfflineEventIdStore : IOfflineEventIdStore, IDisposable
         EnsureLoaded();
         if (_ids.TryRemove(eventId, out _))
         {
+            // Also drop the ordering entry: persisting it would resurrect the
+            // removed ID on the next restart (the event was never applied and
+            // must be retried, not treated as a duplicate).
+            var remaining = _order.ToArray().Where(_ids.ContainsKey).ToArray();
+            _order.Clear();
+            foreach (var id in remaining)
+            {
+                _order.Enqueue(id);
+            }
+
             SchedulePersist();
         }
     }
