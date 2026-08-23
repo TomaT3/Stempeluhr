@@ -27,8 +27,6 @@ public sealed class OfflineClockService(
     IOfflineEventIdStore eventIdStore,
     ILogger<OfflineClockService> logger) : IOfflineClockService
 {
-    private sealed record CardTimelineEntry(DateTimeOffset ScannedAt, string EventId);
-
     private readonly ConcurrentQueue<OfflineNfcClockEventDto> _outbox = new();
     private readonly ConcurrentQueue<OfflineKioskClockEventDto> _kioskOutbox = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);

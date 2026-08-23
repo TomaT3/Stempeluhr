@@ -413,15 +413,16 @@ def try_submit(
     status_cache: CardStatusCache,
     event: QueuedEvent,
 ) -> bool:
-    """Attempts delivery of one queued event. Returns True when the API
-    accepted it (or rejected the card as unknown - nothing to retry then)."""
+    """Attempts delivery of one queued event to the live identify endpoint.
+    Returns True when the API accepted the scan (or rejected the card as
+    unknown - nothing to retry then)."""
     url = f"{config.api_base_url}/api/nfc/clock"
+    # The live endpoint identifies only (eventId/scannedAt are ignored there);
+    # they are sent anyway so the payload stays forward-compatible.
     payload = json.dumps(
         {
-            "eventId": event.event_id,
             "cardId": event.card_id,
             "terminalId": event.terminal_id,
-            "scannedAt": event.scanned_at_epoch_seconds,
         }
     ).encode("utf-8")
 
