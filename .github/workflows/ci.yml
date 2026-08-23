@@ -5,17 +5,24 @@ on:
   push:
     branches: [main]
 
+# Note: a merge to main triggers one additional run - intentional, because
+# it validates the actual merge commit (a merge commit can differ from the
+# tested PR head). Squash merges re-test identical trees, which is cheap
+# (~2 min total) and keeps the guarantee simple.
 permissions:
   contents: read
 
+# Avoid duplicate runs: on PR branches only the pull_request event runs;
+# the push trigger fires for direct pushes to main (post-merge CI).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   api-tests:
     name: API build + unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +40,7 @@ jobs:
   client-build:
     name: Angular build + tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -55,6 +63,7 @@ jobs:
   e2e-offline:
     name: E2E offline integration test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [api-tests]
     steps:
       - uses: actions/checkout@v4
