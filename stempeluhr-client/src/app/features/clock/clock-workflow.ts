@@ -137,6 +137,11 @@ export abstract class ClockWorkflow implements OnDestroy {
 
     this.kioskApi.latestNfcEvent(this.terminalId).subscribe({
       next: latest => {
+        if (this.isOffline()) {
+          // Connection just recovered: flush the offline queue immediately
+          // instead of waiting for the 15 s retry timer.
+          this.offlineQueue.syncNow().subscribe();
+        }
         this.isOffline.set(false);
         this.handleLatestNfcEvent(latest.event);
       },
@@ -193,23 +198,34 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.audioFeedback.playBeeps(1);
         this.scheduleReset();
       },
-      error: () => {
-        // Backend/Kimai unreachable: queue the action with its real timestamp
-        // so it is replayed once connectivity returns.
-        const employeeId = this.selectedEmployee()?.id ?? '';
-        this.offlineQueue.enqueueKiosk({
-          eventId: this.generateEventId(),
-          employeeId,
-          pin: this.pin(),
-          action,
-          performedAt: new Date().toISOString(),
-        });
-        this.isOffline.set(true);
-        this.message.set(
-          'Offline gespeichert - wird automatisch nachgetragen.',
-        );
-        this.audioFeedback.playBeeps(1);
-        this.scheduleReset();
+      error: (err) => {
+        const status = err?.status ?? 0;
+        if (status === 0 || status >= 500) {
+          // Backend/Kimai unreachable (network error or server failure): queue
+          // the action with its real timestamp so it is replayed once
+          // connectivity returns. 4xx responses are permanent (wrong PIN,
+          // deleted employee, ...) - showing the error is better than queuing
+          // an event that can never succeed.
+          const employeeId = this.selectedEmployee()?.id ?? '';
+          this.offlineQueue.enqueueKiosk({
+            eventId: this.generateEventId(),
+            employeeId,
+            pin: this.pin(),
+            action,
+            performedAt: new Date().toISOString(),
+          });
+          this.isOffline.set(true);
+          this.message.set(
+            'Offline gespeichert - wird automatisch nachgetragen.',
+          );
+          this.audioFeedback.playBeeps(1);
+          this.scheduleReset();
+          return;
+        }
+
+        this.message.set('Kimai konnte nicht speichern');
+        this.isBusy.set(false);
+        this.audioFeedback.playBeeps(2);
       },
     });
   }

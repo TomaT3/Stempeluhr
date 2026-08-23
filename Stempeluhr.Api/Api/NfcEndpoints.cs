@@ -32,10 +32,22 @@ public static class NfcEndpoints
         });
 
         app.MapPost("/api/kiosk/clock/sync", async (
+            HttpRequest httpRequest,
             OfflineKioskSyncRequest request,
             IOfflineClockService offlineClockService,
+            RequestRateLimiter kioskSyncRateLimiter,
             CancellationToken cancellationToken) =>
         {
+            // The kiosk sync endpoint accepts arbitrary performedAt timestamps
+            // and is only protected by the employee PIN, so it is an attractive
+            // brute-force target. Throttle per IP; real auth (terminal token)
+            // is tracked as a follow-up.
+            var ip = httpRequest.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            if (!kioskSyncRateLimiter.TryAcquire(ip))
+            {
+                return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+            }
+
             if (request.Events is { Count: > 0 })
             {
                 var result = await offlineClockService.SyncKioskAsync(request.Events, cancellationToken);

@@ -13,8 +13,12 @@ namespace Stempeluhr.Api.Services;
 ///   itself. For each card we walk its queued events in scan order and apply
 ///   start/stop against Kimai using the stored timestamps (backdating).
 /// - Kimai outage: if Kimai is unreachable while syncing, remaining events are
-///   kept in an internal outbox and retried by a background loop, so a sync
-///   call during a Kimai outage never loses events either.
+///   kept in an internal outbox. The service is registered as a singleton and
+///   a background service flushes the outbox periodically, so a sync call
+///   during a Kimai outage never loses events and they are retried without a
+///   new request from the client.
+/// - Permanent errors (unknown card, wrong PIN, missing config) are reported
+///   per event as "rejected" instead of failing the whole batch.
 /// </summary>
 public sealed class OfflineClockService(
     IRuntimeSettingsStore settingsStore,
@@ -59,9 +63,9 @@ public sealed class OfflineClockService(
 
                     try
                     {
-                        var message = await ApplyScanAsync(group.Key, entry.ScannedAt, cancellationToken);
+                        var (message, state) = await ApplyScanAsync(group.Key, entry.ScannedAt, cancellationToken);
                         accepted++;
-                        results.Add(new OfflineSyncEventResultDto(entry.EventId, "applied", message));
+                        results.Add(new OfflineSyncEventResultDto(entry.EventId, "applied", message, state));
                     }
                     catch (KimaiApiException ex) when (IsRetryable(ex))
                     {
@@ -71,6 +75,15 @@ public sealed class OfflineClockService(
                         buffered++;
                         results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
                             "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Permanent failure (unknown card, missing config, ...): report
+                        // per event instead of failing the whole batch. The event ID
+                        // stays registered, so a re-send is a duplicate and the client
+                        // drops the event.
+                        logger.LogWarning(ex, "Offline NFC event {EventId} permanently rejected", entry.EventId);
+                        results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", ex.Message));
                     }
                 }
             }
@@ -89,9 +102,10 @@ public sealed class OfflineClockService(
     /// <summary>
     /// Replays one scan: derives the target action from Kimai's current state,
     /// then start/stop with backdating so the recorded time matches the real
-    /// scan time.
+    /// scan time. Returns the human-readable result and the resulting clock
+    /// state (for the client's local status cache).
     /// </summary>
-    private async Task<string> ApplyScanAsync(string normalizedCardId, DateTimeOffset scannedAt, CancellationToken cancellationToken)
+    private async Task<(string Message, string State)> ApplyScanAsync(string normalizedCardId, DateTimeOffset scannedAt, CancellationToken cancellationToken)
     {
         var settings = settingsStore.Load();
         var employee = employees.FindEmployeeByNfcCardId(settings, normalizedCardId);
@@ -126,9 +140,9 @@ public sealed class OfflineClockService(
 
                 try
                 {
-                    var message = await ApplyKioskEventAsync(entry, cancellationToken);
+                    var (message, state) = await ApplyKioskEventAsync(entry, cancellationToken);
                     accepted++;
-                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "applied", message));
+                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "applied", message, state));
                 }
                 catch (KimaiApiException ex) when (IsRetryable(ex))
                 {
@@ -137,6 +151,11 @@ public sealed class OfflineClockService(
                     buffered++;
                     results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
                         "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Offline kiosk event {EventId} permanently rejected", entry.EventId);
+                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", ex.Message));
                 }
             }
             finally
@@ -150,7 +169,7 @@ public sealed class OfflineClockService(
         return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
     }
 
-    private async Task<string> ApplyKioskEventAsync(OfflineKioskClockEventDto entry, CancellationToken cancellationToken)
+    private async Task<(string Message, string State)> ApplyKioskEventAsync(OfflineKioskClockEventDto entry, CancellationToken cancellationToken)
     {
         var settings = settingsStore.Load();
         var employee = employees.FindEmployee(settings, new ClockRequest(entry.EmployeeId, entry.Pin));
@@ -174,9 +193,11 @@ public sealed class OfflineClockService(
 
     /// <summary>
     /// Applies one clock action at a historical point in time. For NFC scans
-    /// ("toggle") the action is derived from Kimai's current state.
+    /// ("toggle") the action is derived from Kimai's current state. Returns the
+    /// human-readable result plus the resulting clock state
+    /// ("working"/"paused"/"clockedOut").
     /// </summary>
-    private async Task<string> ApplyActionAsync(
+    private async Task<(string Message, string State)> ApplyActionAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
         string action,
@@ -195,7 +216,7 @@ public sealed class OfflineClockService(
             case "start":
                 if (status.IsRunning)
                 {
-                    return "Lief bereits - kein Nachtrag noetig.";
+                    return ("Lief bereits - kein Nachtrag noetig.", status.State);
                 }
 
                 var projectId = employee.ProjectId
@@ -206,21 +227,21 @@ public sealed class OfflineClockService(
                     ?? throw new InvalidOperationException("Aktivitaet muss konfiguriert sein.");
 
                 await kimai.StartAtAsync(settings, employee, projectId, activityId, timestamp, cancellationToken);
-                return $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}";
+                return ($"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}", "working");
 
             case "stop":
                 if (!status.IsRunning || status.ActiveTimesheetId is not int stopId)
                 {
-                    return "Lief nicht - kein Nachtrag noetig.";
+                    return ("Lief nicht - kein Nachtrag noetig.", status.State);
                 }
 
                 await kimai.StopAtAsync(settings, employee, stopId, timestamp, cancellationToken);
-                return $"Nachgetragen: Ausstempeln {timestamp.ToLocalTime():HH:mm}";
+                return ($"Nachgetragen: Ausstempeln {timestamp.ToLocalTime():HH:mm}", "clockedOut");
 
             case "pauseStart":
                 if (!status.IsRunning || status.ActiveTimesheetId is not int pauseStopId)
                 {
-                    return "Lief nicht - Pause nicht nachtragbar.";
+                    return ("Lief nicht - Pause nicht nachtragbar.", status.State);
                 }
 
                 if (settings.PauseActivityId is null)
@@ -235,12 +256,13 @@ public sealed class OfflineClockService(
                     ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
                 await kimai.StartAtAsync(
                     settings, employee, pauseProject, settings.PauseActivityId.Value, timestamp, cancellationToken);
-                return $"Nachgetragen: Pausenbeginn {timestamp.ToLocalTime():HH:mm}";
+                return ($"Nachgetragen: Pausenbeginn {timestamp.ToLocalTime():HH:mm}", "paused");
 
             case "pauseEnd":
-                if (status.ActiveTimesheetId is not int endPauseId)
+                // Mirror the live path: only end a pause that is actually running.
+                if (status.State != "paused" || status.ActiveTimesheetId is not int endPauseId)
                 {
-                    return "Keine laufende Pause - Nachtrag nicht moeglich.";
+                    return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
                 }
 
                 var resumeProject = employee.ProjectId
@@ -252,68 +274,101 @@ public sealed class OfflineClockService(
 
                 await kimai.StopAtAsync(settings, employee, endPauseId, timestamp, cancellationToken);
                 await kimai.StartAtAsync(settings, employee, resumeProject, resumeActivity, timestamp, cancellationToken);
-                return $"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}";
+                return ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
 
             default:
                 throw new InvalidOperationException($"Unbekannte Aktion: {action}");
         }
     }
 
-    private async Task FlushOutboxAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Applies anything waiting in the outbox. Called opportunistically after
+    /// each sync and periodically by <see cref="OfflineOutboxBackgroundService"/>,
+    /// so events buffered during a Kimai outage are retried without a new
+    /// request from the client. Every event is re-registered with the event-ID
+    /// store before applying, so an event that was already applied by a
+    /// client re-send in the meantime is skipped instead of double-applied.
+    /// </summary>
+    public async Task FlushOutboxAsync(CancellationToken cancellationToken = default)
     {
-        var drained = 0;
-
-        // NFC outbox: replay via card lookup + toggle.
-        while (_outbox.TryDequeue(out var nfcEntry))
+        await _syncLock.WaitAsync(cancellationToken);
+        try
         {
-            try
-            {
-                var message = await ApplyScanAsync(
-                    NfcCardIdNormalizer.Normalize(nfcEntry.CardId) ?? nfcEntry.CardId.Trim(),
-                    nfcEntry.ScannedAt,
-                    cancellationToken);
+            var drained = 0;
 
-                logger.LogInformation("Outbox: offline event {EventId} applied ({Message})", nfcEntry.EventId, message);
-                drained++;
-            }
-            catch (KimaiApiException ex) when (IsRetryable(ex))
+            // NFC outbox: replay via card lookup + toggle.
+            while (_outbox.TryDequeue(out var nfcEntry))
             {
-                // Still down - put it back and stop flushing this round.
-                _outbox.Enqueue(nfcEntry);
-                break;
+                if (!eventIdStore.TryRegister(nfcEntry.EventId))
+                {
+                    // Already applied via the normal sync path (client re-sent
+                    // the batch) - nothing left to do.
+                    drained++;
+                    continue;
+                }
+
+                try
+                {
+                    var (message, _) = await ApplyScanAsync(
+                        NfcCardIdNormalizer.Normalize(nfcEntry.CardId) ?? nfcEntry.CardId.Trim(),
+                        nfcEntry.ScannedAt,
+                        cancellationToken);
+
+                    logger.LogInformation("Outbox: offline event {EventId} applied ({Message})", nfcEntry.EventId, message);
+                    drained++;
+                }
+                catch (KimaiApiException ex) when (IsRetryable(ex))
+                {
+                    // Still down - free the event ID for a later retry and put
+                    // it back, then stop flushing this round.
+                    eventIdStore.Remove(nfcEntry.EventId);
+                    _outbox.Enqueue(nfcEntry);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    // Permanent failure: log and drop so one bad event cannot block the outbox.
+                    logger.LogError(ex, "Outbox: dropping NFC event {EventId} after permanent error", nfcEntry.EventId);
+                    drained++;
+                }
             }
-            catch (Exception ex)
+
+            // Kiosk outbox: replay with explicit action.
+            while (_kioskOutbox.TryDequeue(out var kioskEntry))
             {
-                // Permanent failure: log and drop so one bad event cannot block the outbox.
-                logger.LogError(ex, "Outbox: dropping NFC event {EventId} after permanent error", nfcEntry.EventId);
-                drained++;
+                if (!eventIdStore.TryRegister(kioskEntry.EventId))
+                {
+                    drained++;
+                    continue;
+                }
+
+                try
+                {
+                    var (message, _) = await ApplyKioskEventAsync(kioskEntry, cancellationToken);
+                    logger.LogInformation("Outbox: offline kiosk event {EventId} applied ({Message})", kioskEntry.EventId, message);
+                    drained++;
+                }
+                catch (KimaiApiException ex) when (IsRetryable(ex))
+                {
+                    eventIdStore.Remove(kioskEntry.EventId);
+                    _kioskOutbox.Enqueue(kioskEntry);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Outbox: dropping kiosk event {EventId} after permanent error", kioskEntry.EventId);
+                    drained++;
+                }
+            }
+
+            if (drained > 0)
+            {
+                logger.LogInformation("Outbox flushed {Count} offline event(s)", drained);
             }
         }
-
-        // Kiosk outbox: replay with explicit action.
-        while (_kioskOutbox.TryDequeue(out var kioskEntry))
+        finally
         {
-            try
-            {
-                var message = await ApplyKioskEventAsync(kioskEntry, cancellationToken);
-                logger.LogInformation("Outbox: offline kiosk event {EventId} applied ({Message})", kioskEntry.EventId, message);
-                drained++;
-            }
-            catch (KimaiApiException ex) when (IsRetryable(ex))
-            {
-                _kioskOutbox.Enqueue(kioskEntry);
-                break;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Outbox: dropping kiosk event {EventId} after permanent error", kioskEntry.EventId);
-                drained++;
-            }
-        }
-
-        if (drained > 0)
-        {
-            logger.LogInformation("Outbox flushed {Count} offline event(s)", drained);
+            _syncLock.Release();
         }
     }
 

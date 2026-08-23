@@ -13,8 +13,17 @@ export interface OfflineKioskClockEvent {
   performedAt: string;
 }
 
+export interface OfflineSyncEventResult {
+  eventId: string;
+  /** 'applied' | 'duplicate' | 'buffered' | 'rejected' */
+  status: string;
+  message?: string | null;
+  state?: string | null;
+}
+
 export interface OfflineSyncResult {
   accepted: number;
   duplicates: number;
   buffered: number;
+  results: OfflineSyncEventResult[];
 }

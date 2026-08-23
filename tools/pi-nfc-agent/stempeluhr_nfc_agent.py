@@ -20,6 +20,7 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,6 @@ GET_UID_APDU = [0xFF, 0xCA, 0x00, 0x00, 0x00]
 
 # Retry cadence while offline: fast at first, then capped.
 RETRY_DELAYS_SECONDS = [5, 10, 30, 60, 120, 300]
-MAX_RETRY_DELAY_SECONDS = 300.0
 
 # Known clock states reported by the API for local status feedback.
 STATE_CLOCKED_IN = "clocked_in"
@@ -77,10 +77,12 @@ class AgentConfig:
 @dataclass
 class CardStatusCache:
     """Remembers the last known clock state per card so scans toggle correctly
-    even while offline."""
+    even while offline. Access is guarded by a lock because the main scan loop
+    and the background retry thread both update the cache."""
 
     path: Path | None
     _states: dict[str, str] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     @staticmethod
     def load(path: Path | None) -> "CardStatusCache":
@@ -95,19 +97,21 @@ class CardStatusCache:
         return cache
 
     def get(self, card_id: str) -> str | None:
-        return self._states.get(card_id)
+        with self._lock:
+            return self._states.get(card_id)
 
     def update(self, card_id: str, state: str) -> None:
-        self._states[card_id] = state
-        if self.path is not None:
-            try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                self.path.write_text(
-                    json.dumps(self._states, ensure_ascii=False, indent=1),
-                    encoding="utf-8",
-                )
-            except OSError:
-                pass
+        with self._lock:
+            self._states[card_id] = state
+            if self.path is not None:
+                try:
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    self.path.write_text(
+                        json.dumps(self._states, ensure_ascii=False, indent=1),
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
 
 
 def main() -> int:
@@ -146,7 +150,7 @@ def main() -> int:
 
     retry_thread = threading.Thread(
         target=retry_loop,
-        args=(config, queue),
+        args=(config, queue, status_cache),
         name="nfc-retry-loop",
         daemon=True,
     )
@@ -227,8 +231,18 @@ def handle_card_scan(
         )
 
 
-def retry_loop(config: AgentConfig, queue: OfflineQueue) -> None:
-    """Drains the offline queue in the background with capped backoff."""
+def retry_loop(
+    config: AgentConfig,
+    queue: OfflineQueue,
+    status_cache: CardStatusCache,
+) -> None:
+    """Drains the offline queue in the background with capped backoff.
+
+    Delivery goes to the idempotent sync endpoint (``/api/nfc/clock/sync``)
+    so replayed events keep their original scan timestamps and a retry after
+    a timeout can never double-toggle. Consecutive successes drain the queue
+    without sleeping; the backoff only applies after failures.
+    """
     attempt = 0
     while True:
         pending = queue.snapshot()
@@ -241,14 +255,14 @@ def retry_loop(config: AgentConfig, queue: OfflineQueue) -> None:
         if attempt > 0:
             time.sleep(RETRY_DELAYS_SECONDS[delay_index])
 
-        event = queue.snapshot()[0] if len(queue.snapshot()) > 0 else None
-        if event is None:
-            continue
-
-        delivered = try_submit(config, queue, CardStatusCache.load(None), event)
+        event = pending[0]
+        delivered = submit_sync(config, queue, status_cache, event)
         if delivered:
-            LOGGER.info("Queued event for card %s delivered (scanned %.0f s ago).",
-                        event.card_id, max(0.0, utc_now_epoch() - event.scanned_at_epoch_seconds))
+            LOGGER.info(
+                "Queued event for card %s delivered (scanned %.0f s ago).",
+                event.card_id,
+                max(0.0, utc_now_epoch() - event.scanned_at_epoch_seconds),
+            )
             attempt = 0
         else:
             attempt += 1
@@ -258,6 +272,139 @@ def retry_loop(config: AgentConfig, queue: OfflineQueue) -> None:
                 len(queue),
                 RETRY_DELAYS_SECONDS[delay_index],
             )
+
+
+def iso8601_from_epoch(epoch_seconds: float) -> str:
+    """Converts an epoch timestamp to the ISO-8601 string the API DTO expects."""
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+
+
+def sync_result_state(state: str | None) -> str | None:
+    """Maps the server's ClockStatusDto state to the local cache vocabulary."""
+    if state == "working":
+        return STATE_CLOCKED_IN
+    if state == "paused":
+        return STATE_PAUSED
+    if state == "clockedOut":
+        return STATE_CLOCKED_OUT
+    return None
+
+
+def submit_sync(
+    config: AgentConfig,
+    queue: OfflineQueue,
+    status_cache: CardStatusCache,
+    event: QueuedEvent,
+) -> bool:
+    """Delivers one queued event to the idempotent sync endpoint.
+
+    Returns True when the server accepted the event (applied, duplicate or
+    permanently rejected) and it can be removed from the queue. Returns False
+    when it should be retried later (Kimai down/buffered, network error,
+    malformed request). A 4xx is never treated as a silent drop: events are
+    only removed when the server explicitly classified them.
+    """
+    url = f"{config.api_base_url}/api/nfc/clock/sync"
+    payload = json.dumps(
+        {
+            "events": [
+                {
+                    "eventId": event.event_id,
+                    "cardId": event.card_id,
+                    "terminalId": event.terminal_id,
+                    # The API DTO uses DateTimeOffset - an epoch float would
+                    # fail deserialization and lose the stamp entirely.
+                    "scannedAt": iso8601_from_epoch(event.scanned_at_epoch_seconds),
+                }
+            ]
+        }
+    ).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers=create_headers(config),
+        method="POST",
+    )
+
+    LOGGER.debug("Syncing card %s to %s", event.card_id, url)
+
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            detail = find_event_result(body, event.event_id) or {}
+            status = detail.get("status")
+
+            if status == "applied":
+                # The server derived the action from Kimai's state; mirror it
+                # in the local cache so the next offline toggle is consistent.
+                status_cache.update(
+                    event.card_id,
+                    sync_result_state(detail.get("state"))
+                    or next_state_for(status_cache.get(event.card_id)),
+                )
+                queue.remove(event.event_id)
+                LOGGER.info(
+                    "Card %s synced: %s", event.card_id, detail.get("message") or "applied"
+                )
+                return True
+
+            if status == "duplicate":
+                # Already processed by an earlier request - nothing to do.
+                queue.remove(event.event_id)
+                LOGGER.info("Card %s already known to server (duplicate); dropping from queue.",
+                            event.card_id)
+                return True
+
+            if status == "rejected":
+                # Permanent rejection (unknown card etc.) - do not retry forever.
+                LOGGER.warning("Card %s permanently rejected: %s",
+                               event.card_id, detail.get("message") or status)
+                queue.remove(event.event_id)
+                return True
+
+            # "buffered" (Kimai down on the server) or an unexpected payload:
+            # keep the event queued, the server will apply it later.
+            LOGGER.warning(
+                "Card %s not applied by server (%s); keeping in queue.",
+                event.card_id, status or "no result",
+            )
+            return False
+    except urllib.error.HTTPError as error:
+        body_text = error.read().decode("utf-8", errors="replace")
+        if error.code == 400:
+            # Malformed request (agent bug, e.g. old queue file). Never drop
+            # silently - keep the event and surface the error in the logs.
+            LOGGER.error("Sync rejected with 400 (payload bug?): %s", body_text[:300])
+            return False
+        if error.code == 401:
+            LOGGER.error(
+                "Reader token rejected (401) - check reader_token in the config; "
+                "keeping event in queue."
+            )
+            return False
+        LOGGER.warning("Card %s rejected by API (%s): %s",
+                       event.card_id, error.code, body_text[:200])
+        return False
+    except urllib.error.URLError as error:
+        LOGGER.warning("Stempeluhr API is not reachable: %s", error.reason)
+        return False
+    except TimeoutError:
+        LOGGER.warning("Stempeluhr API timed out")
+        return False
+
+
+def find_event_result(body: Any, event_id: str) -> dict[str, Any] | None:
+    """Finds the per-event result for ``event_id`` in an OfflineSyncResultDto."""
+    if not isinstance(body, dict):
+        return None
+    results = body.get("results")
+    if not isinstance(results, list):
+        return None
+    for entry in results:
+        if isinstance(entry, dict) and entry.get("eventId") == event_id:
+            return entry
+    return None
 
 
 def try_submit(

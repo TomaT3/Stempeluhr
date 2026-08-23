@@ -31,6 +31,15 @@ export class OfflineQueueService {
 
   private syncTimer: number | null = null;
 
+  constructor() {
+    // Flush a queue left over from a previous browser session (e.g. after a
+    // kiosk restart) as soon as the app starts - without waiting for the next
+    // failed clock action to trigger the retry timer.
+    if (this.queued().length > 0) {
+      this.syncNow().subscribe();
+    }
+  }
+
   enqueueNfc(event: OfflineNfcClockEvent): void {
     this.enqueue({ kind: 'nfc', event });
   }
@@ -67,19 +76,27 @@ export class OfflineQueueService {
 
     return forkJoin(calls).pipe(
       map(results => {
-        // Only drop events the server actually accepted or classified as duplicates.
-        // Buffered entries stay queued until Kimai has caught up.
+        // Drop everything the server definitively resolved (applied, duplicate
+        // or permanently rejected). Only events the server still holds in its
+        // outbox ("buffered") or that were not mentioned in the response stay
+        // queued until the next attempt.
         const bufferedIds = new Set<string>();
+        const mentionedIds = new Set<string>();
         for (const result of results) {
-          for (const detail of ((result as unknown as { results?: Array<{ eventId?: string; status?: string }> }).results ?? [])) {
-            if (detail?.status === 'buffered' && detail.eventId) {
+          for (const detail of result.results ?? []) {
+            if (!detail.eventId) {
+              continue;
+            }
+
+            mentionedIds.add(detail.eventId);
+            if (detail.status === 'buffered') {
               bufferedIds.add(detail.eventId);
             }
           }
         }
 
         this.queued.update(entries => entries.filter(entry =>
-          !('eventId' in entry.event) || bufferedIds.has((entry.event as { eventId: string }).eventId),
+          bufferedIds.has(entry.event.eventId) || !mentionedIds.has(entry.event.eventId),
         ));
         this.writeStorage(this.queued());
         return results;

@@ -8,9 +8,16 @@ builder.Services.AddSingleton<IRuntimeSettingsStore, RuntimeSettingsStore>();
 builder.Services.AddSingleton<IEmployeeService, EmployeeService>();
 builder.Services.AddSingleton<IAdminAuthorizationService, AdminAuthorizationService>();
 builder.Services.AddSingleton<INfcClockEventStore, NfcClockEventStore>();
-builder.Services.AddSingleton<IOfflineEventIdStore>(_ => new FileOfflineEventIdStore(
-    Path.Combine(builder.Environment.ContentRootPath, "data", "offline-event-ids.json")));
-builder.Services.AddScoped<IOfflineClockService, OfflineClockService>();
+builder.Services.AddSingleton<IOfflineEventIdStore>(sp => new FileOfflineEventIdStore(
+    Path.Combine(builder.Environment.ContentRootPath, "data", "offline-event-ids.json"),
+    sp.GetRequiredService<ILogger<FileOfflineEventIdStore>>()));
+// Singleton: the offline outbox (queues + sync lock) must outlive individual
+// HTTP requests so events buffered during a Kimai outage survive and can be
+// flushed by the background service below.
+builder.Services.AddSingleton<IOfflineClockService, OfflineClockService>();
+builder.Services.AddHostedService<OfflineOutboxBackgroundService>();
+// Throttles the unauthenticated kiosk sync endpoint (per-IP, fixed window).
+builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 20));
 builder.Services.AddScoped<IClockService, ClockService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 builder.Services.AddHttpClient<IKimaiClient, KimaiClient>();

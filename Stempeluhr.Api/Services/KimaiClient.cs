@@ -5,7 +5,7 @@ using Stempeluhr.Api.Models;
 
 namespace Stempeluhr.Api.Services;
 
-public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
+public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logger) : IKimaiClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -129,6 +129,15 @@ public sealed class KimaiClient(HttpClient httpClient) : IKimaiClient
                     $"api/timesheets/{timesheetId}",
                     new { begin = body.begin },
                     cancellationToken);
+            }
+            else
+            {
+                // The timesheet was created without `begin`; without its ID we
+                // cannot backdate it. Log loudly instead of silently accepting
+                // a wrong start time.
+                logger.LogWarning(
+                    "Kimai fallback: created timesheet without id, begin backdate skipped ({BaseUrl}, user {User})",
+                    settings.BaseUrl, employee.Id);
             }
         }
     }

@@ -18,4 +18,12 @@ public interface IOfflineClockService
     /// with the same idempotency and outbox semantics as <see cref="SyncAsync"/>.
     /// </summary>
     Task<OfflineSyncResultDto> SyncKioskAsync(IReadOnlyList<OfflineKioskClockEventDto> events, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Applies anything still waiting in the internal outbox (events that were
+    /// buffered while Kimai was unreachable). Called after each sync and
+    /// periodically by a background service, so outbox events are retried even
+    /// without a new request from a client.
+    /// </summary>
+    Task FlushOutboxAsync(CancellationToken cancellationToken = default);
 }

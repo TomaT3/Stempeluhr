@@ -60,7 +60,8 @@ public sealed record OfflineSyncResultDto(
 public sealed record OfflineSyncEventResultDto(
     string EventId,
     string Status,
-    string? Message);
+    string? Message,
+    string? State = null);
 
 public sealed record ClockStatusDto(
     bool IsRunning,
