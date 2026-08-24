@@ -20,14 +20,26 @@ public sealed class RequestRateLimiter(TimeSpan window, int maxRequests)
 
     private readonly ConcurrentDictionary<string, WindowEntry> _entries = new(StringComparer.Ordinal);
 
-    public bool TryAcquire(string key)
+    public bool TryAcquire(string key) => TryAcquire(key, 1);
+
+    /// <summary>
+    /// Acquires <paramref name="cost"/> units from the key's window budget.
+    /// Requests are not equal: the unauthenticated kiosk sync endpoint prices
+    /// its batches by EVENT count (each event result reveals whether that
+    /// event's PIN matched), so 20 requests x 100 events must not smuggle
+    /// 2,000 PIN guesses past a per-request limiter. Costs &lt;= 0 count as a
+    /// single request unit; an over-budget acquisition fails closed without
+    /// granting anything.
+    /// </summary>
+    public bool TryAcquire(string key, int cost)
     {
+        var units = Math.Max(1, cost);
         var now = DateTimeOffset.UtcNow;
         EvictExpired(now);
 
         if (_entries.TryGetValue(key, out var entry) && now - entry.WindowStart < window)
         {
-            var updated = entry with { Count = entry.Count + 1 };
+            var updated = entry with { Count = entry.Count + units };
             _entries[key] = updated;
             return updated.Count <= maxRequests;
         }
@@ -40,8 +52,8 @@ public sealed class RequestRateLimiter(TimeSpan window, int maxRequests)
             return false;
         }
 
-        _entries[key] = new WindowEntry(now, 1);
-        return true;
+        _entries[key] = new WindowEntry(now, units);
+        return units <= maxRequests;
     }
 
     private void EvictExpired(DateTimeOffset now)

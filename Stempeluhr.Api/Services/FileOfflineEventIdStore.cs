@@ -36,6 +36,16 @@ public sealed class FileOfflineEventIdStore : IOfflineEventIdStore, IDisposable
 {
     private const int MaxEntries = 10_000;
 
+    /// <summary>
+    /// Every Nth consecutive persist failure is logged as an error (the first
+    /// one always); everything in between stays debug-level so a sustained
+    /// failure (disk full, ACL) is loud without flooding the log per retry.
+    /// </summary>
+    private const int PersistErrorLogInterval = 25;
+
+    /// <summary>Consecutive persist failures; reset on each success.</summary>
+    private long _persistFailures;
+
     private readonly string _filePath;
     private readonly object _stateLock = new();
     private readonly ConcurrentDictionary<string, byte> _ids = new(StringComparer.Ordinal);
@@ -181,11 +191,28 @@ public sealed class FileOfflineEventIdStore : IOfflineEventIdStore, IDisposable
             try
             {
                 await PersistAsync();
+                Interlocked.Exchange(ref _persistFailures, 0);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // Best-effort persistence; duplicates after a crash are acceptable
                 // because Kimai tolerates a repeated stop and the UI shows reality.
+                // But staying SILENT hides a SUSTAINED failure (disk full, ACL):
+                // idempotency would silently degrade to RAM-only and a restart
+                // could then mass-duplicate stamps. Log the first failure and
+                // every Nth consecutive one loudly, the rest at debug level.
+                var failures = Interlocked.Increment(ref _persistFailures);
+                if (failures == 1 || failures % PersistErrorLogInterval == 0)
+                {
+                    _logger?.LogError(
+                        ex,
+                        "Offline event-ID store persist failed {Failures}x in a row ({Path}) - idempotency is RAM-only until persistence recovers; a restart may then re-apply events",
+                        failures, _filePath);
+                }
+                else
+                {
+                    _logger?.LogDebug(ex, "Offline event-ID store persist failed ({Failures} consecutive)", failures);
+                }
             }
         }
     }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Stempeluhr.Api.Models;
 
 namespace Stempeluhr.Api.Services;
@@ -20,6 +21,14 @@ namespace Stempeluhr.Api.Services;
 ///   in event-time order. Draining them sequentially (all NFC first, then all
 ///   kiosk) would invert the toggle derivation when one employee mixes
 ///   terminals during an outage.
+/// - Known limit of that guarantee: it covers the OUTBOX replay only. Live
+///   applies (outbox empty, Kimai reachable) run in REQUEST-ARRIVAL order -
+///   two clients syncing independently right after a recovery can interleave
+///   by arrival instead of event-time order (within one request the internal
+///   order always holds). A short server-side merge window across overlapping
+///   requests is future work if such mixed-terminal recoveries prove
+///   problematic; until then keep one terminal per employee during an outage
+///   where the order matters.
 /// - Concurrency: every read/mutation of the outbox lists happens while
 ///   holding <see cref="_syncLock"/>, so sync requests serialize against each
 ///   other and against the periodic background flush.
@@ -288,6 +297,31 @@ public sealed class OfflineClockService(
                     BufferKioskFrom(orderedKioskEvents, i);
                     break;
                 }
+                catch (KioskAuthenticationException ex)
+                {
+                    // Brute-force containment: every remaining event of this
+                    // batch carries the same credentials as this one, so
+                    // applying them anyway would let ONE request harvest a
+                    // PIN verdict per event. The rest is acknowledged as
+                    // buffered WITHOUT server-side copies: the client keeps
+                    // its queue and retries, so a legitimate backlog survives
+                    // and drains ONE verdict per round instead of being
+                    // mass-rejected into data loss.
+                    logger.LogWarning(
+                        ex,
+                        "Offline kiosk event {EventId} rejected ({Message}) - skipping the remaining {Skipped} event(s) of this batch",
+                        entry.EventId, ex.Message, orderedKioskEvents.Count - i - 1);
+                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", ex.Message));
+                    var skipped = orderedKioskEvents.Count - i - 1;
+                    const string skippedMessage = "Uebersprungen - die Anmeldedaten dieses Batches wurden abgelehnt.";
+                    for (var s = i + 1; s < orderedKioskEvents.Count; s++)
+                    {
+                        results.Add(new OfflineSyncEventResultDto(orderedKioskEvents[s].EventId, BufferedStatus, skippedMessage));
+                    }
+
+                    buffered += skipped;
+                    break;
+                }
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Offline kiosk event {EventId} permanently rejected", entry.EventId);
@@ -363,15 +397,49 @@ public sealed class OfflineClockService(
     private async Task<(string Message, string State)> ApplyKioskEventAsync(OfflineKioskClockEventDto entry, CancellationToken cancellationToken)
     {
         var settings = settingsStore.Load();
-        var employee = employees.FindEmployee(settings, new ClockRequest(entry.EmployeeId, entry.Pin));
-        if (employee is null)
-        {
-            throw new InvalidOperationException("Mitarbeiter nicht gefunden oder PIN falsch.");
-        }
+        var employee = ResolveKioskEmployee(settings, entry);
 
         var action = NormalizeKioskAction(entry.Action);
         return await ApplyActionAsync(settings, employee, action, entry.PerformedAt, cancellationToken);
     }
+
+    /// <summary>
+    /// Mirrors the live kiosk path (ClockService.FindEmployeeForClockAction):
+    /// PIN first; when that does not match, the NFC card that unlocked the
+    /// session identifies the employee - replaying a queued action of an
+    /// NFC-unlocked session whose PIN was never entered used to fail forever
+    /// ("PIN falsch") and silently drop the stamp. The card is only accepted
+    /// when it maps to the SAME employee id, so one card can never stamp for
+    /// someone else. Same trust model as the live path: whoever presents card
+    /// or PIN counts as that employee (terminal-token auth remains the agreed
+    /// follow-up).
+    /// </summary>
+    private EmployeeSettings ResolveKioskEmployee(RuntimeSettings settings, OfflineKioskClockEventDto entry)
+    {
+        var byPin = employees.FindEmployee(settings, new ClockRequest(entry.EmployeeId, entry.Pin));
+        if (byPin is not null)
+        {
+            return byPin;
+        }
+
+        var byCard = employees.FindEmployeeByNfcCardId(settings, entry.NfcCardId);
+        if (byCard is null || !string.Equals(byCard.Id, entry.EmployeeId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new KioskAuthenticationException("Mitarbeiter nicht gefunden oder PIN falsch.");
+        }
+
+        return byCard;
+    }
+
+    /// <summary>
+    /// Authentication failure while replaying one kiosk event (unknown
+    /// employee, wrong PIN, card/employee mismatch). Deliberately its own
+    /// type so the sync loop can contain credential enumeration: every
+    /// further event of a batch shares the same credentials, so answering
+    /// each of them individually would turn ONE request into one PIN guess
+    /// per event - every result reveals whether its credentials matched.
+    /// </summary>
+    private sealed class KioskAuthenticationException(string message) : InvalidOperationException(message);
 
     private static string NormalizeKioskAction(string? action)
     {
@@ -426,6 +494,21 @@ public sealed class OfflineClockService(
                     return ("Lief nicht - kein Nachtrag noetig.", status.State);
                 }
 
+                // Replay-vs-live race: while this event waited in an outbox,
+                // the employee may have stamped IN live again (live endpoints
+                // do not share _syncLock). Stopping that newer timesheet with
+                // this old timestamp would truncate real work time or fail in
+                // Kimai (end < begin -> 400) and drop the stamp as permanent.
+                // A sheet that began AFTER the event cannot be its target -
+                // an obsolete no-op is the honest answer.
+                if (IsSheetNewerThanEvent(status.StartedAt, timestamp))
+                {
+                    logger.LogWarning(
+                        "Offline stop at {Timestamp}: active timesheet started at {StartedAt} - after the event; obsolete no-op",
+                        timestamp, status.StartedAt);
+                    return (ObsoleteEventMessage, status.State);
+                }
+
                 await kimai.StopAtAsync(settings, employee, stopId, timestamp, cancellationToken);
                 return ($"Nachgetragen: Ausstempeln {timestamp.ToLocalTime():HH:mm}", "clockedOut");
 
@@ -438,6 +521,17 @@ public sealed class OfflineClockService(
                 if (settings.PauseActivityId is null)
                 {
                     throw new InvalidOperationException("Pausen-Aktivitaet muss konfiguriert sein.");
+                }
+
+                // Same replay-vs-live race as the stop case: pausing a sheet
+                // that began AFTER the event would backdate its end to before
+                // its own begin (Kimai rejects that and the event is lost).
+                if (IsSheetNewerThanEvent(status.StartedAt, timestamp))
+                {
+                    logger.LogWarning(
+                        "Offline pauseStart at {Timestamp}: work timesheet started at {StartedAt} - after the event; obsolete no-op",
+                        timestamp, status.StartedAt);
+                    return (ObsoleteEventMessage, status.State);
                 }
 
                 // Two-step transaction: end work, then open the pause from that
@@ -459,6 +553,16 @@ public sealed class OfflineClockService(
                 // Mirror the live path: only end a pause that is actually running.
                 if (status.State == "paused" && status.ActiveTimesheetId is int endPauseId)
                 {
+                    // Same replay-vs-live race as the stop case: a stale
+                    // pauseEnd must not kill a pause that began after it.
+                    if (IsSheetNewerThanEvent(status.StartedAt, timestamp))
+                    {
+                        logger.LogWarning(
+                            "Offline pauseEnd at {Timestamp}: pause timesheet started at {StartedAt} - after the event; obsolete no-op",
+                            timestamp, status.StartedAt);
+                        return (ObsoleteEventMessage, status.State);
+                    }
+
                     var resumeProject = employee.ProjectId
                         ?? settings.DefaultProjectId
                         ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
@@ -565,6 +669,33 @@ public sealed class OfflineClockService(
             "Offline pauseEnd at {Timestamp}: matching interrupted pause stop {Ended} (difference {DifferenceSeconds:N0}s) - resuming work",
             timestamp, ended, differenceSeconds);
         return true;
+    }
+
+    private const string ObsoleteEventMessage =
+        "Veraltet - das aktive Timesheet wurde erst nach diesem Ereignis gestartet.";
+
+    /// <summary>
+    /// Tolerance for <see cref="IsSheetNewerThanEvent"/>; same clock-skew
+    /// rationale as <see cref="RuntimeSettings.PauseEndRecoveryToleranceSeconds"/>.
+    /// </summary>
+    private const int StaleEventToleranceSeconds = 30;
+
+    /// <summary>
+    /// True when the ACTIVE timesheet began AFTER this event's timestamp.
+    /// Such a sheet can never be the event's target: while this event waited
+    /// in an outbox, the employee must have stamped live again (the live
+    /// endpoints do not share <see cref="_syncLock"/>).
+    /// </summary>
+    private bool IsSheetNewerThanEvent(string? startedAt, DateTimeOffset timestamp)
+    {
+        if (!DateTimeOffset.TryParse(startedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var started))
+        {
+            // Missing or unparseable begin: keep today's behavior instead of
+            // dropping legitimate stops over a parsing hiccup.
+            return false;
+        }
+
+        return (started - timestamp).TotalSeconds > StaleEventToleranceSeconds;
     }
 
     /// <summary>

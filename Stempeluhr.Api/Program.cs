@@ -23,7 +23,19 @@ builder.Services.AddHostedService<OfflineOutboxBackgroundService>();
 builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 20));
 builder.Services.AddScoped<IClockService, ClockService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
-builder.Services.AddHttpClient<IKimaiClient, KimaiClient>();
+builder.Services.AddHttpClient<IKimaiClient, KimaiClient>(client =>
+{
+    // Every Kimai call runs under the global sync lock: one hung connection
+    // (TCP black hole) must not freeze sync requests AND outbox flushes for
+    // the HttpClient default timeout of 100 s per call.
+    client.Timeout = TimeSpan.FromSeconds(15);
+}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    // The singleton OfflineClockService holds this typed client for the whole
+    // process lifetime - without pool rotation a Kimai IP change (NAS/Docker
+    // restart) would keep hitting the stale DNS entry until the API restarts.
+    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+});
 
 // Behind a reverse proxy (Cloudflared/nginx on the NAS) every kiosk shares the
 // proxy IP, which would make the kiosk sync rate limiter a single global

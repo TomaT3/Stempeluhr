@@ -27,12 +27,20 @@ public sealed record NfcClockRequest(string? CardId, string? Action, string? Ter
 
 public sealed record OfflineSyncRequest(IReadOnlyList<OfflineNfcClockEventDto>? Events);
 
+/// <summary>
+/// One queued kiosk action from the browser client, submitted with its
+/// original action timestamp so offline events can be replayed with
+/// backdating. <paramref name="NfcCardId"/> optionally carries the card that
+/// unlocked the kiosk session (live-path parity: actions of an NFC-unlocked
+/// session replay without a PIN - the card must map to the same employee).
+/// </summary>
 public sealed record OfflineKioskClockEventDto(
     string EventId,
     string EmployeeId,
     string? Pin,
     string Action,
-    DateTimeOffset PerformedAt);
+    DateTimeOffset PerformedAt,
+    string? NfcCardId = null);
 
 public sealed record OfflineKioskSyncRequest(IReadOnlyList<OfflineKioskClockEventDto>? Events);
 

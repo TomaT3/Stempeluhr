@@ -27,6 +27,41 @@ public sealed class RequestRateLimiterTests
     }
 
     /// <summary>
+    /// Regression tests for the review finding that the kiosk sync limit
+    /// bounded requests but not events (20 req x 100 events = 2,000 PIN
+    /// guesses per minute): batches are now priced by their event count.
+    /// </summary>
+    [Fact]
+    public void Cost_IsChargedAgainstTheWindowBudget()
+    {
+        var limiter = new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 10);
+
+        Assert.True(limiter.TryAcquire("1.2.3.4", 6));
+        Assert.True(limiter.TryAcquire("1.2.3.4", 4));
+        // Budget spent: even a single unit is rejected now.
+        Assert.False(limiter.TryAcquire("1.2.3.4"));
+    }
+
+    [Fact]
+    public void CostAboveBudget_FailsClosed_WithoutPartialGrant()
+    {
+        var limiter = new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 3);
+
+        // A 100-event batch priced at cost 10 must not slip through.
+        Assert.False(limiter.TryAcquire("1.2.3.4", 10));
+    }
+
+    [Fact]
+    public void NonPositiveCost_CountsAsSingleRequest()
+    {
+        var limiter = new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 2);
+
+        Assert.True(limiter.TryAcquire("1.2.3.4", 0));
+        Assert.True(limiter.TryAcquire("1.2.3.4", -5));
+        Assert.False(limiter.TryAcquire("1.2.3.4"));
+    }
+
+    /// <summary>
     /// Regression test for the review finding: the table used to grow without
     /// bound with unique keys because lazy eviction only replaced keys that
     /// came back.

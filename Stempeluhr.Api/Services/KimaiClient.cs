@@ -125,11 +125,42 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             if (created.ValueKind is JsonValueKind.Object && created.TryGetProperty("id", out var idProperty) && idProperty.ValueKind == JsonValueKind.Number)
             {
                 var timesheetId = idProperty.GetInt32();
-                await SendAsync<JsonElement>(
-                    settings.BaseUrl, employee.ApiToken, HttpMethod.Patch,
-                    $"api/timesheets/{timesheetId}",
-                    new { begin = body.begin },
-                    cancellationToken);
+                try
+                {
+                    // Same transient-retry as the end-backdate: without it ONE
+                    // 5xx/network hiccup left the sheet running with begin=now.
+                    await BackdatePatchAsync(
+                        settings, employee, "begin-backdate", timesheetId, startedAt,
+                        new { begin = body.begin },
+                        cancellationToken);
+                }
+                catch (Exception backdateEx) when (IsTransientBackdateFailure(backdateEx))
+                {
+                    // The sheet now runs with begin=now: a later offline replay
+                    // sees IsRunning == true and answers "Lief bereits" - the
+                    // wrong start time would persist silently. Stop the
+                    // misdated sheet so the replay can recreate it with the
+                    // intended begin instead.
+                    logger.LogWarning(
+                        backdateEx,
+                        "Kimai: begin-backdate for timesheet {TimesheetId} failed after retries - stopping the misdated sheet (intended begin {Intended}) so a later replay can recreate it",
+                        timesheetId, startedAt);
+                    try
+                    {
+                        await SendAsync<JsonElement>(
+                            settings.BaseUrl, employee.ApiToken, HttpMethod.Patch,
+                            $"api/timesheets/{timesheetId}/stop",
+                            null,
+                            cancellationToken);
+                    }
+                    catch (Exception stopEx)
+                    {
+                        logger.LogError(
+                            stopEx,
+                            "Kimai: could not stop misdated timesheet {TimesheetId}; it keeps begin=now instead of {Intended}. Manual correction required.",
+                            timesheetId, startedAt);
+                    }
+                }
             }
             else
             {
@@ -157,33 +188,54 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         // went through but this PATCH is lost to a transient error, the
         // timesheet keeps end=now and a later offline replay would see
         // IsRunning == false - it could never correct the end time on its own.
-        // Retry the backdate briefly, and if it still fails log the timesheet
-        // ID loudly so a wrong end time stays traceable for manual correction.
-        var endPath = $"api/timesheets/{timesheetId}";
-        var body = new { end = stoppedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz") };
+        await BackdatePatchAsync(
+            settings, employee, "end-backdate", timesheetId, stoppedAt,
+            new { end = stoppedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz") },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// PATCHes one timestamp correction (begin/end backdate) with a short
+    /// transient-retry loop. A lost backdate silently leaves a WRONG time
+    /// behind (begin=now keeps running; end=now shifts worked time) and a
+    /// later offline replay usually cannot correct it anymore - the retry
+    /// used to exist only for the end-backdate; the begin-backdate in
+    /// <see cref="StartAtAsync"/>'s old-Kimai fallback now shares the same
+    /// mechanism, so one transient 5xx no longer freezes a wrong start time.
+    /// </summary>
+    private async Task BackdatePatchAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        string what,
+        int timesheetId,
+        DateTimeOffset intendedTimestamp,
+        object body,
+        CancellationToken cancellationToken)
+    {
+        var path = $"api/timesheets/{timesheetId}";
 
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                await SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Patch, endPath, body, cancellationToken);
+                await SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Patch, path, body, cancellationToken);
                 return;
             }
             catch (Exception ex) when (IsTransientBackdateFailure(ex) && attempt < BackdateRetryCount)
             {
                 logger.LogWarning(
                     ex,
-                    "Kimai: end-backdate for timesheet {TimesheetId} failed (attempt {Attempt}/{Retries}); retrying",
-                    timesheetId, attempt, BackdateRetryCount);
+                    "Kimai: {What} for timesheet {TimesheetId} failed (attempt {Attempt}/{Retries}); retrying",
+                    what, timesheetId, attempt, BackdateRetryCount);
                 await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cancellationToken);
             }
             catch (Exception ex) when (IsTransientBackdateFailure(ex))
             {
                 logger.LogError(
                     ex,
-                    "Kimai: end-backdate for timesheet {TimesheetId} (employee {Employee}) failed after {Retries} attempts; " +
-                    "the timesheet may keep end=now instead of {End}. Manual correction may be required.",
-                    timesheetId, employee.Id, BackdateRetryCount, stoppedAt);
+                    "Kimai: {What} for timesheet {TimesheetId} (employee {Employee}) failed after {Retries} attempts; " +
+                    "the timesheet may keep a timestamp other than {Intended}. Manual correction may be required.",
+                    what, timesheetId, employee.Id, BackdateRetryCount, intendedTimestamp);
                 throw;
             }
         }

@@ -68,6 +68,21 @@ Clients sollten daher per NTP synchronisiert sein (der Raspberry Pi tut das
 standardmaessig ueber systemd-timesyncd); laeuft ein Client ohne
 Zeitsynchronisation, den Wert in der Admin-Umgebung entsprechend erhoehen.
 
+### Bekannte Grenze: Reihenfolge beim Live-Apply nach einer Stoerung
+
+Die "eine Timeline"-Garantie gilt fuer die **Outbox**: Sobald Events in der
+Server-Outbox warten, werden alle Backlogs (NFC- und Kiosk-Queue zusammen)
+strikt in Event-Zeitordnung abgespielt. Im **Live-Pfad** dagegen (Outbox leer,
+Kimai erreichbar - der Normalfall direkt nach einer Störungserholung, weil
+beide Clients ihre Events clientseitig queuen und danach selbst synchronisieren)
+werden zwei unabhaengige Sync-Requests in **Ankunftsreihenfolge** angewendet,
+nicht in Event-Zeitordnung. Innerhalb eines Requests bleibt die Ordnung stets
+erhalten; es kann aber passieren, dass z. B. ein NFC-Toggle@09:00 vor einem
+Kiosk-pauseStart@08:00 ankommt und dann gegen einen anderen Zustand abgeleitet
+wird. Praktische Gegenmassnahme: Waehrend einer Stoerung pro Mitarbeiter bei
+einem Terminal bleiben, bis der Nachtrag durch ist. Ein kurzes serverseitiges
+Merge-Fenster ueberlappender Requests ist als moeglicher Ausbau notiert.
+
 ## Raspberry Pi NFC-Terminal
 
 Fuer ein Terminal mit Raspberry Pi 5, Touchdisplay und ACR122U gibt es einen
@@ -173,7 +188,19 @@ Kiosk-Browsers ueberlebt. Das ist eine bewusste Abwaegung:
 
 Zusaetzlich gilt: Der Sync-Endpoint `/api/kiosk/clock/sync` ist unauthentifiziert
 (4-stellige PIN als einziger Schutz), wird aber per Client-IP gedrosselt
-(20 Requests/60 s) und nimmt maximal 100 Events pro Batch an.
+(20 Request-Einheiten/60 s) und nimmt maximal 100 Events pro Batch an. Das
+Budget wird dabei nach **Event-Anzahl** bepreist (10 Events = 1
+Request-Einheit), und eine Batch-Verarbeitung bricht beim ersten
+PIN-Fehlschlag ab - die uebrigen Events des Batches bleiben in der
+Client-Queue und werden einzeln in Folgerunden erneut versucht. Pro Request
+entsteht so hoechstens **ein** PIN-Vergleichsergebnis; massenhaftes
+Durchprobieren von PINs ueber grosse Batches ist damit ausgeschlossen (ein
+Angreifer mit eigenen Requests bleibt auf die 20 Requests/60 s begrenzt).
+
+Der Replay akzeptiert daneben die NFC-Karten-ID, mit der die Session am
+Terminal entsperrt wurde (Paritaet zum Live-Pfad, der Karten-Touch ohne PIN
+authentifiziert). Die Karte wird nur akzeptiert, wenn sie demselben
+Mitarbeiter zugeordnet ist wie die Event-Angabe.
 
 Wichtig zur Einordnung: Wenn alle Geraete wie ueblich ueber den
 Cloudflare-Tunnel zugreifen, teilen sie sich die oeffentliche IP des Standorts -

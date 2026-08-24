@@ -428,11 +428,137 @@ public sealed class OfflineClockServiceTests
         Assert.Equal(operationsBefore, kimai.Operations.Count);
     }
 
+    [Fact]
+    public async Task StaleQueuedStop_DoesNotKillNewerLiveTimesheet()
+    {
+        var (service, kimai) = CreateService();
+
+        // Outage: the stop@08:00 lands in the outbox (batch processing plus
+        // the trailing flush each burn one failing status call).
+        kimai.FailNextStatusCalls = 2;
+        var queued = await service.SyncKioskAsync([Kiosk("s1", "stop", T08)]);
+        Assert.Equal(1, queued.Buffered);
+        Assert.Empty(kimai.Operations);
+
+        // Recovery - and the employee stamps IN LIVE at 12:00 via the live
+        // endpoint path (which does not share the sync lock). The outbox now
+        // holds a stop OLDER than the running sheet's begin.
+        kimai.SimulateLiveStart(T12);
+
+        // Without the stale-event guard this replay derived a stop for the
+        // NEW sheet and backdated it to 08:00 - before its own begin (Kimai
+        // would reject that with end < begin and the stamp was lost).
+        await service.FlushOutboxAsync();
+
+        var op = Assert.Single(kimai.Operations);
+        Assert.Equal(("start", T12), op);
+        Assert.True(kimai.IsRunning);
+    }
+
+    [Fact]
+    public async Task StaleQueuedPauseStart_DoesNotTruncateNewerLiveTimesheet()
+    {
+        var (service, kimai) = CreateService();
+
+        kimai.FailNextStatusCalls = 2;
+        var queued = await service.SyncKioskAsync([Kiosk("p1", "pauseStart", T08)]);
+        Assert.Equal(1, queued.Buffered);
+
+        // Live recovery: work starts at 12:00, THEN the stale pauseStart@08:00
+        // replays. Pausing that newer sheet would backdate its end to 08:00 -
+        // four hours of real work silently gone.
+        kimai.SimulateLiveStart(T12);
+
+        await service.FlushOutboxAsync();
+
+        var op = Assert.Single(kimai.Operations);
+        Assert.Equal(("start", T12), op);
+        Assert.True(kimai.IsRunning);
+        Assert.False(kimai.ActiveIsPause);
+    }
+
+    [Fact]
+    public async Task WrongPin_RejectsOnlyFirstEvent_RestOfBatchStaysQueued()
+    {
+        var (service, kimai) = CreateService();
+
+        // One batch, two events with DIFFERENT credentials' outcomes: b1 has
+        // a wrong PIN, b2 is correct. Answering both in ONE request would let
+        // an attacker harvest one PIN verdict per event (20 req x 100 events
+        // = 2,000 guesses/min); aborting at the first rejection caps ONE
+        // request at exactly ONE verdict.
+        var result = await service.SyncKioskAsync(
+        [
+            Kiosk("b1", "start", T08, pin: "0000"),
+            Kiosk("b2", "start", T12),
+        ]);
+
+        Assert.Collection(
+            result.Results,
+            r =>
+            {
+                Assert.Equal("b1", r.EventId);
+                Assert.Equal("rejected", r.Status);
+                Assert.Equal("Mitarbeiter nicht gefunden oder PIN falsch.", r.Message);
+            },
+            r =>
+            {
+                Assert.Equal("b2", r.EventId);
+                Assert.Equal("buffered", r.Status);
+            });
+        Assert.Empty(kimai.Operations);
+
+        // The retained event drains on the NEXT round (still one verdict per
+        // round) - a legitimate backlog survives instead of being mass-dropped.
+        var retry = await service.SyncKioskAsync([Kiosk("b2", "start", T08)]);
+
+        Assert.Equal(1, retry.Accepted);
+        var op = Assert.Single(kimai.Operations);
+        Assert.Equal(("start", T08), op);
+        Assert.True(kimai.IsRunning);
+    }
+
+    [Fact]
+    public async Task KioskReplay_WithNfcCardId_AppliesWithoutPin()
+    {
+        var (service, kimai) = CreateService();
+
+        // NFC-unlocked session whose PIN was never entered: the replay must
+        // resolve the employee by the card, mirroring the live kiosk path.
+        var result = await service.SyncKioskAsync(
+        [
+            new OfflineKioskClockEventDto("n1", "max", null, "start", T08, NfcCardId: "04AB"),
+        ]);
+
+        Assert.Equal(1, result.Accepted);
+        Assert.Equal(("start", T08), Assert.Single(kimai.Operations));
+        Assert.True(kimai.IsRunning);
+    }
+
+    [Fact]
+    public async Task KioskReplay_NfcCardOfAnotherEmployee_IsRejected()
+    {
+        var (service, kimai) = CreateService();
+
+        // Anna's session id paired with MAX's card: the live path accepts a
+        // card only when it maps to the SAME employee id - the replay must
+        // never become a way around that check.
+        var result = await service.SyncKioskAsync(
+        [
+            new OfflineKioskClockEventDto("n1", "anna", null, "start", T08, NfcCardId: "04AB"),
+        ]);
+
+        var single = Assert.Single(result.Results);
+        Assert.Equal("rejected", single.Status);
+        Assert.Empty(kimai.Operations);
+        Assert.False(kimai.IsRunning);
+    }
+
     private static DateTimeOffset Parse(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
 
-    private static OfflineKioskClockEventDto Kiosk(string eventId, string action, DateTimeOffset at) =>
-        new(eventId, "max", "1234", action, at);
+    private static OfflineKioskClockEventDto Kiosk(string eventId, string action, DateTimeOffset at, string? pin = "1234") =>
+        new(eventId, "max", pin, action, at);
 
     private static (OfflineClockService Service, FakeKimaiClient Kimai) CreateService()
     {
@@ -535,7 +661,8 @@ public sealed class OfflineClockServiceTests
 
         public EmployeeSettings? FindEmployee(RuntimeSettings settings, ClockRequest request) =>
             settings.Employees.FirstOrDefault(employee =>
-                employee.Id == request.EmployeeId && (request.Pin is null || employee.Pin == request.Pin));
+                employee.Id == request.EmployeeId &&
+                (string.IsNullOrWhiteSpace(employee.Pin) || employee.Pin == request.Pin));
 
         public EmployeeSettings? FindEmployeeByPin(RuntimeSettings settings, string? pin) => null;
 
@@ -577,11 +704,27 @@ public sealed class OfflineClockServiceTests
         private int? _activeTimesheetId;
         private int? _activeActivityId;
         private bool _activeIsPause;
+        private DateTimeOffset? _activeBeganAt;
         private readonly List<(int ActivityId, DateTimeOffset EndedAt)> _stoppedTimesheets = [];
 
         public bool IsRunning => _activeTimesheetId is not null;
 
         public bool ActiveIsPause => _activeTimesheetId is not null && _activeIsPause;
+
+        /// <summary>
+        /// Simulates a LIVE stamp via the live endpoint path (which does not
+        /// share the offline service's sync lock): the active sheet begins at
+        /// <paramref name="beganAt"/> without any replay operation involved.
+        /// Used to build replay-vs-live race scenarios.
+        /// </summary>
+        public void SimulateLiveStart(DateTimeOffset beganAt)
+        {
+            Operations.Add(("start", beganAt));
+            _activeTimesheetId = ++_timesheetCounter;
+            _activeActivityId = 9;
+            _activeIsPause = false;
+            _activeBeganAt = beganAt;
+        }
 
         public Task<ClockStatusDto> GetStatusAsync(
             RuntimeSettings settings,
@@ -599,7 +742,7 @@ public sealed class OfflineClockServiceTests
             return Task.FromResult(new ClockStatusDto(
                 running,
                 _activeTimesheetId,
-                running ? "2026-08-24T00:00:00Z" : null,
+                running ? (_activeBeganAt ?? Parse("2026-08-24T00:00:00Z")).ToString("yyyy-MM-dd'T'HH:mm:sszzz") : null,
                 0,
                 state,
                 running ? "Eingestempelt" : "Nicht eingestempelt"));
@@ -623,6 +766,7 @@ public sealed class OfflineClockServiceTests
             _activeTimesheetId = ++_timesheetCounter;
             _activeActivityId = activityId;
             _activeIsPause = settings.PauseActivityId == activityId;
+            _activeBeganAt = startedAt;
             return Task.CompletedTask;
         }
 
@@ -642,6 +786,7 @@ public sealed class OfflineClockServiceTests
             _activeTimesheetId = null;
             _activeActivityId = null;
             _activeIsPause = false;
+            _activeBeganAt = null;
             return Task.CompletedTask;
         }
 
