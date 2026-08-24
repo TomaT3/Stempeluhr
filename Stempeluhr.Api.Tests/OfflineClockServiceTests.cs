@@ -13,6 +13,9 @@ namespace Stempeluhr.Api.Tests;
 /// - the outbox replays strictly in scan order across flush rounds
 ///   (failed entries go back to the FRONT)
 /// - a new batch never jumps over a backlog that is still in the outbox
+///   (both sync paths)
+/// - NFC and kiosk backlogs replay as ONE timeline in event-time order,
+///   never "all NFC first, then all kiosk"
 ///
 /// Note on the failure counters: every sync runs an opportunistic flush at
 /// its end, so simulating an ongoing outage needs one failing status call
@@ -163,6 +166,68 @@ public sealed class OfflineClockServiceTests
         Assert.Equal(T08, kimai.Operations[0].At);
         Assert.Equal("stop", kimai.Operations[1].Kind);
         Assert.Equal(T12, kimai.Operations[1].At);
+    }
+
+    [Fact]
+    public async Task NfcBatch_IsQueuedBehindNfcBacklog_WhenKimaiStillDown()
+    {
+        var (service, kimai) = CreateService();
+
+        // Kimai down: the first scan lands in the outbox (processing +
+        // trailing flush fail).
+        kimai.FailNextStatusCalls = 2;
+        await service.SyncAsync([new OfflineNfcClockEventDto("n1", "04AB", "term", T08)]);
+        Assert.Empty(kimai.Operations);
+
+        // Second batch while Kimai is STILL down: its leading flush must fail
+        // so the backlog survives - then the new scan has to be queued BEHIND
+        // it, never applied ahead of the earlier one.
+        kimai.FailNextStatusCalls = 1;
+        var second = await service.SyncAsync([new OfflineNfcClockEventDto("n2", "04AB", "term", T12)]);
+
+        Assert.Equal(0, second.Accepted);
+        Assert.Equal(1, second.Buffered);
+        Assert.Equal("buffered", second.Results.Single().Status);
+
+        // The trailing flush of this very request applies everything in
+        // scan order once the fake recovers.
+        Assert.Equal(2, kimai.Operations.Count);
+        Assert.Equal("start", kimai.Operations[0].Kind);
+        Assert.Equal(T08, kimai.Operations[0].At);
+        Assert.Equal("stop", kimai.Operations[1].Kind);
+        Assert.Equal(T12, kimai.Operations[1].At);
+        Assert.False(kimai.IsRunning);
+    }
+
+    [Fact]
+    public async Task MixedNfcAndKioskBacklog_ReplaysInEventOrder_AcrossBothQueues()
+    {
+        var (service, kimai) = CreateService();
+
+        // During the outage a kiosk START @08:00 lands in the kiosk outbox.
+        kimai.FailNextStatusCalls = 2;
+        await service.SyncKioskAsync([Kiosk("k1", "start", T08)]);
+        Assert.Empty(kimai.Operations);
+
+        // Later the same employee scans his NFC card @12:00; Kimai is still
+        // down (leading flush fails), so the toggle is queued into the NFC
+        // outbox while the start waits in the kiosk outbox.
+        kimai.FailNextStatusCalls = 1;
+        var second = await service.SyncAsync([new OfflineNfcClockEventDto("n1", "04AB", "term", T12)]);
+        Assert.Equal(1, second.Buffered);
+
+        // Recovery: the flush must replay strictly by event time ACROSS both
+        // queues. Draining NFC-first would apply the toggle against the
+        // not-yet-started state, derive "start" at 12:00 and turn the kiosk
+        // start@08:00 into a "Lief bereits" no-op - losing the real stamp.
+        await service.FlushOutboxAsync();
+
+        Assert.Equal(2, kimai.Operations.Count);
+        Assert.Equal("start", kimai.Operations[0].Kind);
+        Assert.Equal(T08, kimai.Operations[0].At);
+        Assert.Equal("stop", kimai.Operations[1].Kind);
+        Assert.Equal(T12, kimai.Operations[1].At);
+        Assert.False(kimai.IsRunning);
     }
 
     private static DateTimeOffset Parse(string value) =>

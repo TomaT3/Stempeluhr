@@ -16,6 +16,13 @@ namespace Stempeluhr.Api.Services;
 ///   a background service flushes the outbox periodically, so a sync call
 ///   during a Kimai outage never loses events and they are retried without a
 ///   new request from the client.
+/// - Global ordering: both outboxes (NFC + kiosk) are drained as ONE timeline
+///   in event-time order. Draining them sequentially (all NFC first, then all
+///   kiosk) would invert the toggle derivation when one employee mixes
+///   terminals during an outage.
+/// - Concurrency: every read/mutation of the outbox lists happens while
+///   holding <see cref="_syncLock"/>, so sync requests serialize against each
+///   other and against the periodic background flush.
 /// - Permanent errors (unknown card, wrong PIN, missing config) are reported
 ///   per event as "rejected" instead of failing the whole batch.
 /// </summary>
@@ -26,6 +33,9 @@ public sealed class OfflineClockService(
     IOfflineEventIdStore eventIdStore,
     ILogger<OfflineClockService> logger) : IOfflineClockService
 {
+    private const string BufferedStatus = "buffered";
+    private const string BufferedMessage = "Kimai nicht erreichbar - wird automatisch nachgetragen.";
+
     // Plain lists instead of queues: every mutation happens while holding
     // _syncLock, and an entry whose replay failed transiently must go back to
     // the FRONT (Insert at index 0). A queue would move it to the tail and the
@@ -61,8 +71,7 @@ public sealed class OfflineClockService(
                 var pending = cardTimeline[i];
                 _outbox.Add(pending);
                 buffered++;
-                results.Add(new OfflineSyncEventResultDto(pending.EventId, "buffered",
-                    "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, BufferedMessage));
             }
         }
 
@@ -72,35 +81,32 @@ public sealed class OfflineClockService(
             .OrderBy(g => g.Min(e => e.ScannedAt))
             .ToList();
 
-        // Global replay order across batches: when the outbox still holds
-        // events (e.g. the client lost its own queue - the exact case this
-        // safety-net exists for), a newly arriving batch must not race ahead
-        // of it. Otherwise later scans would be applied against a Kimai state
-        // that misses earlier ones, turning them into "Lief nicht" no-ops
-        // acknowledged as applied. Drain what we can; if a backlog remains
-        // (Kimai still unreachable), append the incoming batch behind it.
-        await FlushOutboxAsync(cancellationToken);
-        if (_outbox.Count > 0 || _kioskOutbox.Count > 0)
+        // Everything from here on reads/mutates the outboxes or applies stamps,
+        // so hold _syncLock for the whole operation: parallel sync requests and
+        // the background flush must not interleave (List<T> is not thread-safe,
+        // and the global ordering guarantee depends on serialization).
+        await _syncLock.WaitAsync(cancellationToken);
+        try
         {
-            foreach (var entry in orderedGroups.SelectMany(g => g.OrderBy(e => e.ScannedAt)))
+            // Global replay order across batches: never let a fresh batch jump
+            // over events still waiting in the outbox - see
+            // <see cref="BufferBatchBehindBacklogAsync{T}"/>.
+            var queuedBehindBacklog = await BufferBatchBehindBacklogAsync(
+                orderedGroups.SelectMany(g => g.OrderBy(e => e.ScannedAt)).ToList(),
+                _outbox,
+                entry => new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, BufferedMessage),
+                results,
+                cancellationToken);
+            if (queuedBehindBacklog > 0)
             {
-                _outbox.Add(entry);
-                buffered++;
-                results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
-                    "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                buffered += queuedBehindBacklog;
+                return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
             }
 
-            await FlushOutboxAsync(cancellationToken);
-            return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
-        }
-
-        foreach (var group in orderedGroups)
-        {
-            var timeline = group.OrderBy(e => e.ScannedAt).ToList();
-
-            await _syncLock.WaitAsync(cancellationToken);
-            try
+            foreach (var group in orderedGroups)
             {
+                var timeline = group.OrderBy(e => e.ScannedAt).ToList();
+
                 for (var i = 0; i < timeline.Count; i++)
                 {
                     var entry = timeline[i];
@@ -147,14 +153,14 @@ public sealed class OfflineClockService(
                     }
                 }
             }
-            finally
-            {
-                _syncLock.Release();
-            }
-        }
 
-        // Opportunistically flush anything waiting in the outbox once connectivity returns.
-        await FlushOutboxAsync(cancellationToken);
+            // Opportunistically flush anything waiting in the outbox once connectivity returns.
+            await FlushOutboxCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _syncLock.Release();
+        }
 
         return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
     }
@@ -197,42 +203,40 @@ public sealed class OfflineClockService(
             .OrderBy(e => e.PerformedAt)
             .ToList();
 
-        // Same cross-batch rule as the NFC path: never let a fresh batch jump
-        // over events that are still waiting in the outbox.
-        await FlushOutboxAsync(cancellationToken);
-        if (_outbox.Count > 0 || _kioskOutbox.Count > 0)
-        {
-            foreach (var entry in orderedKioskEvents)
-            {
-                _kioskOutbox.Add(entry);
-                buffered++;
-                results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
-                    "Kimai nicht erreichbar - wird automatisch nachgetragen."));
-            }
-
-            await FlushOutboxAsync(cancellationToken);
-            return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
-        }
-
-        void BufferKioskFrom(IReadOnlyList<OfflineKioskClockEventDto> pendingEvents, int failedIndex)
-        {
-            // Same rule as the NFC path: the failed event and everything after
-            // it must replay together. Applying later actions against a Kimai
-            // state that misses the buffered ones turns them into "Lief nicht"
-            // no-ops that get acknowledged as applied - silently losing them.
-            for (var i = failedIndex; i < pendingEvents.Count; i++)
-            {
-                var pending = pendingEvents[i];
-                _kioskOutbox.Add(pending);
-                buffered++;
-                results.Add(new OfflineSyncEventResultDto(pending.EventId, "buffered",
-                    "Kimai nicht erreichbar - wird automatisch nachgetragen."));
-            }
-        }
-
+        // Same locking rule as the NFC path: serialize the whole operation
+        // against parallel syncs and the background flush.
         await _syncLock.WaitAsync(cancellationToken);
         try
         {
+            // Same cross-batch rule as the NFC path: never let a fresh batch jump
+            // over events that are still waiting in the outbox.
+            var queuedBehindBacklog = await BufferBatchBehindBacklogAsync(
+                orderedKioskEvents,
+                _kioskOutbox,
+                entry => new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, BufferedMessage),
+                results,
+                cancellationToken);
+            if (queuedBehindBacklog > 0)
+            {
+                buffered += queuedBehindBacklog;
+                return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
+            }
+
+            void BufferKioskFrom(IReadOnlyList<OfflineKioskClockEventDto> pendingEvents, int failedIndex)
+            {
+                // Same rule as the NFC path: the failed event and everything after
+                // it must replay together. Applying later actions against a Kimai
+                // state that misses the buffered ones turns them into "Lief nicht"
+                // no-ops that get acknowledged as applied - silently losing them.
+                for (var i = failedIndex; i < pendingEvents.Count; i++)
+                {
+                    var pending = pendingEvents[i];
+                    _kioskOutbox.Add(pending);
+                    buffered++;
+                    results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, BufferedMessage));
+                }
+            }
+
             for (var i = 0; i < orderedKioskEvents.Count; i++)
             {
                 var entry = orderedKioskEvents[i];
@@ -270,15 +274,52 @@ public sealed class OfflineClockService(
                     results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", ex.Message));
                 }
             }
+
+            await FlushOutboxCoreAsync(cancellationToken);
         }
         finally
         {
             _syncLock.Release();
         }
 
-        await FlushOutboxAsync(cancellationToken);
-
         return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
+    }
+
+    /// <summary>
+    /// Shared cross-batch rule of both sync paths: when the outbox still holds
+    /// events (e.g. the client lost its own queue - the exact case this
+    /// safety-net exists for), a newly arriving batch must not race ahead of
+    /// it. Otherwise later scans would be applied against a Kimai state that
+    /// misses earlier ones, turning them into "Lief nicht" no-ops acknowledged
+    /// as applied. Drains what it can; if a backlog survives (Kimai still
+    /// unreachable), the incoming batch is appended behind it in scan order
+    /// instead of being applied live, followed by one opportunistic flush.
+    /// MUST be called while holding <see cref="_syncLock"/> - the count check
+    /// and the appends are atomic against parallel sync requests and the
+    /// background flush this way. Returns the number of buffered events
+    /// (0 means no backlog existed and the caller processes live).
+    /// </summary>
+    private async Task<int> BufferBatchBehindBacklogAsync<T>(
+        IReadOnlyList<T> orderedEvents,
+        List<T> outbox,
+        Func<T, OfflineSyncEventResultDto> createBufferedResult,
+        List<OfflineSyncEventResultDto> results,
+        CancellationToken cancellationToken)
+    {
+        await FlushOutboxCoreAsync(cancellationToken);
+        if (_outbox.Count == 0 && _kioskOutbox.Count == 0)
+        {
+            return 0;
+        }
+
+        foreach (var entry in orderedEvents)
+        {
+            outbox.Add(entry);
+            results.Add(createBufferedResult(entry));
+        }
+
+        await FlushOutboxCoreAsync(cancellationToken);
+        return orderedEvents.Count;
     }
 
     private async Task<(string Message, string State)> ApplyKioskEventAsync(OfflineKioskClockEventDto entry, CancellationToken cancellationToken)
@@ -412,12 +453,40 @@ public sealed class OfflineClockService(
         await _syncLock.WaitAsync(cancellationToken);
         try
         {
-            var drained = 0;
+            await FlushOutboxCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _syncLock.Release();
+        }
+    }
 
-            // NFC outbox: replay via card lookup + toggle. A transiently failed
-            // entry goes back to the FRONT (index 0) so the next flush starts
-            // with the same, oldest scan - never with a later one.
-            while (_outbox.Count > 0)
+    /// <summary>
+    /// Drains BOTH outboxes as ONE timeline in event-time order. Replaying
+    /// them sequentially (whole NFC outbox first, then kiosk) would invert the
+    /// toggle derivation whenever one employee's events sit in both queues:
+    /// a kiosk start@08:00 waiting in the kiosk outbox while an NFC
+    /// toggle@17:00 replays first runs the toggle against the not-yet-started
+    /// state, derives "start" at 17:00, and the real stamp is lost as a
+    /// "Lief bereits" no-op. Each list is individually chronological (appends
+    /// happen in scan order, transiently failed entries go back to the FRONT),
+    /// so comparing heads merges both lists like merge-sort. A transient
+    /// failure puts the head back at the front of ITS list and ends the round -
+    /// the failed entry stays the globally oldest event, so the next flush
+    /// resumes in the same order. Callers must hold <see cref="_syncLock"/>.
+    /// </summary>
+    private async Task FlushOutboxCoreAsync(CancellationToken cancellationToken)
+    {
+        var drained = 0;
+
+        while (_outbox.Count > 0 || _kioskOutbox.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var takeNfc = _outbox.Count > 0
+                && (_kioskOutbox.Count == 0 || _outbox[0].ScannedAt <= _kioskOutbox[0].PerformedAt);
+
+            if (takeNfc)
             {
                 var nfcEntry = _outbox[0];
                 _outbox.RemoveAt(0);
@@ -462,11 +531,10 @@ public sealed class OfflineClockService(
                     drained++;
                 }
             }
-
-            // Kiosk outbox: replay with explicit action. Same front-reinsert
-            // rule as the NFC outbox above.
-            while (_kioskOutbox.Count > 0)
+            else
             {
+                // Kiosk outbox: replay with explicit action. Same front-reinsert
+                // rule as the NFC branch above.
                 var kioskEntry = _kioskOutbox[0];
                 _kioskOutbox.RemoveAt(0);
 
@@ -501,15 +569,11 @@ public sealed class OfflineClockService(
                     drained++;
                 }
             }
-
-            if (drained > 0)
-            {
-                logger.LogInformation("Outbox flushed {Count} offline event(s)", drained);
-            }
         }
-        finally
+
+        if (drained > 0)
         {
-            _syncLock.Release();
+            logger.LogInformation("Outbox flushed {Count} offline event(s)", drained);
         }
     }
 
