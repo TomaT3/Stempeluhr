@@ -304,6 +304,9 @@ public sealed class OfflineClockServiceTests
         public Task StartAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task StopAsync(RuntimeSettings settings, EmployeeSettings employee, int timesheetId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task StartPauseAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
