@@ -31,6 +31,12 @@ export abstract class ClockWorkflow implements OnDestroy {
   private lastNfcEventId: string | null = null;
   private hasInitializedNfcPolling = false;
   private nfcCardId: string | null = null;
+  /**
+   * Set when an offline-stamped action deliberately skipped the reset to
+   * the idle screen (unlocking again needs a PIN login, which is impossible
+   * offline). The reset then runs once connectivity has recovered.
+   */
+  private pendingResetOnRecovery = false;
   private readonly terminalId = this.readTerminalId();
 
   constructor() {
@@ -77,8 +83,14 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.message.set('');
         this.isBusy.set(false);
       },
-      error: () => {
-        this.message.set('PIN nicht gefunden');
+      error: (err) => {
+        const status = err?.status ?? 0;
+        // Network/server errors mean the PIN could NOT be checked -
+        // claiming "PIN nicht gefunden" would be wrong and would lock
+        // colleagues out of the terminal for the rest of an outage.
+        this.message.set(status === 0 || status >= 500
+          ? 'Offline - PIN kann derzeit nicht geprueft werden.'
+          : 'PIN nicht gefunden');
         this.pin.set('');
         this.isUnlocked.set(false);
         this.isBusy.set(false);
@@ -117,6 +129,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.isUnlocked.set(false);
     this.message.set('');
     this.isBusy.set(false);
+    this.pendingResetOnRecovery = false;
   }
 
   ngOnDestroy(): void {
@@ -142,6 +155,12 @@ export abstract class ClockWorkflow implements OnDestroy {
           // Connection just recovered: flush the offline queue immediately
           // instead of waiting for the 15 s retry timer.
           this.offlineQueue.syncNow().subscribe();
+          if (this.pendingResetOnRecovery) {
+            // PIN logins work again - release the terminal that was kept
+            // unlocked for offline stamping.
+            this.pendingResetOnRecovery = false;
+            this.back();
+          }
         }
         this.isOffline.set(false);
         this.handleLatestNfcEvent(latest.event);
@@ -224,7 +243,13 @@ export abstract class ClockWorkflow implements OnDestroy {
           // first offline-stamped action (all buttons and the NFC poll check
           // isBusy()).
           this.isBusy.set(false);
-          this.scheduleReset();
+          // Stay unlocked instead of resetting to the idle screen: coming
+          // back requires a PIN login, and that is impossible while the
+          // backend is unreachable - the terminal could then queue exactly
+          // ONE stamp per outage. The current employee keeps stamping at
+          // THIS terminal (the documented kiosk limitation anyway); once
+          // connectivity recovers, the NFC poll runs the deferred back().
+          this.pendingResetOnRecovery = true;
           return;
         }
 

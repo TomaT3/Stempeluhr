@@ -17,6 +17,8 @@ namespace Stempeluhr.Api.Tests;
 ///   (both sync paths)
 /// - NFC and kiosk backlogs replay as ONE timeline in event-time order,
 ///   never "all NFC first, then all kiosk"
+/// - a pauseEnd whose resume-start failed transiently after the pause stop
+///   succeeds resumes the work on the retry instead of dying as a no-op
 ///
 /// Note on the failure counters: every sync runs an opportunistic flush at
 /// its end, so simulating an ongoing outage needs one failing status call
@@ -27,6 +29,7 @@ public sealed class OfflineClockServiceTests
     private static readonly DateTimeOffset T08 = Parse("2026-08-24T08:00:00Z");
     private static readonly DateTimeOffset T10 = Parse("2026-08-24T10:00:00Z");
     private static readonly DateTimeOffset T12 = Parse("2026-08-24T12:00:00Z");
+    private static readonly DateTimeOffset T1230 = Parse("2026-08-24T12:30:00Z");
 
     [Fact]
     public async Task TransientFailure_BuffersWholeBatch_AndReplaysInScanOrder()
@@ -296,6 +299,61 @@ public sealed class OfflineClockServiceTests
         Assert.Equal(("start", T12), kimai.Operations[2]);
     }
 
+    [Fact]
+    public async Task PauseEnd_TransientFailureAfterPauseStop_ResumesWorkOnRetry()
+    {
+        var (service, kimai) = CreateService();
+
+        // Build up the timeline while Kimai is healthy: start, then a pause.
+        await service.SyncKioskAsync([Kiosk("p1", "start", T08)]);
+        await service.SyncKioskAsync([Kiosk("p2", "pauseStart", T12)]);
+        Assert.True(kimai.IsRunning);
+        Assert.True(kimai.ActiveIsPause);
+
+        // pauseEnd is a two-step transaction (stop the pause timesheet, then
+        // resume work). The resume-start fails transiently AFTER the pause
+        // stop already succeeded - exactly the recovery window after an
+        // outage. The event goes back into the outbox.
+        kimai.FailNextStartCalls = 1;
+        var failed = await service.SyncKioskAsync([Kiosk("p3", "pauseEnd", T1230)]);
+
+        Assert.Equal(0, failed.Accepted);
+        Assert.Equal(1, failed.Buffered);
+        Assert.Equal("buffered", failed.Results.Single().Status);
+
+        // Retry round: nothing is running anymore (the pause was already
+        // stopped). Without the partial-application recovery this retry was
+        // answered as a no-op and acknowledged as applied - leaving the
+        // employee clocked out for the rest of the day.
+        await service.FlushOutboxAsync();
+
+        Assert.Equal(5, kimai.Operations.Count);
+        Assert.Equal(("start", T08), kimai.Operations[0]);      // start work
+        Assert.Equal(("stop", T12), kimai.Operations[1]);       // pauseStart: end work
+        Assert.Equal(("start", T12), kimai.Operations[2]);      // pauseStart: open pause
+        Assert.Equal(("stop", T1230), kimai.Operations[3]);     // pauseEnd: stop pause
+        Assert.Equal(("start", T1230), kimai.Operations[4]);    // pauseEnd retry: resume work
+        Assert.True(kimai.IsRunning);
+        Assert.False(kimai.ActiveIsPause);
+    }
+
+    [Fact]
+    public async Task PauseEnd_WithWorkAlreadyRunning_IsANoOp()
+    {
+        var (service, kimai) = CreateService();
+
+        await service.SyncKioskAsync([Kiosk("w1", "start", T08)]);
+        var operationsBefore = kimai.Operations.Count;
+
+        // Work running but no pause (the transition completed some other way):
+        // a replayed pauseEnd must not touch anything.
+        var result = await service.SyncKioskAsync([Kiosk("w2", "pauseEnd", T1230)]);
+
+        Assert.Equal(1, result.Accepted);
+        Assert.Equal("Keine laufende Pause - Nachtrag nicht moeglich.", result.Results.Single().Message);
+        Assert.Equal(operationsBefore, kimai.Operations.Count);
+    }
+
     private static DateTimeOffset Parse(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
 
@@ -315,6 +373,11 @@ public sealed class OfflineClockServiceTests
             BaseUrl = "http://kimai.test",
             DefaultProjectId = 1,
             DefaultActivityId = 1,
+
+            // Lets the fake distinguish pause timesheets from work timesheets
+            // (StartAtAsync with this activity id opens a pause).
+            PauseActivityId = 42,
+
             Employees =
             [
                 new EmployeeSettings
@@ -430,10 +493,19 @@ public sealed class OfflineClockServiceTests
 
         public int FailNextStatusCalls { get; set; }
 
+        /// <summary>
+        /// Fails the next N StartAtAsync calls with a transient network error -
+        /// used to cut a two-step transaction (pauseStart/pauseEnd) in half.
+        /// </summary>
+        public int FailNextStartCalls { get; set; }
+
         private int _timesheetCounter;
         private int? _activeTimesheetId;
+        private bool _activeIsPause;
 
         public bool IsRunning => _activeTimesheetId is not null;
+
+        public bool ActiveIsPause => _activeTimesheetId is not null && _activeIsPause;
 
         public Task<ClockStatusDto> GetStatusAsync(
             RuntimeSettings settings,
@@ -447,12 +519,13 @@ public sealed class OfflineClockServiceTests
             }
 
             var running = _activeTimesheetId is not null;
+            var state = !running ? "clockedOut" : _activeIsPause ? "paused" : "working";
             return Task.FromResult(new ClockStatusDto(
                 running,
                 _activeTimesheetId,
                 running ? "2026-08-24T00:00:00Z" : null,
                 0,
-                running ? "working" : "clockedOut",
+                state,
                 running ? "Eingestempelt" : "Nicht eingestempelt"));
         }
 
@@ -464,8 +537,15 @@ public sealed class OfflineClockServiceTests
             DateTimeOffset startedAt,
             CancellationToken cancellationToken = default)
         {
+            if (FailNextStartCalls > 0)
+            {
+                FailNextStartCalls--;
+                throw new HttpRequestException("simulated transient start failure");
+            }
+
             Operations.Add(("start", startedAt));
             _activeTimesheetId = ++_timesheetCounter;
+            _activeIsPause = settings.PauseActivityId == activityId;
             return Task.CompletedTask;
         }
 

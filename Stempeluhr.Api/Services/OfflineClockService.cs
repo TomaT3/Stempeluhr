@@ -457,21 +457,47 @@ public sealed class OfflineClockService(
 
             case "pauseEnd":
                 // Mirror the live path: only end a pause that is actually running.
-                if (status.State != "paused" || status.ActiveTimesheetId is not int endPauseId)
+                if (status.State == "paused" && status.ActiveTimesheetId is int endPauseId)
                 {
-                    return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
+                    var resumeProject = employee.ProjectId
+                        ?? settings.DefaultProjectId
+                        ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
+                    var resumeActivity = employee.ActivityId
+                        ?? settings.DefaultActivityId
+                        ?? throw new InvalidOperationException("Aktivitaet muss konfiguriert sein.");
+
+                    await kimai.StopAtAsync(settings, employee, endPauseId, timestamp, cancellationToken);
+                    await kimai.StartAtAsync(settings, employee, resumeProject, resumeActivity, timestamp, cancellationToken);
+                    return ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
                 }
 
-                var resumeProject = employee.ProjectId
-                    ?? settings.DefaultProjectId
-                    ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
-                var resumeActivity = employee.ActivityId
-                    ?? settings.DefaultActivityId
-                    ?? throw new InvalidOperationException("Aktivitaet muss konfiguriert sein.");
+                if (!status.IsRunning)
+                {
+                    // Partial-application recovery: pauseEnd is a two-step
+                    // transaction (stop the pause timesheet, resume work). If a
+                    // previous replay stopped the pause but then failed
+                    // transiently on the resume-start, this retry arrives while
+                    // NOTHING is running. Answering the old no-op here would
+                    // acknowledge the event as applied and leave the employee
+                    // clocked out for the rest of the day - so finish exactly
+                    // the missing half instead. The event ID keeps this from
+                    // double-applying, and work already running is handled by
+                    // the no-op below (the transition completed some other way).
+                    var restartProject = employee.ProjectId
+                        ?? settings.DefaultProjectId
+                        ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
+                    var restartActivity = employee.ActivityId
+                        ?? settings.DefaultActivityId
+                        ?? throw new InvalidOperationException("Aktivitaet muss konfiguriert sein.");
 
-                await kimai.StopAtAsync(settings, employee, endPauseId, timestamp, cancellationToken);
-                await kimai.StartAtAsync(settings, employee, resumeProject, resumeActivity, timestamp, cancellationToken);
-                return ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
+                    logger.LogWarning(
+                        "Offline pauseEnd at {Timestamp}: nothing running - completing an interrupted pause end by resuming work",
+                        timestamp);
+                    await kimai.StartAtAsync(settings, employee, restartProject, restartActivity, timestamp, cancellationToken);
+                    return ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
+                }
+
+                return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
 
             default:
                 throw new InvalidOperationException($"Unbekannte Aktion: {action}");
