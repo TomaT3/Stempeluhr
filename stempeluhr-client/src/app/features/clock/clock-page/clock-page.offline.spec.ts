@@ -185,7 +185,7 @@ describe('ClockPage offline behaviour', () => {
     expect(component.selectedEmployee()).toBeNull();
   });
 
-  it('shows the offline banner and hides the pause button while offline', () => {
+  it('shows the offline banner while offline but keeps all stamp actions available', () => {
     const fixture = createComponent();
     fixture.detectChanges();
     const component = fixture.componentInstance;
@@ -209,15 +209,17 @@ describe('ClockPage offline behaviour', () => {
 
     expect(component.isOffline()).toBe(true);
 
-    // Banner is visible and states the offline limitation.
+    // Banner is visible and says stamps are queued (no false "no pause"
+    // limitation: the explicit kiosk path supports pause catch-up).
     const banner = fixture.nativeElement.querySelector('.offline-banner');
     expect(banner).not.toBeNull();
     expect(banner.textContent).toContain('OFFLINE-BETRIEB');
-    expect(banner.textContent).toContain('keine Pause');
+    expect(banner.textContent).toContain('nachgetragen');
+    expect(banner.textContent).not.toContain('keine Pause');
 
-    // The pause button must be hidden - only Ausstempeln remains.
+    // All stamp actions stay available - the kiosk queue supports pause.
     const pauseButton = fixture.nativeElement.querySelector('.stamp-button.pause');
-    expect(pauseButton).toBeNull();
+    expect(pauseButton).not.toBeNull();
     const stopButton = fixture.nativeElement.querySelector('.stamp-button.stop');
     expect(stopButton).not.toBeNull();
   });

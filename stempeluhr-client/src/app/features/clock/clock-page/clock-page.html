@@ -1,7 +1,7 @@
 @if (isOffline()) {
   <div class="offline-banner" role="status" aria-live="polite">
     <strong>OFFLINE-BETRIEB</strong>
-    <span>– nur Ein-/Ausstempeln möglich (keine Pause)</span>
+    <span>– Stempel werden gespeichert und nachgetragen</span>
     @if (offlineQueue.pendingCount().length > 0) {
       <span class="offline-count">{{ offlineQueue.pendingCount().length }}</span>
     }
@@ -87,12 +87,10 @@
 
       @if (clockState.isWorking()) {
         <div class="stamp-actions">
-          @if (!isOffline()) {
-            <button class="stamp-button pause" type="button" (click)="startPause()" [disabled]="isBusy()">
-              <span class="stamp-icon pause"></span>
-              <span class="stamp-label">Pause</span>
-            </button>
-          }
+          <button class="stamp-button pause" type="button" (click)="startPause()" [disabled]="isBusy()">
+            <span class="stamp-icon pause"></span>
+            <span class="stamp-label">Pause</span>
+          </button>
           <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
             <span class="stamp-icon square"></span>
             <span class="stamp-label">Ausstempeln</span>
@@ -100,12 +98,10 @@
         </div>
       } @else if (clockState.isPaused()) {
         <div class="stamp-actions">
-          @if (!isOffline()) {
-            <button class="stamp-button start" type="button" (click)="endPause()" [disabled]="isBusy()">
-              <span class="stamp-icon play"></span>
-              <span class="stamp-label">Pause beenden</span>
-            </button>
-          }
+          <button class="stamp-button start" type="button" (click)="endPause()" [disabled]="isBusy()">
+            <span class="stamp-icon play"></span>
+            <span class="stamp-label">Pause beenden</span>
+          </button>
           <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
             <span class="stamp-icon square"></span>
             <span class="stamp-label">Ausstempeln</span>
