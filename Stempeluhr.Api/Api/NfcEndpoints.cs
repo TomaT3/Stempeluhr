@@ -75,15 +75,6 @@ public static class NfcEndpoints
         {
             var ip = httpRequest.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
-            // Makes the KnownProxies setup verifiable from the logs: if the
-            // logged client is still the tunnel/gateway IP instead of the real
-            // device address, the trusted proxy list does not match yet.
-            logger.LogInformation(
-                "Kiosk clock sync from client {ClientIp} (X-Forwarded-For: {ForwardedFor}), {EventCount} event(s)",
-                ip,
-                httpRequest.Headers["X-Forwarded-For"].ToString() is { } forwarded && forwarded.Length > 0 ? forwarded : "-",
-                request.Events?.Count ?? 0);
-
             // The kiosk sync endpoint accepts arbitrary performedAt timestamps
             // and is only protected by the employee PIN, so it is an attractive
             // brute-force target. Throttle per client IP (the real client IP
@@ -95,6 +86,25 @@ public static class NfcEndpoints
             {
                 return Results.StatusCode(StatusCodes.Status429TooManyRequests);
             }
+
+            // Makes the KnownProxies setup verifiable from the logs. Deliberately
+            // AFTER the rate limiter (limited floods produce no log lines) and
+            // with only the first, length-capped XFF segment - the raw header is
+            // client-controlled and must not be able to flood or poison logs.
+            // Once KnownProxies is verified in production this line can drop to
+            // Debug level or be removed entirely.
+            var forwarded = httpRequest.Headers["X-Forwarded-For"].ToString();
+            var forwardedFirst = forwarded.Split(',')[0].Trim();
+            if (forwardedFirst.Length > 64)
+            {
+                forwardedFirst = forwardedFirst[..64];
+            }
+
+            logger.LogInformation(
+                "Kiosk clock sync from client {ClientIp} (X-Forwarded-For: {ForwardedFor}), {EventCount} event(s)",
+                ip,
+                forwardedFirst.Length == 0 ? "-" : forwardedFirst,
+                request.Events?.Count ?? 0);
 
             if (request.Events is { Count: > MaxSyncBatchSize })
             {

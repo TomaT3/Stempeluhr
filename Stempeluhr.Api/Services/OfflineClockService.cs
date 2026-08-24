@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Stempeluhr.Api.Models;
 
 namespace Stempeluhr.Api.Services;
@@ -27,8 +26,13 @@ public sealed class OfflineClockService(
     IOfflineEventIdStore eventIdStore,
     ILogger<OfflineClockService> logger) : IOfflineClockService
 {
-    private readonly ConcurrentQueue<OfflineNfcClockEventDto> _outbox = new();
-    private readonly ConcurrentQueue<OfflineKioskClockEventDto> _kioskOutbox = new();
+    // Plain lists instead of queues: every mutation happens while holding
+    // _syncLock, and an entry whose replay failed transiently must go back to
+    // the FRONT (Insert at index 0). A queue would move it to the tail and the
+    // next flush would start with a LATER scan of the same card, inverting the
+    // toggle order.
+    private readonly List<OfflineNfcClockEventDto> _outbox = new();
+    private readonly List<OfflineKioskClockEventDto> _kioskOutbox = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);
 
     public async Task<OfflineSyncResultDto> SyncAsync(IReadOnlyList<OfflineNfcClockEventDto> events, CancellationToken cancellationToken = default)
@@ -46,6 +50,22 @@ public sealed class OfflineClockService(
                 "EventId und CardId sind erforderlich."));
         }
 
+        void BufferTimelineFrom(IReadOnlyList<OfflineNfcClockEventDto> cardTimeline, int failedIndex)
+        {
+            // The failed event itself plus everything AFTER it must be replayed
+            // together: applying later scans against a Kimai state that misses
+            // the buffered ones would turn them into "Lief nicht" no-ops that
+            // get acknowledged as applied - silently losing those stamps.
+            for (var i = failedIndex; i < cardTimeline.Count; i++)
+            {
+                var pending = cardTimeline[i];
+                _outbox.Add(pending);
+                buffered++;
+                results.Add(new OfflineSyncEventResultDto(pending.EventId, "buffered",
+                    "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+            }
+        }
+
         foreach (var group in events
                      .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.CardId))
                      .GroupBy(e => NfcCardIdNormalizer.Normalize(e.CardId) ?? e.CardId.Trim())
@@ -56,8 +76,9 @@ public sealed class OfflineClockService(
             await _syncLock.WaitAsync(cancellationToken);
             try
             {
-                foreach (var entry in timeline)
+                for (var i = 0; i < timeline.Count; i++)
                 {
+                    var entry = timeline[i];
                     cancellationToken.ThrowIfCancellationRequested();
 
                     if (!eventIdStore.TryRegister(entry.EventId))
@@ -77,10 +98,8 @@ public sealed class OfflineClockService(
                     {
                         // Kimai temporarily unavailable: keep for retry, do not mark applied.
                         eventIdStore.Remove(entry.EventId);
-                        _outbox.Enqueue(entry);
-                        buffered++;
-                        results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
-                            "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                        BufferTimelineFrom(timeline, i);
+                        break;
                     }
                     catch (Exception ex) when (IsTransientNetworkError(ex))
                     {
@@ -89,10 +108,8 @@ public sealed class OfflineClockService(
                         // case the outbox exists for. HttpRequestException is NOT a
                         // KimaiApiException, so it must be caught explicitly.
                         eventIdStore.Remove(entry.EventId);
-                        _outbox.Enqueue(entry);
-                        buffered++;
-                        results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
-                            "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                        BufferTimelineFrom(timeline, i);
+                        break;
                     }
                     catch (Exception ex)
                     {
@@ -150,13 +167,35 @@ public sealed class OfflineClockService(
                 "EventId und EmployeeId sind erforderlich."));
         }
 
-        foreach (var entry in events
-                     .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.EmployeeId))
-                     .OrderBy(e => e.PerformedAt))
+        var orderedKioskEvents = events
+            .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.EmployeeId))
+            .OrderBy(e => e.PerformedAt)
+            .ToList();
+
+        void BufferKioskFrom(IReadOnlyList<OfflineKioskClockEventDto> pendingEvents, int failedIndex)
         {
-            await _syncLock.WaitAsync(cancellationToken);
-            try
+            // Same rule as the NFC path: the failed event and everything after
+            // it must replay together. Applying later actions against a Kimai
+            // state that misses the buffered ones turns them into "Lief nicht"
+            // no-ops that get acknowledged as applied - silently losing them.
+            for (var i = failedIndex; i < pendingEvents.Count; i++)
             {
+                var pending = pendingEvents[i];
+                _kioskOutbox.Add(pending);
+                buffered++;
+                results.Add(new OfflineSyncEventResultDto(pending.EventId, "buffered",
+                    "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+            }
+        }
+
+        await _syncLock.WaitAsync(cancellationToken);
+        try
+        {
+            for (var i = 0; i < orderedKioskEvents.Count; i++)
+            {
+                var entry = orderedKioskEvents[i];
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (!eventIdStore.TryRegister(entry.EventId))
                 {
                     duplicates++;
@@ -173,19 +212,15 @@ public sealed class OfflineClockService(
                 catch (KimaiApiException ex) when (IsRetryable(ex))
                 {
                     eventIdStore.Remove(entry.EventId);
-                    _kioskOutbox.Enqueue(entry);
-                    buffered++;
-                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
-                        "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                    BufferKioskFrom(orderedKioskEvents, i);
+                    break;
                 }
                 catch (Exception ex) when (IsTransientNetworkError(ex))
                 {
                     // Kimai unreachable at the network level - keep for retry.
                     eventIdStore.Remove(entry.EventId);
-                    _kioskOutbox.Enqueue(entry);
-                    buffered++;
-                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
-                        "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+                    BufferKioskFrom(orderedKioskEvents, i);
+                    break;
                 }
                 catch (Exception ex)
                 {
@@ -193,10 +228,10 @@ public sealed class OfflineClockService(
                     results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", ex.Message));
                 }
             }
-            finally
-            {
-                _syncLock.Release();
-            }
+        }
+        finally
+        {
+            _syncLock.Release();
         }
 
         await FlushOutboxAsync(cancellationToken);
@@ -337,9 +372,14 @@ public sealed class OfflineClockService(
         {
             var drained = 0;
 
-            // NFC outbox: replay via card lookup + toggle.
-            while (_outbox.TryDequeue(out var nfcEntry))
+            // NFC outbox: replay via card lookup + toggle. A transiently failed
+            // entry goes back to the FRONT (index 0) so the next flush starts
+            // with the same, oldest scan - never with a later one.
+            while (_outbox.Count > 0)
             {
+                var nfcEntry = _outbox[0];
+                _outbox.RemoveAt(0);
+
                 if (!eventIdStore.TryRegister(nfcEntry.EventId))
                 {
                     // Already applied via the normal sync path (client re-sent
@@ -361,16 +401,16 @@ public sealed class OfflineClockService(
                 catch (KimaiApiException ex) when (IsRetryable(ex))
                 {
                     // Still down - free the event ID for a later retry and put
-                    // it back, then stop flushing this round.
+                    // it back at the front, then stop flushing this round.
                     eventIdStore.Remove(nfcEntry.EventId);
-                    _outbox.Enqueue(nfcEntry);
+                    _outbox.Insert(0, nfcEntry);
                     break;
                 }
                 catch (Exception ex) when (IsTransientNetworkError(ex))
                 {
                     // Kimai unreachable at the network level - put back and retry later.
                     eventIdStore.Remove(nfcEntry.EventId);
-                    _outbox.Enqueue(nfcEntry);
+                    _outbox.Insert(0, nfcEntry);
                     break;
                 }
                 catch (Exception ex)
@@ -381,9 +421,13 @@ public sealed class OfflineClockService(
                 }
             }
 
-            // Kiosk outbox: replay with explicit action.
-            while (_kioskOutbox.TryDequeue(out var kioskEntry))
+            // Kiosk outbox: replay with explicit action. Same front-reinsert
+            // rule as the NFC outbox above.
+            while (_kioskOutbox.Count > 0)
             {
+                var kioskEntry = _kioskOutbox[0];
+                _kioskOutbox.RemoveAt(0);
+
                 if (!eventIdStore.TryRegister(kioskEntry.EventId))
                 {
                     drained++;
@@ -399,14 +443,14 @@ public sealed class OfflineClockService(
                 catch (KimaiApiException ex) when (IsRetryable(ex))
                 {
                     eventIdStore.Remove(kioskEntry.EventId);
-                    _kioskOutbox.Enqueue(kioskEntry);
+                    _kioskOutbox.Insert(0, kioskEntry);
                     break;
                 }
                 catch (Exception ex) when (IsTransientNetworkError(ex))
                 {
                     // Kimai unreachable at the network level - put back and retry later.
                     eventIdStore.Remove(kioskEntry.EventId);
-                    _kioskOutbox.Enqueue(kioskEntry);
+                    _kioskOutbox.Insert(0, kioskEntry);
                     break;
                 }
                 catch (Exception ex)
