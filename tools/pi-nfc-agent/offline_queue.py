@@ -48,7 +48,8 @@ class OfflineQueue:
     """Append-only JSON file queue with atomic rewrite on drain.
 
     - append() writes the full file with fsync (survives power loss).
-    - remove() rewrites the file atomically (tmp + os.replace).
+    - remove() rewrites the file atomically (tmp + os.replace + fsync of
+      the parent directory, ignored where unsupported).
     - A threading.Lock keeps concurrent retry-loop / scan-loop access safe.
     """
 
@@ -109,6 +110,20 @@ class OfflineQueue:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, self.path)
+        # The file fsync alone does not make the rename durable: on ext4
+        # (Pi/SD card) the directory entry must be fsynced as well, or a
+        # power loss between file fsync and rename commit brings back the
+        # previous queue content. Platforms without directory fsync (e.g.
+        # Windows) refuse to open a directory - ignore that failure, a save
+        # operation must never fail because of it.
+        try:
+            dir_fd = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
 
 
 def utc_now_epoch() -> float:

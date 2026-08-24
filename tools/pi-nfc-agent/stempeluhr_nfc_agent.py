@@ -11,6 +11,7 @@ events with their original times.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import sys
@@ -188,10 +189,18 @@ def run(config: AgentConfig, queue: OfflineQueue, status_cache: CardStatusCache)
                 time.sleep(0.2)
                 continue
 
-            handle_card_scan(config, queue, status_cache, uid)
-            last_uid = uid
-            last_submit_at = now
-            wait_until_card_removed(reader)
+            # handle_card_scan queues the event BEFORE any submit attempt.
+            # From that moment the event exists and must stay unique per
+            # tap: book the debounce and wait for the card to leave even if
+            # the submit fails - the retry loop delivers what is queued,
+            # and another tap of the same card must not spawn further
+            # events (they would toggle repeatedly on drain).
+            try:
+                handle_card_scan(config, queue, status_cache, uid)
+            finally:
+                last_uid = uid
+                last_submit_at = now
+                wait_until_card_removed(reader)
         except KeyboardInterrupt:
             raise
         except Exception:
@@ -215,6 +224,13 @@ def handle_card_scan(
         terminal_id=config.terminal_id,
         scanned_at_epoch_seconds=scanned_at,
     )
+    # Queue-first: from here on the retry loop owns delivery. Documented
+    # semantics divergence (see README.md): online, /api/nfc/clock only
+    # IDENTIFIES the card - the stamp itself comes from the kiosk button
+    # via /api/kiosk/clock. Offline, the queued scan is replayed as a
+    # TOGGLE via /api/nfc/clock/sync. Repeated scans therefore alternate
+    # the assumed booking state while offline: scan a card once per action
+    # and check the UI for the current status when online.
     queue.append(event)
 
     delivered = try_submit(config, queue, status_cache, event)
@@ -245,33 +261,45 @@ def retry_loop(
     """
     attempt = 0
     while True:
-        pending = queue.snapshot()
-        if not pending:
-            attempt = 0
-            time.sleep(2)
-            continue
+        try:
+            pending = queue.snapshot()
+            if not pending:
+                attempt = 0
+                time.sleep(2)
+                continue
 
-        delay_index = min(attempt, len(RETRY_DELAYS_SECONDS) - 1)
-        if attempt > 0:
-            time.sleep(RETRY_DELAYS_SECONDS[delay_index])
-
-        event = pending[0]
-        delivered = submit_sync(config, queue, status_cache, event)
-        if delivered:
-            LOGGER.info(
-                "Queued event for card %s delivered (scanned %.0f s ago).",
-                event.card_id,
-                max(0.0, utc_now_epoch() - event.scanned_at_epoch_seconds),
-            )
-            attempt = 0
-        else:
-            attempt += 1
             delay_index = min(attempt, len(RETRY_DELAYS_SECONDS) - 1)
-            LOGGER.info(
-                "Sync still failing; %d event(s) queued. Next retry in %d s.",
-                len(queue),
-                RETRY_DELAYS_SECONDS[delay_index],
-            )
+            if attempt > 0:
+                time.sleep(RETRY_DELAYS_SECONDS[delay_index])
+
+            event = pending[0]
+            delivered = submit_sync(config, queue, status_cache, event)
+            if delivered:
+                LOGGER.info(
+                    "Queued event for card %s delivered (scanned %.0f s ago).",
+                    event.card_id,
+                    max(0.0, utc_now_epoch() - event.scanned_at_epoch_seconds),
+                )
+                attempt = 0
+            else:
+                attempt += 1
+                delay_index = min(attempt, len(RETRY_DELAYS_SECONDS) - 1)
+                LOGGER.info(
+                    "Sync still failing; %d event(s) queued. Next retry in %d s.",
+                    len(queue),
+                    RETRY_DELAYS_SECONDS[delay_index],
+                )
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            # submit_sync handles the expected HTTP/network errors itself,
+            # but a single unexpected failure (HTML body from a captive
+            # portal, mid-read reset, ...) must never kill this thread:
+            # the queue would then never drain again until the service
+            # restarts. Log it, count it as a failed attempt (backoff) and
+            # keep going.
+            attempt += 1
+            LOGGER.exception("Unexpected retry-loop error")
 
 
 def iso8601_from_epoch(epoch_seconds: float) -> str:
@@ -415,7 +443,9 @@ def try_submit(
 ) -> bool:
     """Attempts delivery of one queued event to the live identify endpoint.
     Returns True when the API accepted the scan (or rejected the card as
-    unknown - nothing to retry then)."""
+    unknown - nothing to retry then). Transport or parsing problems are
+    handled internally and return False, so they can never escape into the
+    scan loop and skip its debounce bookkeeping."""
     url = f"{config.api_base_url}/api/nfc/clock"
     # The eventId makes the live attempt idempotent too: if the server applies
     # the stamp but the response times out, this event stays queued and the
@@ -470,6 +500,21 @@ def try_submit(
         return False
     except TimeoutError:
         LOGGER.warning("Stempeluhr API timed out")
+        return False
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        # A proxy or captive portal answering 200 with an HTML login page
+        # yields a garbage body instead of JSON. That is a connectivity
+        # problem, not a permanent failure: treat it as transient so the
+        # event stays queued and the exception cannot escape into the scan
+        # loop (it would skip the debounce booking there).
+        LOGGER.warning("Malformed response for card %s; keeping it queued: %s",
+                       event.card_id, error)
+        return False
+    except (ConnectionError, http.client.HTTPException) as error:
+        # Mid-body connection resets and truncated responses surface as raw
+        # socket/http errors, not as URLError - equally transient.
+        LOGGER.warning("Connection lost while submitting card %s; keeping it queued: %s",
+                       event.card_id, error)
         return False
 
 
