@@ -11,6 +11,10 @@ import {
 
 const QUEUE_STORAGE_KEY = 'stempeluhr.offline-queue.v1';
 const SYNC_RETRY_MS = 15_000;
+// Slower cadence for events the server already accepted into its own outbox
+// ("buffered"): they only need re-sending as a safety net against an API
+// restart losing that in-memory outbox before it flushes.
+const SYNC_RETRY_BUFFERED_MS = 60_000;
 
 interface StoredOfflineEvent {
   kind: 'nfc' | 'kiosk';
@@ -106,6 +110,16 @@ export class OfflineQueueService {
           bufferedIds.has(entry.event.eventId) || !mentionedIds.has(entry.event.eventId),
         ));
         this.writeStorage(this.queued());
+
+        // Keep a slow retry running while events remain queued: "buffered"
+        // events sit in the API's IN-MEMORY outbox with their event IDs
+        // already freed, so if the API restarts before its outbox flush,
+        // this client queue is the only copy left - it must be re-sent
+        // (they will then apply normally) instead of silently expiring.
+        if (this.queued().length > 0) {
+          this.scheduleRetry(SYNC_RETRY_BUFFERED_MS);
+        }
+
         return results;
       }),
       catchError(() => {
@@ -121,7 +135,7 @@ export class OfflineQueueService {
     this.scheduleRetry();
   }
 
-  private scheduleRetry(): void {
+  private scheduleRetry(delayMs: number = SYNC_RETRY_MS): void {
     if (this.syncTimer !== null) {
       return;
     }
@@ -131,7 +145,7 @@ export class OfflineQueueService {
       if (this.queued().length > 0) {
         this.syncNow().subscribe();
       }
-    }, SYNC_RETRY_MS);
+    }, delayMs);
   }
 
   private readStorage(): StoredOfflineEvent[] {

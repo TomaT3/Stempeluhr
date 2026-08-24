@@ -92,7 +92,13 @@ public sealed class OfflineClockService(
             // over events still waiting in the outbox - see
             // <see cref="BufferBatchBehindBacklogAsync{T}"/>.
             var queuedBehindBacklog = await BufferBatchBehindBacklogAsync(
-                orderedGroups.SelectMany(g => g.OrderBy(e => e.ScannedAt)).ToList(),
+                // Global scan order across ALL cards (not group-by-group): the
+                // outbox lists must stay individually chronological for the
+                // head-comparison merge in FlushOutboxCoreAsync to be exact.
+                orderedGroups
+                    .SelectMany(g => g.OrderBy(e => e.ScannedAt))
+                    .OrderBy(e => e.ScannedAt)
+                    .ToList(),
                 _outbox,
                 entry => new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, BufferedMessage),
                 results,
@@ -468,9 +474,9 @@ public sealed class OfflineClockService(
     /// a kiosk start@08:00 waiting in the kiosk outbox while an NFC
     /// toggle@17:00 replays first runs the toggle against the not-yet-started
     /// state, derives "start" at 17:00, and the real stamp is lost as a
-    /// "Lief bereits" no-op. Each list is individually chronological (appends
-    /// happen in scan order, transiently failed entries go back to the FRONT),
-    /// so comparing heads merges both lists like merge-sort. A transient
+    /// "Lief bereits" no-op. Each list is kept individually chronological
+    /// (stable-sorted at flush start; transiently failed entries go back to
+    /// the FRONT), so comparing heads merges both lists like merge-sort. A transient
     /// failure puts the head back at the front of ITS list and ends the round -
     /// the failed entry stays the globally oldest event, so the next flush
     /// resumes in the same order. Callers must hold <see cref="_syncLock"/>.
@@ -478,6 +484,16 @@ public sealed class OfflineClockService(
     private async Task FlushOutboxCoreAsync(CancellationToken cancellationToken)
     {
         var drained = 0;
+
+        // Stabilize both lists chronologically before draining. Appends are
+        // chronological in the common cases, but transient failures buffer
+        // card-group TAILS sequentially - e.g. card A's tail [08:00, 12:00]
+        // lands before card B's tail [10:00]. The head-comparison below
+        // assumes chronological lists, so enforce that invariant here
+        // regardless of which path appended (OrderBy is a STABLE sort, so
+        // equal timestamps keep their scan order).
+        SortChronologically(_outbox, entry => entry.ScannedAt);
+        SortChronologically(_kioskOutbox, entry => entry.PerformedAt);
 
         while (_outbox.Count > 0 || _kioskOutbox.Count > 0)
         {
@@ -574,6 +590,21 @@ public sealed class OfflineClockService(
         if (drained > 0)
         {
             logger.LogInformation("Outbox flushed {Count} offline event(s)", drained);
+        }
+    }
+
+    /// <summary>
+    /// Stable in-place chronological sort. Must be called while holding
+    /// <see cref="_syncLock"/>; stability preserves the scan order of events
+    /// sharing a timestamp.
+    /// </summary>
+    private static void SortChronologically<T>(List<T> list, Func<T, DateTimeOffset> timestamp)
+    {
+        if (list.Count > 1)
+        {
+            var sorted = list.OrderBy(timestamp).ToList();
+            list.Clear();
+            list.AddRange(sorted);
         }
     }
 

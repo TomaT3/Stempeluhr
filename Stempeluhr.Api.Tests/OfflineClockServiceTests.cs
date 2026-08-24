@@ -24,6 +24,7 @@ namespace Stempeluhr.Api.Tests;
 public sealed class OfflineClockServiceTests
 {
     private static readonly DateTimeOffset T08 = Parse("2026-08-24T08:00:00Z");
+    private static readonly DateTimeOffset T10 = Parse("2026-08-24T10:00:00Z");
     private static readonly DateTimeOffset T12 = Parse("2026-08-24T12:00:00Z");
 
     [Fact]
@@ -200,8 +201,7 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
-    public async Task MixedNfcAndKioskBacklog_ReplaysInEventOrder_AcrossBothQueues()
-    {
+    public async Task MixedNfcAndKioskBacklog_ReplaysInEventOrder_AcrossBothQueues()    {
         var (service, kimai) = CreateService();
 
         // During the outage a kiosk START @08:00 lands in the kiosk outbox.
@@ -230,6 +230,37 @@ public sealed class OfflineClockServiceTests
         Assert.False(kimai.IsRunning);
     }
 
+    [Fact]
+    public async Task NfcMultiCardBatch_BehindBacklog_ReplaysInGlobalScanOrder()
+    {
+        var (service, kimai) = CreateService();
+        // Keep Kimai down for the whole REQUEST: one failing status per card
+        // group plus the request's trailing flush. The leading flush costs
+        // nothing here (the outboxes are still empty), and the explicit
+        // FlushOutboxAsync below then runs against a recovered fake.
+        kimai.FailNextStatusCalls = 3;
+
+        var result = await service.SyncAsync(
+        [
+            new OfflineNfcClockEventDto("n1", "04AB", "term", T08),
+            new OfflineNfcClockEventDto("n2", "04AB", "term", T12),
+            new OfflineNfcClockEventDto("n3", "04CD", "term", T10),
+        ]);
+
+        Assert.Equal(0, result.Accepted);
+        Assert.Equal(3, result.Buffered);
+
+        await service.FlushOutboxAsync();
+
+        // Global scan order across ALL cards (08 < 10 < 12), not flattened
+        // group-by-group ([08, 12] then [10]) - the outbox lists must stay
+        // individually chronological for the head-comparison merge.
+        Assert.Equal(3, kimai.Operations.Count);
+        Assert.Equal(("start", T08), kimai.Operations[0]);
+        Assert.Equal(("stop", T10), kimai.Operations[1]);
+        Assert.Equal(("start", T12), kimai.Operations[2]);
+    }
+
     private static DateTimeOffset Parse(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
 
@@ -252,6 +283,16 @@ public sealed class OfflineClockServiceTests
                     Pin = "1234",
                     NfcCardId = "04AB",
                     ApiToken = "token",
+                    ProjectId = 7,
+                    ActivityId = 9,
+                },
+                new EmployeeSettings
+                {
+                    Id = "anna",
+                    DisplayName = "Anna Beispiel",
+                    Pin = "5678",
+                    NfcCardId = "04CD",
+                    ApiToken = "token-anna",
                     ProjectId = 7,
                     ActivityId = 9,
                 },

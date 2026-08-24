@@ -12,12 +12,22 @@ namespace Stempeluhr.Api.Services;
 /// writes are strictly ordered: a Remove scheduled after a TryRegister can
 /// never be persisted before it (which would resurrect a removed ID after a
 /// restart and silently lose that event).
+///
+/// Compound state mutations (register = dictionary add + queue append,
+/// remove = dictionary remove + queue rebuild) are atomic via an internal
+/// lock: callers are NOT all under one shared lock - the live NFC endpoint
+/// touches this store outside the OfflineClockService's _syncLock - so the
+/// store must protect its own invariants (e.g. an ID must never end up in
+/// the dictionary while missing from the ordering queue, which would make
+/// a restart forget a freshly registered ID and turn its retry into a
+/// second toggle).
 /// </summary>
 public sealed class FileOfflineEventIdStore : IOfflineEventIdStore, IDisposable
 {
     private const int MaxEntries = 10_000;
 
     private readonly string _filePath;
+    private readonly object _stateLock = new();
     private readonly ConcurrentDictionary<string, byte> _ids = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<string> _order = new();
     private readonly SemaphoreSlim _ioLock = new(1, 1);
@@ -36,33 +46,45 @@ public sealed class FileOfflineEventIdStore : IOfflineEventIdStore, IDisposable
 
     public bool TryRegister(string eventId)
     {
-        EnsureLoaded();
-        if (!_ids.TryAdd(eventId, 0))
+        lock (_stateLock)
         {
-            return false;
+            EnsureLoaded();
+            if (!_ids.TryAdd(eventId, 0))
+            {
+                return false;
+            }
+
+            _order.Enqueue(eventId);
+            TrimToMax();
         }
 
-        _order.Enqueue(eventId);
-        TrimToMax();
         SchedulePersist();
         return true;
     }
 
     public void Remove(string eventId)
     {
-        EnsureLoaded();
-        if (_ids.TryRemove(eventId, out _))
+        var removed = false;
+        lock (_stateLock)
         {
-            // Also drop the ordering entry: persisting it would resurrect the
-            // removed ID on the next restart (the event was never applied and
-            // must be retried, not treated as a duplicate).
-            var remaining = _order.ToArray().Where(_ids.ContainsKey).ToArray();
-            _order.Clear();
-            foreach (var id in remaining)
+            EnsureLoaded();
+            if (_ids.TryRemove(eventId, out _))
             {
-                _order.Enqueue(id);
+                removed = true;
+                // Also drop the ordering entry: persisting it would resurrect the
+                // removed ID on the next restart (the event was never applied and
+                // must be retried, not treated as a duplicate).
+                var remaining = _order.ToArray().Where(_ids.ContainsKey).ToArray();
+                _order.Clear();
+                foreach (var id in remaining)
+                {
+                    _order.Enqueue(id);
+                }
             }
+        }
 
+        if (removed)
+        {
             SchedulePersist();
         }
     }
@@ -74,7 +96,7 @@ public sealed class FileOfflineEventIdStore : IOfflineEventIdStore, IDisposable
             return;
         }
 
-        lock (_ids)
+        lock (_stateLock)
         {
             if (_loaded)
             {
@@ -116,6 +138,11 @@ public sealed class FileOfflineEventIdStore : IOfflineEventIdStore, IDisposable
         }
     }
 
+    /// <summary>
+    /// Trims the ordering queue to its maximum size. Must be called while
+    /// holding <see cref="_stateLock"/> - peek and dequeue of the same entry
+    /// plus the dictionary removal are only atomic together.
+    /// </summary>
     private void TrimToMax()
     {
         while (_order.Count > MaxEntries && _order.TryPeek(out var oldest))
@@ -165,7 +192,13 @@ public sealed class FileOfflineEventIdStore : IOfflineEventIdStore, IDisposable
             }
 
             var tmpPath = _filePath + ".tmp";
-            await File.WriteAllTextAsync(tmpPath, JsonSerializer.Serialize(_order.ToArray())).ConfigureAwait(false);
+            string[] orderSnapshot;
+            lock (_stateLock)
+            {
+                orderSnapshot = _order.ToArray();
+            }
+
+            await File.WriteAllTextAsync(tmpPath, JsonSerializer.Serialize(orderSnapshot)).ConfigureAwait(false);
             File.Move(tmpPath, _filePath, overwrite: true);
         }
         finally
