@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable, signal } from '@angular/core';
-import { defer, firstValueFrom, Observable, of, Subject } from 'rxjs';
+import { defer, finalize, firstValueFrom, Observable, of, Subject } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 
 import {
@@ -49,6 +49,8 @@ export class OfflineQueueService {
   readonly recovered: Observable<void> = this.recoveredSubject.asObservable();
 
   private syncTimer: number | null = null;
+  /** True while a flush run is in flight; overlapping syncNow() calls skip. */
+  private syncing = false;
 
   constructor() {
     // Flush a queue left over from a previous browser session (e.g. after a
@@ -81,9 +83,21 @@ export class OfflineQueueService {
       return of([]);
     }
 
+    if (this.syncing) {
+      // A flush is already running (constructor, retry timer and NFC poll can
+      // overlap). Skip - the in-flight run drains the same snapshot, and
+      // duplicate chunks are absorbed server-side by _syncLock + idempotency.
+      // Guarding here avoids the wasteful double-send.
+      return of([]);
+    }
+
+    this.syncing = true;
     // flushQueue is async because the chunks must be sent SEQUENTIALLY:
     // each response decides whether the next chunk may go out at all.
     return defer(() => this.flushQueue(snapshot)).pipe(
+      finalize(() => {
+        this.syncing = false;
+      }),
       catchError(() => {
         this.scheduleRetry();
         return of([] as OfflineSyncResult[]);
@@ -110,6 +124,12 @@ export class OfflineQueueService {
     const mentionedIds = new Set<string>();
     const bufferedIds = new Set<string>();
     let bufferingEverything = false;
+    // The backend "recovered" only means something for the host UI when at
+    // least one event was actually PROCESSED (applied/duplicate/rejected) -
+    // not when the whole batch was merely buffered (API up, Kimai down). In
+    // the buffered-only case a PIN login is still impossible, so the terminal
+    // must stay unlocked (no back()/reset) - see clock-workflow.
+    let anyProcessed = false;
 
     replay:
     for (const [endpoint, events] of groups) {
@@ -137,22 +157,27 @@ export class OfflineQueueService {
               bufferedIds.add(detail.eventId);
             } else {
               chunkFullyBuffered = false;
+              anyProcessed = true;
             }
           }
           bufferingEverything = chunkFullyBuffered;
         } catch {
-          // Network or 5xx failure mid-run: stop here. Events already
+          // Network or 5xx failure mid-run: stop here entirely. Events already
           // resolved by earlier chunks are dropped below, so partial
-          // progress survives; the rest retries on the timer.
-          break;
+          // progress survives; the rest retries on the timer. Breaking out of
+          // BOTH loops (not just the chunk loop) keeps the remaining groups
+          // unsent - the network is down, they would fail the same way.
+          break replay;
         }
       }
     }
 
     this.dropResolved(bufferedIds, mentionedIds);
 
-    // The backend answered at least once - connectivity is back.
-    if (results.length > 0) {
+    // The backend answered and actually processed events - connectivity (and
+    // Kimai) are back. A buffered-only run must NOT emit: the PIN login is
+    // still impossible and hosts use this signal to release the terminal.
+    if (results.length > 0 && anyProcessed) {
       this.recoveredSubject.next();
     }
 

@@ -529,8 +529,6 @@ public sealed class OfflineClockService(
     /// phantom resume. A transient failure of the lookup itself propagates to
     /// the caller, so the event buffers and retries as usual.
     /// </summary>
-    private const int InterruptedPauseEndToleranceSeconds = 120;
-
     private async Task<bool> IsInterruptedPauseEndAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
@@ -545,9 +543,28 @@ public sealed class OfflineClockService(
         }
 
         var latest = await kimai.GetLatestStoppedTimesheetAsync(settings, employee, cancellationToken);
-        return latest is { ActivityId: int activityId, EndedAt: DateTimeOffset ended }
-            && activityId == settings.PauseActivityId
-            && Math.Abs((ended - timestamp).TotalSeconds) <= InterruptedPauseEndToleranceSeconds;
+        if (latest is not { ActivityId: int activityId, EndedAt: DateTimeOffset ended }
+            || activityId != settings.PauseActivityId)
+        {
+            return false;
+        }
+
+        var differenceSeconds = Math.Abs((ended - timestamp).TotalSeconds);
+        if (differenceSeconds > settings.PauseEndRecoveryToleranceSeconds)
+        {
+            // A live stop or another terminal's action ended the pause - the
+            // gap is too large for this to be our interrupted transaction.
+            // Log the difference so a misconfigured tolerance is visible.
+            logger.LogWarning(
+                "Offline pauseEnd at {Timestamp}: latest pause stop {Ended} is {DifferenceSeconds:N0}s away (tolerance {Tolerance}s) - not resuming work",
+                timestamp, ended, differenceSeconds, settings.PauseEndRecoveryToleranceSeconds);
+            return false;
+        }
+
+        logger.LogWarning(
+            "Offline pauseEnd at {Timestamp}: matching interrupted pause stop {Ended} (difference {DifferenceSeconds:N0}s) - resuming work",
+            timestamp, ended, differenceSeconds);
+        return true;
     }
 
     /// <summary>

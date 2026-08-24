@@ -369,6 +369,34 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task PauseEnd_LiveStopWithinOldTolerance_DoesNotPhantomStart()
+    {
+        var (service, kimai) = CreateService();
+
+        // Live timeline while online: start, then a pause.
+        await service.SyncKioskAsync([Kiosk("r1", "start", T08)]);
+        await service.SyncKioskAsync([Kiosk("r2", "pauseStart", T12)]);
+
+        // The pauseEnd@12:30 is queued offline. Kimai comes back and the
+        // employee presses STOP live at 12:31 - just 60 s after the queued
+        // event's timestamp, INSIDE the old 120 s tolerance but OUTSIDE the
+        // current 30 s one. This is a genuine live stop (the employee ended
+        // the pause manually), NOT our interrupted transaction: resuming work
+        // here would book a phantom timesheet.
+        var stopAt1231 = Parse("2026-08-24T12:31:00Z");
+        await service.SyncKioskAsync([Kiosk("r3", "stop", stopAt1231)]);
+        Assert.False(kimai.IsRunning);
+        var operationsAfterLiveStop = kimai.Operations.Count;
+
+        var result = await service.SyncKioskAsync([Kiosk("r4", "pauseEnd", T1230)]);
+
+        Assert.Equal(1, result.Accepted);
+        Assert.Equal("Keine laufende Pause - Nachtrag nicht moeglich.", result.Results.Single().Message);
+        Assert.Equal(operationsAfterLiveStop, kimai.Operations.Count);
+        Assert.False(kimai.IsRunning);
+    }
+
+    [Fact]
     public async Task PauseEnd_NothingEverStopped_DoesNotResume()
     {
         var (service, kimai) = CreateService();
