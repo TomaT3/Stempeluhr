@@ -105,11 +105,11 @@ services:
       Admin__Password: "change-me"
       Kimai__BaseUrl: "https://kimai.example.local"
       Stempeluhr__NfcReaderToken: "change-me-reader-token"
-      # Optional, aber empfohlen hinter Cloudflared/nginx: IP-Adresse(n) des
-      # Proxys, damit X-Forwarded-For ausgewertet wird. Ohne diese Einstellung
-      # teilen sich alle Kiosks ein gemeinsames Rate-Limit-Budget am
-      # Kiosk-Sync-Endpoint (20 Requests/60 s).
-      Stempeluhr__KnownProxies__0: "172.18.0.1"
+      # Optional und nur in besonderen Topologien noetig (siehe
+      # Sicherheitshinweis unten): IP-Adresse(n) vertrauter Reverse-Proxys,
+      # damit X-Forwarded-For ausgewertet wird. Im Standard-Setup (alle Geräte
+      # ueber den Cloudflare-Tunnel) ist KEINE Einstellung noetig.
+      # Stempeluhr__KnownProxies__0: "172.18.0.1"
 ```
 
 Die App ist intern unter `http://<nas-ip>:8002/` erreichbar. Fuer Raspberry Pi,
@@ -147,9 +147,17 @@ Kiosk-Browsers ueberlebt. Das ist eine bewusste Abwaegung:
 
 Zusaetzlich gilt: Der Sync-Endpoint `/api/kiosk/clock/sync` ist unauthentifiziert
 (4-stellige PIN als einziger Schutz), wird aber per Client-IP gedrosselt
-(20 Requests/60 s) und nimmt maximal 100 Events pro Batch an. Hinter einem
-Reverse-Proxy sollte `Stempeluhr__KnownProxies__0` gesetzt werden, damit die
-Drossel pro echtem Geraet greift.
+(20 Requests/60 s) und nimmt maximal 100 Events pro Batch an.
+
+Wichtig zur Einordnung: Wenn alle Geraete wie ueblich ueber den
+Cloudflare-Tunnel zugreifen, teilen sie sich die oeffentliche IP des Standorts -
+das Budget ist dann zwangslaeufig ein gemeinsamer Topf, und
+`Stempeluhr__KnownProxies__0` aendert daran nichts. Die Einstellung lohnt nur,
+wenn die App Anfragen mit echten, unterscheidbaren Client-IPs sieht (z. B.
+mehrere Standorte mit eigenen Internetanschluessen, VPN-Zugriffe oder direkte
+LAN-Nutzung). Gegen gezieltes PIN-Raten an einem einzelnen Konto ist ein
+Fehlversuch-Backoff vorgesehen (Issue #8); die sauberste Loesung bleibt die
+Terminal-Token-Auth (Issue #7).
 
 ## Semantische Versionierung
 
