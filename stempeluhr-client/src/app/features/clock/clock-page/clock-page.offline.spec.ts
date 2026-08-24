@@ -13,6 +13,8 @@ describe('ClockPage offline behaviour', () => {
   let clockResult: Subject<ClockStatus>;
   let latestNfcValue: NfcLatestEvent;
   let failPolls: boolean;
+  let recovered$: Subject<void>;
+  let terminalIdValue: string | null;
   let enqueueKiosk: ReturnType<typeof vi.fn>;
   let playBeeps: ReturnType<typeof vi.fn>;
 
@@ -42,6 +44,8 @@ describe('ClockPage offline behaviour', () => {
     clockResult = new Subject<ClockStatus>();
     latestNfcValue = { event: null };
     failPolls = false;
+    recovered$ = new Subject<void>();
+    terminalIdValue = 'term-1';
     enqueueKiosk = vi.fn();
     playBeeps = vi.fn();
 
@@ -59,10 +63,13 @@ describe('ClockPage offline behaviour', () => {
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps } },
-        { provide: OfflineQueueService, useValue: { enqueueKiosk, syncNow: vi.fn(() => of([])) } },
+        {
+          provide: OfflineQueueService,
+          useValue: { enqueueKiosk, syncNow: vi.fn(() => of([])), recovered: recovered$.asObservable() },
+        },
         {
           provide: ActivatedRoute,
-          useValue: { snapshot: { queryParamMap: { get: (key: string) => (key === 'terminalId' ? 'term-1' : null) } } },
+          useValue: { snapshot: { queryParamMap: { get: (key: string) => (key === 'terminalId' ? terminalIdValue : null) } } },
         },
       ],
     }).compileComponents();
@@ -136,5 +143,36 @@ describe('ClockPage offline behaviour', () => {
     pinLoginResult.error({ status: 401 });
 
     expect(component.message()).toBe('PIN nicht gefunden');
+  });
+
+  it('releases the terminal via the offline queue recovery signal even without NFC polling', () => {
+    // /clock default route: no terminalId -> no NFC poll, so the queue's own
+    // recovered signal is the only connectivity indicator.
+    terminalIdValue = null;
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+
+    failPolls = true; // irrelevant here, but mirrors the offline situation
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    pinLoginResult.next(session);
+    expect(component.isUnlocked()).toBe(true);
+
+    component.stop();
+    clockResult.error({ status: 0 });
+    expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    expect(component.isOffline()).toBe(true);
+
+    // No auto-reset while offline, and no poll to recover from.
+    vi.advanceTimersByTime(5_000);
+    expect(component.isUnlocked()).toBe(true);
+
+    // The offline queue reports a successful sync: release the terminal.
+    recovered$.next();
+    expect(component.isOffline()).toBe(false);
+    expect(component.isUnlocked()).toBe(false);
+    expect(component.selectedEmployee()).toBeNull();
   });
 });

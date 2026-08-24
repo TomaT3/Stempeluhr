@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable, signal } from '@angular/core';
-import { defer, firstValueFrom, Observable, of } from 'rxjs';
+import { defer, firstValueFrom, Observable, of, Subject } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 
 import {
@@ -39,6 +39,14 @@ export class OfflineQueueService {
   private readonly http = inject(HttpClient);
   private readonly queued = signal<StoredOfflineEvent[]>(this.readStorage());
   readonly pendingCount = this.queued.asReadonly();
+
+  private readonly recoveredSubject = new Subject<void>();
+  /**
+   * Emits once per sync run that received at least one successful server
+   * response. Hosts without NFC polling (the /clock default route has no
+   * terminalId) use this as their only connectivity signal.
+   */
+  readonly recovered: Observable<void> = this.recoveredSubject.asObservable();
 
   private syncTimer: number | null = null;
 
@@ -142,6 +150,11 @@ export class OfflineQueueService {
     }
 
     this.dropResolved(bufferedIds, mentionedIds);
+
+    // The backend answered at least once - connectivity is back.
+    if (results.length > 0) {
+      this.recoveredSubject.next();
+    }
 
     // Keep a retry timer running while events remain queued. "buffered"
     // events sit in the API's IN-MEMORY outbox with their event IDs already

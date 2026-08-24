@@ -18,7 +18,9 @@ namespace Stempeluhr.Api.Tests;
 /// - NFC and kiosk backlogs replay as ONE timeline in event-time order,
 ///   never "all NFC first, then all kiosk"
 /// - a pauseEnd whose resume-start failed transiently after the pause stop
-///   succeeds resumes the work on the retry instead of dying as a no-op
+///   succeeds resumes the work on the retry instead of dying as a no-op -
+///   but ONLY when Kimai's latest stopped timesheet is the matching pause
+///   stop (no phantom starts after live stops or other terminals' actions)
 ///
 /// Note on the failure counters: every sync runs an opportunistic flush at
 /// its end, so simulating an ongoing outage needs one failing status call
@@ -338,6 +340,50 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task PauseEnd_LiveStopBeforeFlush_DoesNotPhantomStart()
+    {
+        var (service, kimai) = CreateService();
+
+        // Live timeline while online: start, then a pause.
+        await service.SyncKioskAsync([Kiosk("q1", "start", T08)]);
+        await service.SyncKioskAsync([Kiosk("q2", "pauseStart", T12)]);
+
+        // The network drops; the pauseEnd@12:30 is queued. Kimai comes back
+        // and the employee presses STOP live at 13:00 - BEFORE the 15 s retry
+        // timer flushes the queue. The live stop ends the PAUSE timesheet.
+        var stopAt1300 = Parse("2026-08-24T13:00:00Z");
+        await service.SyncKioskAsync([Kiosk("q3", "stop", stopAt1300)]);
+        Assert.False(kimai.IsRunning);
+        var operationsAfterLiveStop = kimai.Operations.Count;
+
+        // Now the offline pauseEnd@12:30 replays against "nothing running".
+        // The latest stopped timesheet ended at 13:00, NOT at the event time,
+        // so this was no interrupted transaction: starting work@12:30 here
+        // would book a phantom timesheet running until the next stamp.
+        var result = await service.SyncKioskAsync([Kiosk("q4", "pauseEnd", T1230)]);
+
+        Assert.Equal(1, result.Accepted);
+        Assert.Equal("Keine laufende Pause - Nachtrag nicht moeglich.", result.Results.Single().Message);
+        Assert.Equal(operationsAfterLiveStop, kimai.Operations.Count);
+        Assert.False(kimai.IsRunning);
+    }
+
+    [Fact]
+    public async Task PauseEnd_NothingEverStopped_DoesNotResume()
+    {
+        var (service, kimai) = CreateService();
+
+        // Fresh clockedOut state without any history: a replayed pauseEnd has
+        // nothing to point at and must not start work on its own.
+        var result = await service.SyncKioskAsync([Kiosk("z1", "pauseEnd", T1230)]);
+
+        Assert.Equal(1, result.Accepted);
+        Assert.Equal("Keine laufende Pause - Nachtrag nicht moeglich.", result.Results.Single().Message);
+        Assert.Empty(kimai.Operations);
+        Assert.False(kimai.IsRunning);
+    }
+
+    [Fact]
     public async Task PauseEnd_WithWorkAlreadyRunning_IsANoOp()
     {
         var (service, kimai) = CreateService();
@@ -501,7 +547,9 @@ public sealed class OfflineClockServiceTests
 
         private int _timesheetCounter;
         private int? _activeTimesheetId;
+        private int? _activeActivityId;
         private bool _activeIsPause;
+        private readonly List<(int ActivityId, DateTimeOffset EndedAt)> _stoppedTimesheets = [];
 
         public bool IsRunning => _activeTimesheetId is not null;
 
@@ -545,6 +593,7 @@ public sealed class OfflineClockServiceTests
 
             Operations.Add(("start", startedAt));
             _activeTimesheetId = ++_timesheetCounter;
+            _activeActivityId = activityId;
             _activeIsPause = settings.PauseActivityId == activityId;
             return Task.CompletedTask;
         }
@@ -557,8 +606,29 @@ public sealed class OfflineClockServiceTests
             CancellationToken cancellationToken = default)
         {
             Operations.Add(("stop", stoppedAt));
+            if (_activeActivityId is int activityId)
+            {
+                _stoppedTimesheets.Add((activityId, stoppedAt));
+            }
+
             _activeTimesheetId = null;
+            _activeActivityId = null;
+            _activeIsPause = false;
             return Task.CompletedTask;
+        }
+
+        public Task<KimaiRecentTimesheetDto?> GetLatestStoppedTimesheetAsync(
+            RuntimeSettings settings,
+            EmployeeSettings employee,
+            CancellationToken cancellationToken = default)
+        {
+            if (_stoppedTimesheets.Count == 0)
+            {
+                return Task.FromResult<KimaiRecentTimesheetDto?>(null);
+            }
+
+            var last = _stoppedTimesheets[^1];
+            return Task.FromResult<KimaiRecentTimesheetDto?>(new KimaiRecentTimesheetDto(last.ActivityId, last.EndedAt));
         }
 
         public Task StartAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default) =>

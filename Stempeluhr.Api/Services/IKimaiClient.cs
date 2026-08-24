@@ -36,6 +36,16 @@ public interface IKimaiClient
         DateTimeOffset stoppedAt,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the most recently STOPPED timesheet of the employee (null if
+    /// none exists). Used by the offline replay to verify that a "nothing is
+    /// running" state really comes from an interrupted pauseEnd transaction.
+    /// </summary>
+    Task<KimaiRecentTimesheetDto?> GetLatestStoppedTimesheetAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyCollection<KimaiUserDto>> GetUsersAsync(
         string baseUrl,
         string apiToken,
@@ -51,3 +61,6 @@ public interface IKimaiClient
         string apiToken,
         CancellationToken cancellationToken = default);
 }
+
+/// <summary>Minimal view of a finished timesheet, for replay verification.</summary>
+public sealed record KimaiRecentTimesheetDto(int? ActivityId, DateTimeOffset? EndedAt);

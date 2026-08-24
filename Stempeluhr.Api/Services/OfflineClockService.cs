@@ -479,10 +479,28 @@ public sealed class OfflineClockService(
                     // transiently on the resume-start, this retry arrives while
                     // NOTHING is running. Answering the old no-op here would
                     // acknowledge the event as applied and leave the employee
-                    // clocked out for the rest of the day - so finish exactly
-                    // the missing half instead. The event ID keeps this from
-                    // double-applying, and work already running is handled by
-                    // the no-op below (the transition completed some other way).
+                    // clocked out for the rest of the day.
+                    //
+                    // But "nothing running" alone proves nothing: a LIVE stop
+                    // or another terminal's action may have ended the pause
+                    // before this event ever reached Kimai. Resuming blindly
+                    // would book a phantom work timesheet that runs until the
+                    // next stamp. So require the fingerprint our own
+                    // interrupted attempt leaves behind: the latest STOPPED
+                    // timesheet is a PAUSE timesheet whose end matches this
+                    // event's timestamp (StopAt wrote it right before failing).
+                    if (!await IsInterruptedPauseEndAsync(settings, employee, timestamp, cancellationToken))
+                    {
+                        logger.LogWarning(
+                            "Offline pauseEnd at {Timestamp}: no pause running and no matching interrupted pause stop - not resuming work",
+                            timestamp);
+                        return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
+                    }
+
+                    logger.LogWarning(
+                        "Offline pauseEnd at {Timestamp}: completing an interrupted pause end by resuming work",
+                        timestamp);
+
                     var restartProject = employee.ProjectId
                         ?? settings.DefaultProjectId
                         ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
@@ -490,9 +508,6 @@ public sealed class OfflineClockService(
                         ?? settings.DefaultActivityId
                         ?? throw new InvalidOperationException("Aktivitaet muss konfiguriert sein.");
 
-                    logger.LogWarning(
-                        "Offline pauseEnd at {Timestamp}: nothing running - completing an interrupted pause end by resuming work",
-                        timestamp);
                     await kimai.StartAtAsync(settings, employee, restartProject, restartActivity, timestamp, cancellationToken);
                     return ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
                 }
@@ -502,6 +517,37 @@ public sealed class OfflineClockService(
             default:
                 throw new InvalidOperationException($"Unbekannte Aktion: {action}");
         }
+    }
+
+    /// <summary>
+    /// True when the Kimai state matches an interrupted pauseEnd transaction:
+    /// the latest stopped timesheet is a PAUSE timesheet that ended at this
+    /// event's timestamp - exactly what StopAt(pause, timestamp) writes in the
+    /// successful first step before the resume-start fails transiently. The
+    /// small tolerance only absorbs timestamp rounding; anything further away
+    /// (a later live stop, another terminal's action) must NOT trigger a
+    /// phantom resume. A transient failure of the lookup itself propagates to
+    /// the caller, so the event buffers and retries as usual.
+    /// </summary>
+    private const int InterruptedPauseEndToleranceSeconds = 120;
+
+    private async Task<bool> IsInterruptedPauseEndAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        DateTimeOffset timestamp,
+        CancellationToken cancellationToken)
+    {
+        if (settings.PauseActivityId is null)
+        {
+            // Without a configured pause activity a stopped timesheet cannot
+            // be identified as a pause - stay conservative (no-op + loud log).
+            return false;
+        }
+
+        var latest = await kimai.GetLatestStoppedTimesheetAsync(settings, employee, cancellationToken);
+        return latest is { ActivityId: int activityId, EndedAt: DateTimeOffset ended }
+            && activityId == settings.PauseActivityId
+            && Math.Abs((ended - timestamp).TotalSeconds) <= InterruptedPauseEndToleranceSeconds;
     }
 
     /// <summary>

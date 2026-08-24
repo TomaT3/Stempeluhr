@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -186,6 +187,40 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
                 throw;
             }
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<KimaiRecentTimesheetDto?> GetLatestStoppedTimesheetAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken = default)
+    {
+        // state=stopped excludes running and already-exported/closed entries;
+        // user=me scopes the query to the token owner so another employee's
+        // timesheet can never satisfy the interrupted-pauseEnd check.
+        var latest = await SendAsync<JsonElement[]>(
+            settings.BaseUrl,
+            employee.ApiToken,
+            HttpMethod.Get,
+            "api/timesheets?size=1&orderBy=end&sort=DESC&state=stopped&user=me",
+            null,
+            cancellationToken);
+
+        var entry = latest.FirstOrDefault();
+        if (entry.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        var activityId = GetId(entry, "activity");
+        DateTimeOffset? endedAt = null;
+        if (entry.TryGetProperty("end", out var end) && end.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(end.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+        {
+            endedAt = parsed;
+        }
+
+        return new KimaiRecentTimesheetDto(activityId, endedAt);
     }
 
     private const int BackdateRetryCount = 3;

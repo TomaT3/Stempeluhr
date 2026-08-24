@@ -31,6 +31,8 @@ export abstract class ClockWorkflow implements OnDestroy {
   private lastNfcEventId: string | null = null;
   private hasInitializedNfcPolling = false;
   private nfcCardId: string | null = null;
+  /** Unsubscribes the offline-queue recovery listener (see constructor). */
+  private recoveryUnsubscribe: (() => void) | null = null;
   /**
    * Set when an offline-stamped action deliberately skipped the reset to
    * the idle screen (unlocking again needs a PIN login, which is impossible
@@ -40,6 +42,23 @@ export abstract class ClockWorkflow implements OnDestroy {
   private readonly terminalId = this.readTerminalId();
 
   constructor() {
+    // Hosts without a terminalId (the /clock default route) have no NFC
+    // poll, so they never see the connection recover on their own. Use the
+    // offline queue's own recovery signal to release a terminal that was
+    // kept unlocked for offline stamping and clear the stale banner.
+    const recoveredSubscription = this.offlineQueue.recovered.subscribe(() => {
+      if (!this.isOffline()) {
+        return;
+      }
+
+      this.isOffline.set(false);
+      if (this.pendingResetOnRecovery) {
+        this.pendingResetOnRecovery = false;
+        this.back();
+      }
+    });
+    this.recoveryUnsubscribe = () => recoveredSubscription.unsubscribe();
+
     if (!this.terminalId) {
       return;
     }
@@ -140,6 +159,8 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (this.nfcPollTimer) {
       window.clearInterval(this.nfcPollTimer);
     }
+
+    this.recoveryUnsubscribe?.();
 
     this.clockState.setEmployeeMode(false);
   }
