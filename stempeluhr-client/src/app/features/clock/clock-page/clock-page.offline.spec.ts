@@ -65,7 +65,7 @@ describe('ClockPage offline behaviour', () => {
         { provide: AudioFeedback, useValue: { playBeeps } },
         {
           provide: OfflineQueueService,
-          useValue: { enqueueKiosk, syncNow: vi.fn(() => of([])), recovered: recovered$.asObservable() },
+          useValue: { enqueueKiosk, syncNow: vi.fn(() => of([])), recovered: recovered$.asObservable(), pendingCount: vi.fn(() => []) },
         },
         {
           provide: ActivatedRoute,
@@ -183,5 +183,42 @@ describe('ClockPage offline behaviour', () => {
     expect(component.isOffline()).toBe(false);
     expect(component.isUnlocked()).toBe(false);
     expect(component.selectedEmployee()).toBeNull();
+  });
+
+  it('shows the offline banner and hides the pause button while offline', () => {
+    const fixture = createComponent();
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    // No banner while online.
+    expect(fixture.nativeElement.querySelector('.offline-banner')).toBeNull();
+
+    // Login, then go offline while working.
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    const workingStatus: ClockStatus = { ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt' };
+    pinLoginResult.next({ employee: session.employee, status: workingStatus });
+    fixture.detectChanges();
+
+    failPolls = true;
+    component.startPause();
+    clockResult.error({ status: 0 });
+    fixture.detectChanges();
+
+    expect(component.isOffline()).toBe(true);
+
+    // Banner is visible and states the offline limitation.
+    const banner = fixture.nativeElement.querySelector('.offline-banner');
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('OFFLINE-BETRIEB');
+    expect(banner.textContent).toContain('keine Pause');
+
+    // The pause button must be hidden - only Ausstempeln remains.
+    const pauseButton = fixture.nativeElement.querySelector('.stamp-button.pause');
+    expect(pauseButton).toBeNull();
+    const stopButton = fixture.nativeElement.querySelector('.stamp-button.stop');
+    expect(stopButton).not.toBeNull();
   });
 });
