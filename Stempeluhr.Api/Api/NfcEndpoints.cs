@@ -70,8 +70,20 @@ public static class NfcEndpoints
             OfflineKioskSyncRequest request,
             IOfflineClockService offlineClockService,
             RequestRateLimiter kioskSyncRateLimiter,
+            ILogger<Program> logger,
             CancellationToken cancellationToken) =>
         {
+            var ip = httpRequest.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            // Makes the KnownProxies setup verifiable from the logs: if the
+            // logged client is still the tunnel/gateway IP instead of the real
+            // device address, the trusted proxy list does not match yet.
+            logger.LogInformation(
+                "Kiosk clock sync from client {ClientIp} (X-Forwarded-For: {ForwardedFor}), {EventCount} event(s)",
+                ip,
+                httpRequest.Headers["X-Forwarded-For"].ToString() is { } forwarded && forwarded.Length > 0 ? forwarded : "-",
+                request.Events?.Count ?? 0);
+
             // The kiosk sync endpoint accepts arbitrary performedAt timestamps
             // and is only protected by the employee PIN, so it is an attractive
             // brute-force target. Throttle per client IP (the real client IP
@@ -79,7 +91,6 @@ public static class NfcEndpoints
             // Stempeluhr:KnownProxies - otherwise every kiosk behind the proxy
             // shares one budget); real auth (terminal token) is tracked as a
             // follow-up.
-            var ip = httpRequest.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
             if (!kioskSyncRateLimiter.TryAcquire(ip))
             {
                 return Results.StatusCode(StatusCodes.Status429TooManyRequests);
