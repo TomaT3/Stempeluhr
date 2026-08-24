@@ -21,6 +21,16 @@ namespace Stempeluhr.Api.Services;
 /// the dictionary while missing from the ordering queue, which would make
 /// a restart forget a freshly registered ID and turn its retry into a
 /// second toggle).
+///
+/// Residual crash window (accepted trade-off): persists are asynchronous, so
+/// a process crash AFTER the persist of a TryRegister but BEFORE the persist
+/// of its subsequent Remove leaves that ID on disk although its event was
+/// only buffered, never applied. After a restart a client re-send of that
+/// event is then discarded as "duplicate" instead of being buffered again -
+/// in the worst case a lost stamp. The window is milliseconds wide; closing
+/// it would require a synchronous fsync on every Remove (request hot path),
+/// which was traded away for throughput. If this ever matters in practice,
+/// make Remove flush synchronously before returning.
 /// </summary>
 public sealed class FileOfflineEventIdStore : IOfflineEventIdStore, IDisposable
 {

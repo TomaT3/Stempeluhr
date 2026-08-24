@@ -1,4 +1,5 @@
 using System.Globalization;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Stempeluhr.Api.Models;
 using Stempeluhr.Api.Services;
@@ -145,6 +146,40 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task ResendWhileBuffered_DoesNotDuplicateOutboxEntries()
+    {
+        var (service, kimai, logger) = CreateServiceWithLogger();
+
+        // First send: Kimai down (processing + trailing flush fail), both
+        // events land in the outbox.
+        kimai.FailNextStatusCalls = 2;
+        var events = new[] { Kiosk("k1", "start", T08), Kiosk("k2", "stop", T12) };
+        var first = await service.SyncKioskAsync(events);
+        Assert.Equal(2, first.Buffered);
+        Assert.Empty(kimai.Operations);
+
+        // Safety-net re-send while Kimai is STILL down: buffering freed the
+        // event IDs, so without physical dedup this would enqueue a second
+        // COPY of each event - one more with every retry across the outage.
+        kimai.FailNextStatusCalls = 1;
+        var second = await service.SyncKioskAsync(events);
+
+        Assert.Equal(0, second.Accepted);
+        Assert.Equal(2, second.Buffered);
+        Assert.All(second.Results, r => Assert.Equal("buffered", r.Status));
+
+        // Recovery drains EXACTLY one copy per event: the flushed-count log
+        // line says 2. A duplicate-copy regression would report 4 there (the
+        // redundant entries are skipped via TryRegister but still counted).
+        await service.FlushOutboxAsync();
+
+        Assert.Equal(2, kimai.Operations.Count);
+        Assert.Equal(("start", T08), kimai.Operations[0]);
+        Assert.Equal(("stop", T12), kimai.Operations[1]);
+        Assert.Contains(logger.Messages, m => m.Contains("Outbox flushed 2 offline event(s)"));
+    }
+
+    [Fact]
     public async Task NfcToggle_BuffersWholeTimeline_OnTransientFailure()
     {
         var (service, kimai) = CreateService();
@@ -269,6 +304,12 @@ public sealed class OfflineClockServiceTests
 
     private static (OfflineClockService Service, FakeKimaiClient Kimai) CreateService()
     {
+        var (service, kimai, _) = CreateServiceWithLogger();
+        return (service, kimai);
+    }
+
+    private static (OfflineClockService Service, FakeKimaiClient Kimai, RecordingLogger Logger) CreateServiceWithLogger()
+    {
         var settings = new RuntimeSettings
         {
             BaseUrl = "http://kimai.test",
@@ -300,14 +341,38 @@ public sealed class OfflineClockServiceTests
         };
 
         var kimai = new FakeKimaiClient();
+        var logger = new RecordingLogger();
         var service = new OfflineClockService(
             new InMemorySettingsStore(settings),
             new InMemoryEmployeeService(),
             kimai,
             new InMemoryEventIdStore(),
-            NullLogger<OfflineClockService>.Instance);
+            logger);
 
-        return (service, kimai);
+        return (service, kimai, logger);
+    }
+
+    /// <summary>
+    /// Captures formatted log messages so tests can assert on operational
+    /// side effects that are not visible through the public API (e.g. the
+    /// outbox flushed-count distinguishes physical duplicate entries from
+    /// deduplicated ones).
+    /// </summary>
+    private sealed class RecordingLogger : ILogger<OfflineClockService>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 
     private sealed class InMemorySettingsStore(RuntimeSettings settings) : IRuntimeSettingsStore
@@ -349,6 +414,15 @@ public sealed class OfflineClockServiceTests
     /// Minimal Kimai fake: tracks start/stop operations in order and can fail
     /// the next N status calls with a transient network error to simulate an
     /// outage/recovery window.
+    ///
+    /// Simplification to keep in mind when reading multi-employee assertions:
+    /// the timesheet state is GLOBAL across all employees (one shared active
+    /// timesheet), unlike real Kimai where each employee has their own. In
+    /// NfcMultiCardBatch_BehindBacklog_ReplaysInGlobalScanOrder this is why
+    /// anna's scan@10:00 derives a "stop" after max's start@08:00 - in
+    /// production it would be an independent per-employee toggle. The test
+    /// pins the DRAIN ORDER (the timestamps); the action kinds merely follow
+    /// from this shared-state simplification.
     /// </summary>
     private sealed class FakeKimaiClient : IKimaiClient
     {

@@ -43,6 +43,16 @@ public sealed class OfflineClockService(
     // toggle order.
     private readonly List<OfflineNfcClockEventDto> _outbox = new();
     private readonly List<OfflineKioskClockEventDto> _kioskOutbox = new();
+
+    // Physical dedup mirroring the contents of each list: the client re-sends
+    // buffered events on a slow safety-net timer (offline-queue.ts) while the
+    // event IDs are already FREED (buffering removes them from the store), so
+    // without this set every re-send would enqueue yet another COPY of the
+    // same event - one per retry interval across the whole outage. Guarded by
+    // _syncLock like the lists themselves.
+    private readonly HashSet<string> _outboxIds = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _kioskOutboxIds = new(StringComparer.Ordinal);
+
     private readonly SemaphoreSlim _syncLock = new(1, 1);
 
     public async Task<OfflineSyncResultDto> SyncAsync(IReadOnlyList<OfflineNfcClockEventDto> events, CancellationToken cancellationToken = default)
@@ -69,7 +79,7 @@ public sealed class OfflineClockService(
             for (var i = failedIndex; i < cardTimeline.Count; i++)
             {
                 var pending = cardTimeline[i];
-                _outbox.Add(pending);
+                AddToOutbox(_outbox, _outboxIds, pending, pending.EventId);
                 buffered++;
                 results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, BufferedMessage));
             }
@@ -100,6 +110,8 @@ public sealed class OfflineClockService(
                     .OrderBy(e => e.ScannedAt)
                     .ToList(),
                 _outbox,
+                _outboxIds,
+                entry => entry.EventId,
                 entry => new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, BufferedMessage),
                 results,
                 cancellationToken);
@@ -219,6 +231,8 @@ public sealed class OfflineClockService(
             var queuedBehindBacklog = await BufferBatchBehindBacklogAsync(
                 orderedKioskEvents,
                 _kioskOutbox,
+                _kioskOutboxIds,
+                entry => entry.EventId,
                 entry => new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, BufferedMessage),
                 results,
                 cancellationToken);
@@ -237,7 +251,7 @@ public sealed class OfflineClockService(
                 for (var i = failedIndex; i < pendingEvents.Count; i++)
                 {
                     var pending = pendingEvents[i];
-                    _kioskOutbox.Add(pending);
+                    AddToOutbox(_kioskOutbox, _kioskOutboxIds, pending, pending.EventId);
                     buffered++;
                     results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, BufferedMessage));
                 }
@@ -308,6 +322,8 @@ public sealed class OfflineClockService(
     private async Task<int> BufferBatchBehindBacklogAsync<T>(
         IReadOnlyList<T> orderedEvents,
         List<T> outbox,
+        HashSet<string> outboxIds,
+        Func<T, string> eventIdSelector,
         Func<T, OfflineSyncEventResultDto> createBufferedResult,
         List<OfflineSyncEventResultDto> results,
         CancellationToken cancellationToken)
@@ -320,12 +336,28 @@ public sealed class OfflineClockService(
 
         foreach (var entry in orderedEvents)
         {
-            outbox.Add(entry);
+            // Physical dedup: a re-sent event that is already waiting in the
+            // outbox must not add another copy (see the _outboxIds comment).
+            // The sender still gets "buffered" - the server DOES hold it and
+            // will apply it on recovery.
+            AddToOutbox(outbox, outboxIds, entry, eventIdSelector(entry));
             results.Add(createBufferedResult(entry));
         }
 
         await FlushOutboxCoreAsync(cancellationToken);
         return orderedEvents.Count;
+    }
+
+    /// <summary>
+    /// Appends an entry to an outbox unless its event ID is already queued.
+    /// Callers must hold <see cref="_syncLock"/>.
+    /// </summary>
+    private static void AddToOutbox<T>(List<T> outbox, HashSet<string> outboxIds, T entry, string eventId)
+    {
+        if (outboxIds.Add(eventId))
+        {
+            outbox.Add(entry);
+        }
     }
 
     private async Task<(string Message, string State)> ApplyKioskEventAsync(OfflineKioskClockEventDto entry, CancellationToken cancellationToken)
@@ -511,6 +543,7 @@ public sealed class OfflineClockService(
                 {
                     // Already applied via the normal sync path (client re-sent
                     // the batch) - nothing left to do.
+                    _outboxIds.Remove(nfcEntry.EventId);
                     drained++;
                     continue;
                 }
@@ -523,6 +556,7 @@ public sealed class OfflineClockService(
                         cancellationToken);
 
                     logger.LogInformation("Outbox: offline event {EventId} applied ({Message})", nfcEntry.EventId, message);
+                    _outboxIds.Remove(nfcEntry.EventId);
                     drained++;
                 }
                 catch (KimaiApiException ex) when (IsRetryable(ex))
@@ -544,6 +578,7 @@ public sealed class OfflineClockService(
                 {
                     // Permanent failure: log and drop so one bad event cannot block the outbox.
                     logger.LogError(ex, "Outbox: dropping NFC event {EventId} after permanent error", nfcEntry.EventId);
+                    _outboxIds.Remove(nfcEntry.EventId);
                     drained++;
                 }
             }
@@ -556,6 +591,7 @@ public sealed class OfflineClockService(
 
                 if (!eventIdStore.TryRegister(kioskEntry.EventId))
                 {
+                    _kioskOutboxIds.Remove(kioskEntry.EventId);
                     drained++;
                     continue;
                 }
@@ -564,6 +600,7 @@ public sealed class OfflineClockService(
                 {
                     var (message, _) = await ApplyKioskEventAsync(kioskEntry, cancellationToken);
                     logger.LogInformation("Outbox: offline kiosk event {EventId} applied ({Message})", kioskEntry.EventId, message);
+                    _kioskOutboxIds.Remove(kioskEntry.EventId);
                     drained++;
                 }
                 catch (KimaiApiException ex) when (IsRetryable(ex))
@@ -582,6 +619,7 @@ public sealed class OfflineClockService(
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Outbox: dropping kiosk event {EventId} after permanent error", kioskEntry.EventId);
+                    _kioskOutboxIds.Remove(kioskEntry.EventId);
                     drained++;
                 }
             }
