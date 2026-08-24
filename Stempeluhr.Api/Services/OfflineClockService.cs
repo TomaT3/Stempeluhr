@@ -38,6 +38,14 @@ public sealed class OfflineClockService(
         var buffered = 0;
         var results = new List<OfflineSyncEventResultDto>();
 
+        // Malformed entries must be reported back explicitly so the sender can
+        // drop them from its queue instead of silently retrying them forever.
+        foreach (var invalid in events.Where(e => string.IsNullOrWhiteSpace(e.EventId) || string.IsNullOrWhiteSpace(e.CardId)))
+        {
+            results.Add(new OfflineSyncEventResultDto(invalid.EventId ?? string.Empty, "rejected",
+                "EventId und CardId sind erforderlich."));
+        }
+
         foreach (var group in events
                      .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.CardId))
                      .GroupBy(e => NfcCardIdNormalizer.Normalize(e.CardId) ?? e.CardId.Trim())
@@ -133,6 +141,14 @@ public sealed class OfflineClockService(
         var duplicates = 0;
         var buffered = 0;
         var results = new List<OfflineSyncEventResultDto>();
+
+        // Malformed entries must be reported back explicitly so the sender can
+        // drop them from its queue instead of silently retrying them forever.
+        foreach (var invalid in events.Where(e => string.IsNullOrWhiteSpace(e.EventId) || string.IsNullOrWhiteSpace(e.EmployeeId)))
+        {
+            results.Add(new OfflineSyncEventResultDto(invalid.EventId ?? string.Empty, "rejected",
+                "EventId und EmployeeId sind erforderlich."));
+        }
 
         foreach (var entry in events
                      .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.EmployeeId))

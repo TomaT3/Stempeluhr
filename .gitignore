@@ -55,5 +55,4 @@ docker-compose.override.yml
 Thumbs.db
 desktop.ini
 __pycache__/
-__pycache__/
 *.pyc

@@ -231,6 +231,10 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.message.set('Kimai konnte nicht speichern');
         this.isBusy.set(false);
         this.audioFeedback.playBeeps(2);
+        // Permanent error (wrong PIN, deleted employee, ...): return to the
+        // idle screen like every other completed action instead of leaving
+        // the message stuck on the terminal.
+        this.scheduleReset();
       },
     });
   }

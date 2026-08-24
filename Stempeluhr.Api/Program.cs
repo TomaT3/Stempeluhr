@@ -1,3 +1,5 @@
+using System.Net;
+using Microsoft.AspNetCore.HttpOverrides;
 using Stempeluhr.Api.Api;
 using Stempeluhr.Api.Middleware;
 using Stempeluhr.Api.Services;
@@ -16,11 +18,32 @@ builder.Services.AddSingleton<IOfflineEventIdStore>(sp => new FileOfflineEventId
 // flushed by the background service below.
 builder.Services.AddSingleton<IOfflineClockService, OfflineClockService>();
 builder.Services.AddHostedService<OfflineOutboxBackgroundService>();
-// Throttles the unauthenticated kiosk sync endpoint (per-IP, fixed window).
+// Throttles the unauthenticated kiosk sync endpoint (per client IP, fixed
+// window; real per-client IPs require Stempeluhr:KnownProxies - see above).
 builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 20));
 builder.Services.AddScoped<IClockService, ClockService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 builder.Services.AddHttpClient<IKimaiClient, KimaiClient>();
+
+// Behind a reverse proxy (Cloudflared/nginx on the NAS) every kiosk shares the
+// proxy IP, which would make the kiosk sync rate limiter a single global
+// budget. When trusted proxy IPs are configured, parse X-Forwarded-For so
+// Connection.RemoteIpAddress becomes the real client IP again. Unset => direct
+// exposure: no header trust, so XFF cannot be spoofed.
+var knownProxies = builder.Configuration.GetSection("Stempeluhr:KnownProxies").Get<string[]>() ?? [];
+if (knownProxies.Length > 0)
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+        foreach (var proxy in knownProxies)
+        {
+            options.KnownProxies.Add(IPAddress.Parse(proxy));
+        }
+    });
+}
 
 builder.Services.AddCors(options =>
 {
@@ -34,6 +57,11 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+if (knownProxies.Length > 0)
+{
+    app.UseForwardedHeaders();
+}
 
 app.UseApiExceptionHandling();
 app.UseCors("AngularDev");

@@ -10,6 +10,13 @@ public static class NfcEndpoints
 {
     private const string ReaderTokenHeader = "X-Nfc-Reader-Token";
 
+    /// <summary>
+    /// Upper bound for events per sync batch. Every event costs at least one
+    /// Kimai round trip under the global sync lock, so an unbounded batch
+    /// could block all syncs and outbox flushes for a long time.
+    /// </summary>
+    private const int MaxSyncBatchSize = 100;
+
     public static IEndpointRouteBuilder MapNfcEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/nfc/clock", async (
@@ -18,6 +25,7 @@ public static class NfcEndpoints
             IConfiguration configuration,
             IClockService clockService,
             INfcClockEventStore eventStore,
+            IOfflineEventIdStore eventIdStore,
             CancellationToken cancellationToken) =>
         {
             if (!IsReaderAuthorized(httpRequest, configuration))
@@ -25,7 +33,33 @@ public static class NfcEndpoints
                 return Results.Unauthorized();
             }
 
-            var clockEvent = await clockService.IdentifyWithNfcCardAsync(request, cancellationToken);
+            // Idempotency for the live path: when the agent sends its eventId,
+            // register it before applying. If the stamp is applied but the
+            // response times out, the agent retries via the sync endpoint and
+            // that replay now resolves as duplicate instead of toggling again.
+            var registeredEventId = !string.IsNullOrWhiteSpace(request.EventId);
+            if (registeredEventId && !eventIdStore.TryRegister(request.EventId!))
+            {
+                return Results.Conflict(new { message = "Event wurde bereits verarbeitet.", duplicate = true });
+            }
+
+            NfcClockEventDto clockEvent;
+            try
+            {
+                clockEvent = await clockService.IdentifyWithNfcCardAsync(request, cancellationToken);
+            }
+            catch
+            {
+                // The stamp was not applied - free the ID so the agent's queued
+                // event can be applied later by the sync replay.
+                if (registeredEventId)
+                {
+                    eventIdStore.Remove(request.EventId!);
+                }
+
+                throw;
+            }
+
             eventStore.Publish(clockEvent);
 
             return clockEvent.Success ? Results.Ok(clockEvent) : Results.BadRequest(clockEvent);
@@ -40,12 +74,20 @@ public static class NfcEndpoints
         {
             // The kiosk sync endpoint accepts arbitrary performedAt timestamps
             // and is only protected by the employee PIN, so it is an attractive
-            // brute-force target. Throttle per IP; real auth (terminal token)
-            // is tracked as a follow-up.
+            // brute-force target. Throttle per client IP (the real client IP
+            // requires trusted reverse proxies to be configured via
+            // Stempeluhr:KnownProxies - otherwise every kiosk behind the proxy
+            // shares one budget); real auth (terminal token) is tracked as a
+            // follow-up.
             var ip = httpRequest.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
             if (!kioskSyncRateLimiter.TryAcquire(ip))
             {
                 return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+            }
+
+            if (request.Events is { Count: > MaxSyncBatchSize })
+            {
+                return Results.BadRequest(new { error = $"Too many events in one batch (max {MaxSyncBatchSize})." });
             }
 
             if (request.Events is { Count: > 0 })
@@ -67,6 +109,11 @@ public static class NfcEndpoints
             if (!IsReaderAuthorized(httpRequest, configuration))
             {
                 return Results.Unauthorized();
+            }
+
+            if (request.Events is { Count: > MaxSyncBatchSize })
+            {
+                return Results.BadRequest(new { error = $"Too many events in one batch (max {MaxSyncBatchSize})." });
             }
 
             if (request.Events is { Count: > 0 })

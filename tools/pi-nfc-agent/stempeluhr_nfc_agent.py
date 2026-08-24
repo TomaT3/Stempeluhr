@@ -417,11 +417,14 @@ def try_submit(
     Returns True when the API accepted the scan (or rejected the card as
     unknown - nothing to retry then)."""
     url = f"{config.api_base_url}/api/nfc/clock"
-    # Live identify endpoint: only cardId/terminalId are meaningful here.
-    # eventId/scannedAt belong to the sync endpoint, which handles backdating
-    # and idempotency for queued replays.
+    # The eventId makes the live attempt idempotent too: if the server applies
+    # the stamp but the response times out, this event stays queued and the
+    # sync replay later resolves as duplicate (409) instead of toggling a
+    # second time. scannedAt stays sync-only: the live endpoint stamps with
+    # server time, the sync endpoint backdates.
     payload = json.dumps(
         {
+            "eventId": event.event_id,
             "cardId": event.card_id,
             "terminalId": event.terminal_id,
         }
@@ -540,7 +543,7 @@ def wait_until_card_removed(reader) -> None:
 def create_headers(config: AgentConfig) -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "StempeluhrNfcAgent/1.1",
+        "User-Agent": "StempeluhrNfcAgent/1.2",
     }
     if config.reader_token:
         headers["X-Nfc-Reader-Token"] = config.reader_token

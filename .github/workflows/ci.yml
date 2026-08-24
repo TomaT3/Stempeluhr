@@ -73,5 +73,8 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: NFC agent queue self-test (python)
+        run: python3 tools/pi-nfc-agent/test_offline_queue.py
+
       - name: Run offline integration tests (Fake-Kimai + real API)
         run: bash tools/testenv/run_e2e_test.sh

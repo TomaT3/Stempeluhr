@@ -145,6 +145,11 @@ export class OfflineQueueService {
   }
 
   private writeStorage(entries: StoredOfflineEvent[]): void {
+    // Accepted trade-off (documented in the README): kiosk events are
+    // persisted with their PIN so an offline stamp survives a kiosk restart.
+    // localStorage is readable by anyone with access to the kiosk device or
+    // via a successful XSS - treated as trusted hardware here. A terminal /
+    // reader token would remove this and is tracked as a follow-up.
     try {
       window.localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(entries));
     } catch {

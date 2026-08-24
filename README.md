@@ -105,6 +105,11 @@ services:
       Admin__Password: "change-me"
       Kimai__BaseUrl: "https://kimai.example.local"
       Stempeluhr__NfcReaderToken: "change-me-reader-token"
+      # Optional, aber empfohlen hinter Cloudflared/nginx: IP-Adresse(n) des
+      # Proxys, damit X-Forwarded-For ausgewertet wird. Ohne diese Einstellung
+      # teilen sich alle Kiosks ein gemeinsames Rate-Limit-Budget am
+      # Kiosk-Sync-Endpoint (20 Requests/60 s).
+      Stempeluhr__KnownProxies__0: "172.18.0.1"
 ```
 
 Die App ist intern unter `http://<nas-ip>:8002/` erreichbar. Fuer Raspberry Pi,
@@ -124,6 +129,27 @@ Fuer das Raspberry-Pi-Terminal:
 Wichtig: Der Docker-Port `8002:8080` ist nur die interne NAS-Veroeffentlichung.
 Wenn Cloudflared davor liegt, bekommen Chromium und der NFC-Agent die externe
 HTTPS-Adresse. Der Agent bekommt trotzdem nur die Basis-Adresse ohne `/terminal`.
+
+### Sicherheitshinweis: Offline-Queue und PINs
+
+Der Kiosk/Client speichert gequeute Offline-Stempel (inklusive PIN) im
+`localStorage` des Browsers, damit ein Offline-Stempel auch einen Neustart des
+Kiosk-Browsers ueberlebt. Das ist eine bewusste Abwaegung:
+
+- `localStorage` ist auf dem Geraet im Klartext lesbar (lokaler Zugang oder
+  erfolgreicher XSS). Die Stempeluhr geht davon aus, dass Kiosk-Hardware
+  (Tablet am Eingang, Raspberry-Pi-Terminal) vertrauenswuerdig ist.
+- Wer das Risiko senken will: Kiosk-Geraete physisch sichern, Browser im
+  Kiosk-Modus ohne DevTools betreiben, keine weiteren Websites im selben
+  Browser-Profil oeffnen.
+- Sauberste Loesung waere eine Terminal-/Reader-Token-Authentifizierung statt
+  der PIN fuer gequeute Events; das ist als Follow-up eingeplant.
+
+Zusaetzlich gilt: Der Sync-Endpoint `/api/kiosk/clock/sync` ist unauthentifiziert
+(4-stellige PIN als einziger Schutz), wird aber per Client-IP gedrosselt
+(20 Requests/60 s) und nimmt maximal 100 Events pro Batch an. Hinter einem
+Reverse-Proxy sollte `Stempeluhr__KnownProxies__0` gesetzt werden, damit die
+Drossel pro echtem Geraet greift.
 
 ## Semantische Versionierung
 

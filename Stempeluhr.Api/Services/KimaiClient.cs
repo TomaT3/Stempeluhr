@@ -152,14 +152,58 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         // First stop the timesheet normally so Kimai computes a duration.
         await SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Patch, $"api/timesheets/{timesheetId}/stop", null, cancellationToken);
 
-        // Then backdate the end timestamp to the real scan time.
-        await SendAsync<JsonElement>(
-            settings.BaseUrl,
-            employee.ApiToken,
-            HttpMethod.Patch,
-            $"api/timesheets/{timesheetId}",
-            new { end = stoppedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz") },
-            cancellationToken);
+        // Then backdate the end timestamp to the real scan time. If the stop
+        // went through but this PATCH is lost to a transient error, the
+        // timesheet keeps end=now and a later offline replay would see
+        // IsRunning == false - it could never correct the end time on its own.
+        // Retry the backdate briefly, and if it still fails log the timesheet
+        // ID loudly so a wrong end time stays traceable for manual correction.
+        var endPath = $"api/timesheets/{timesheetId}";
+        var body = new { end = stoppedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz") };
+
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Patch, endPath, body, cancellationToken);
+                return;
+            }
+            catch (Exception ex) when (IsTransientBackdateFailure(ex) && attempt < BackdateRetryCount)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Kimai: end-backdate for timesheet {TimesheetId} failed (attempt {Attempt}/{Retries}); retrying",
+                    timesheetId, attempt, BackdateRetryCount);
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cancellationToken);
+            }
+            catch (Exception ex) when (IsTransientBackdateFailure(ex))
+            {
+                logger.LogError(
+                    ex,
+                    "Kimai: end-backdate for timesheet {TimesheetId} (employee {Employee}) failed after {Retries} attempts; " +
+                    "the timesheet may keep end=now instead of {End}. Manual correction may be required.",
+                    timesheetId, employee.Id, BackdateRetryCount, stoppedAt);
+                throw;
+            }
+        }
+    }
+
+    private const int BackdateRetryCount = 3;
+
+    private static bool IsTransientBackdateFailure(Exception exception)
+    {
+        if (exception is HttpRequestException or TaskCanceledException or TimeoutException)
+        {
+            return true;
+        }
+
+        if (exception is KimaiApiException apiException)
+        {
+            var statusCode = (int)apiException.StatusCode;
+            return statusCode >= 500 || statusCode == 408 || statusCode == 429;
+        }
+
+        return false;
     }
 
     public async Task<IReadOnlyCollection<KimaiUserDto>> GetUsersAsync(

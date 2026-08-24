@@ -16,7 +16,14 @@ public sealed record KioskPinLoginRequest(string? Pin);
 
 public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action, string? NfcCardId);
 
-public sealed record NfcClockRequest(string? CardId, string? Action, string? TerminalId);
+/// <summary>
+/// Live stamp request from an NFC terminal. <paramref name="EventId"/> is
+/// optional; when present the live endpoint registers it in the offline
+/// event-ID store so a retry after an ambiguous timeout (server applied the
+/// stamp, response never arrived) is recognized as a duplicate instead of
+/// toggling a second time.
+/// </summary>
+public sealed record NfcClockRequest(string? CardId, string? Action, string? TerminalId, string? EventId = null);
 
 public sealed record OfflineSyncRequest(IReadOnlyList<OfflineNfcClockEventDto>? Events);
 
