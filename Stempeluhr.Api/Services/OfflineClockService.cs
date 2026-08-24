@@ -66,10 +66,35 @@ public sealed class OfflineClockService(
             }
         }
 
-        foreach (var group in events
-                     .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.CardId))
-                     .GroupBy(e => NfcCardIdNormalizer.Normalize(e.CardId) ?? e.CardId.Trim())
-                     .OrderBy(g => g.Min(e => e.ScannedAt)))
+        var orderedGroups = events
+            .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.CardId))
+            .GroupBy(e => NfcCardIdNormalizer.Normalize(e.CardId) ?? e.CardId.Trim())
+            .OrderBy(g => g.Min(e => e.ScannedAt))
+            .ToList();
+
+        // Global replay order across batches: when the outbox still holds
+        // events (e.g. the client lost its own queue - the exact case this
+        // safety-net exists for), a newly arriving batch must not race ahead
+        // of it. Otherwise later scans would be applied against a Kimai state
+        // that misses earlier ones, turning them into "Lief nicht" no-ops
+        // acknowledged as applied. Drain what we can; if a backlog remains
+        // (Kimai still unreachable), append the incoming batch behind it.
+        await FlushOutboxAsync(cancellationToken);
+        if (_outbox.Count > 0 || _kioskOutbox.Count > 0)
+        {
+            foreach (var entry in orderedGroups.SelectMany(g => g.OrderBy(e => e.ScannedAt)))
+            {
+                _outbox.Add(entry);
+                buffered++;
+                results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
+                    "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+            }
+
+            await FlushOutboxAsync(cancellationToken);
+            return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
+        }
+
+        foreach (var group in orderedGroups)
         {
             var timeline = group.OrderBy(e => e.ScannedAt).ToList();
 
@@ -171,6 +196,23 @@ public sealed class OfflineClockService(
             .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.EmployeeId))
             .OrderBy(e => e.PerformedAt)
             .ToList();
+
+        // Same cross-batch rule as the NFC path: never let a fresh batch jump
+        // over events that are still waiting in the outbox.
+        await FlushOutboxAsync(cancellationToken);
+        if (_outbox.Count > 0 || _kioskOutbox.Count > 0)
+        {
+            foreach (var entry in orderedKioskEvents)
+            {
+                _kioskOutbox.Add(entry);
+                buffered++;
+                results.Add(new OfflineSyncEventResultDto(entry.EventId, "buffered",
+                    "Kimai nicht erreichbar - wird automatisch nachgetragen."));
+            }
+
+            await FlushOutboxAsync(cancellationToken);
+            return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
+        }
 
         void BufferKioskFrom(IReadOnlyList<OfflineKioskClockEventDto> pendingEvents, int failedIndex)
         {
