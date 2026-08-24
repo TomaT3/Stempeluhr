@@ -2,44 +2,6 @@
   display: block;
 }
 
-// Das Offline-Banner ist fixed oben (top:0, z-index:50) und würde sonst den
-// „Zurueck"-Button der Station-Ansicht bzw. die Topbar des Login-Screens
-// überdecken. Sobald das Banner sichtbar ist, den Inhalt um seine Höhe
-// nach unten schieben.
-:host:has(.offline-banner) {
-  padding-top: 2.75rem;
-}
-
-.offline-banner {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.6rem 1rem;
-  background: #b45309;
-  color: #fff;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-align: center;
-
-  strong {
-    text-transform: uppercase;
-  }
-
-  .offline-count {
-    min-width: 1.75rem;
-    padding: 0.1rem 0.5rem;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.25);
-    text-align: center;
-  }
-}
-
 h2,
 p {
   margin: 0;
