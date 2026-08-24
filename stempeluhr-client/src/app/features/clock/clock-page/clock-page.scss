@@ -2,6 +2,14 @@
   display: block;
 }
 
+// Das Offline-Banner ist fixed oben (top:0, z-index:50) und würde sonst den
+// „Zurueck"-Button der Station-Ansicht bzw. die Topbar des Login-Screens
+// überdecken. Sobald das Banner sichtbar ist, den Inhalt um seine Höhe
+// nach unten schieben.
+:host:has(.offline-banner) {
+  padding-top: 2.75rem;
+}
+
 .offline-banner {
   position: fixed;
   top: 0;

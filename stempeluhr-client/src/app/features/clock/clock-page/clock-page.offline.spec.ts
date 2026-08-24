@@ -223,4 +223,32 @@ describe('ClockPage offline behaviour', () => {
     const stopButton = fixture.nativeElement.querySelector('.stamp-button.stop');
     expect(stopButton).not.toBeNull();
   });
+
+  it('shows the pending queue count in the offline banner', () => {
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    const queue = TestBed.inject(OfflineQueueService) as unknown as {
+      pendingCount: ReturnType<typeof vi.fn>;
+    };
+    // Two stamps are waiting to be synced.
+    queue.pendingCount.mockReturnValue([{}, {}]);
+
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    const workingStatus: ClockStatus = { ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt' };
+    pinLoginResult.next({ employee: session.employee, status: workingStatus });
+    fixture.detectChanges();
+
+    failPolls = true;
+    component.startPause();
+    clockResult.error({ status: 0 });
+    fixture.detectChanges();
+
+    expect(component.isOffline()).toBe(true);
+    const count = fixture.nativeElement.querySelector('.offline-banner .offline-count');
+    expect(count).not.toBeNull();
+    expect(count.textContent.trim()).toBe('2');
+  });
 });

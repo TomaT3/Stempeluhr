@@ -3,6 +3,13 @@
   min-height: 100%;
 }
 
+// Das Offline-Banner ist fixed oben und würde sonst den Kopfbereich
+// (Uhrzeit/Datum) bzw. den Login-Bereich überdecken. Inhalt beim Sichtbar-
+// werden des Banners um dessen Höhe nach unten schieben.
+:host:has(.offline-banner) {
+  padding-top: 2.75rem;
+}
+
 h1,
 p {
   margin: 0;
