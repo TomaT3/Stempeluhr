@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable, signal } from '@angular/core';
-import { defer, finalize, firstValueFrom, Observable, of, Subject } from 'rxjs';
+import { defer, finalize, firstValueFrom, Observable, of, Subject, timeout } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 
 import {
@@ -22,6 +22,9 @@ const SYNC_RETRY_BUFFERED_MS = 60_000;
  * would fail forever and events beyond the limit would never reach Kimai.
  */
 const MAX_SYNC_BATCH_SIZE = 100;
+// Upper bound for a single flush request. Without it a hung connection
+// would hold the in-flight guard forever and block every later flush.
+const SYNC_REQUEST_TIMEOUT_MS = 30_000;
 
 interface StoredOfflineEvent {
   kind: 'nfc' | 'kiosk';
@@ -91,10 +94,14 @@ export class OfflineQueueService {
       return of([]);
     }
 
-    this.syncing = true;
     // flushQueue is async because the chunks must be sent SEQUENTIALLY:
-    // each response decides whether the next chunk may go out at all.
-    return defer(() => this.flushQueue(snapshot)).pipe(
+    // each response decides whether the next chunk may go out at all. The
+    // in-flight flag is set at SUBSCRIBE time (defer), not at call time, so
+    // an unsubscribed syncNow() call can never wedge the guard.
+    return defer(() => {
+      this.syncing = true;
+      return this.flushQueue(snapshot);
+    }).pipe(
       finalize(() => {
         this.syncing = false;
       }),
@@ -142,7 +149,7 @@ export class OfflineQueueService {
           const result = await firstValueFrom(
             this.http.post<OfflineSyncResult>(endpoint, {
               events: events.slice(offset, offset + MAX_SYNC_BATCH_SIZE),
-            }),
+            }).pipe(timeout(SYNC_REQUEST_TIMEOUT_MS)),
           );
           results.push(result);
 

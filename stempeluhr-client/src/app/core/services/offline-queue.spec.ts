@@ -225,4 +225,43 @@ describe('OfflineQueueService sync batching', () => {
     httpMock.expectNone(r => r.url === kioskEndpoint);
     expect(service.pendingCount().length).toBe(2);
   });
+
+  it('does not wedge the in-flight guard when syncNow() is called without subscribing', async () => {
+    service.enqueueKiosk(kioskEvent('u1'));
+
+    // Call WITHOUT subscribing - the guard must not be set (it only arms at
+    // subscribe time), otherwise a later flush would be skipped forever.
+    service.syncNow();
+
+    // A later subscribed call still flushes normally.
+    let done = false;
+    service.syncNow().subscribe(() => (done = true));
+    const req = httpMock.expectOne(r => r.url === kioskEndpoint);
+    req.flush(resultFor(req.request.body.events as OfflineKioskClockEvent[], 'applied'));
+    await drainMicrotasks();
+
+    expect(done).toBe(true);
+    expect(service.pendingCount().length).toBe(0);
+  });
+
+  it('aborts a hung flush request after the timeout and retries', async () => {
+    service.enqueueKiosk(kioskEvent('t1'));
+    service.syncNow().subscribe();
+    const hung = httpMock.expectOne(r => r.url === kioskEndpoint);
+
+    // The server never answers: advance past the 30 s request timeout. The
+    // flush aborts, the event stays queued, and a retry is scheduled.
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(service.pendingCount().length).toBe(1);
+
+    // Retry (15 s cadence) fires a NEW request that succeeds.
+    await vi.advanceTimersByTimeAsync(15_000);
+    const retry = httpMock.expectOne(r => r.url === kioskEndpoint);
+    retry.flush(resultFor(retry.request.body.events as OfflineKioskClockEvent[], 'applied'));
+    await drainMicrotasks();
+    expect(service.pendingCount().length).toBe(0);
+
+    // The original request was cancelled by the timeout (cannot be flushed).
+    expect(hung.cancelled).toBe(true);
+  });
 });

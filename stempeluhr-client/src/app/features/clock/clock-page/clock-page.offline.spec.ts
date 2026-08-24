@@ -85,7 +85,7 @@ describe('ClockPage offline behaviour', () => {
     return TestBed.createComponent(ClockPage);
   }
 
-  it('keeps the terminal unlocked after an offline stamp and resets once the connection recovers', () => {
+  it('keeps the terminal unlocked after an offline stamp and resets only once events are processed', () => {
     const fixture = createComponent();
     const component = fixture.componentInstance;
     component.pressDigit('1');
@@ -110,10 +110,19 @@ describe('ClockPage offline behaviour', () => {
     expect(component.selectedEmployee()).not.toBeNull();
     expect(component.isUnlocked()).toBe(true);
 
-    // Connection recovered (polls succeed again): flush + deferred reset.
+    // Polls succeed again (API reachable) - the flush is triggered, but the
+    // server only BUFFERS the events (Kimai still down). The recovered
+    // signal does NOT fire, so the terminal must stay unlocked: a PIN login
+    // is still impossible and resetting would lock the employee out.
     failPolls = false;
     vi.advanceTimersByTime(1_000);
     expect(TestBed.inject(OfflineQueueService).syncNow).toHaveBeenCalled();
+    expect(component.isUnlocked()).toBe(true);
+    expect(component.selectedEmployee()).not.toBeNull();
+
+    // Now the server actually processed the events -> recovered fires and
+    // the deferred reset runs.
+    recovered$.next();
     expect(component.isUnlocked()).toBe(false);
     expect(component.selectedEmployee()).toBeNull();
   });

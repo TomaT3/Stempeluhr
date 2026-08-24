@@ -45,12 +45,12 @@ export abstract class ClockWorkflow implements OnDestroy {
     // Hosts without a terminalId (the /clock default route) have no NFC
     // poll, so they never see the connection recover on their own. Use the
     // offline queue's own recovery signal to release a terminal that was
-    // kept unlocked for offline stamping and clear the stale banner.
+    // kept unlocked for offline stamping and clear the stale banner. The
+    // signal fires ONLY when queued events were actually PROCESSED
+    // (applied/duplicate/rejected) - a buffered-only flush (API up, Kimai
+    // down) emits nothing, so the terminal stays unlocked while a PIN login
+    // is still impossible.
     const recoveredSubscription = this.offlineQueue.recovered.subscribe(() => {
-      if (!this.isOffline()) {
-        return;
-      }
-
       this.isOffline.set(false);
       if (this.pendingResetOnRecovery) {
         this.pendingResetOnRecovery = false;
@@ -174,14 +174,12 @@ export abstract class ClockWorkflow implements OnDestroy {
       next: latest => {
         if (this.isOffline()) {
           // Connection just recovered: flush the offline queue immediately
-          // instead of waiting for the 15 s retry timer.
+          // instead of waiting for the 15 s retry timer. The deferred
+          // back() is NOT done here - the recovered signal above decides,
+          // and it fires only when events were actually PROCESSED. A
+          // buffered-only flush (API up, Kimai down) must keep the terminal
+          // unlocked: a PIN login is still impossible.
           this.offlineQueue.syncNow().subscribe();
-          if (this.pendingResetOnRecovery) {
-            // PIN logins work again - release the terminal that was kept
-            // unlocked for offline stamping.
-            this.pendingResetOnRecovery = false;
-            this.back();
-          }
         }
         this.isOffline.set(false);
         this.handleLatestNfcEvent(latest.event);
