@@ -1,10 +1,6 @@
 @if (isOffline()) {
   <div class="offline-banner" role="status" aria-live="polite">
-    <strong>OFFLINE-BETRIEB</strong>
-    <span>– Stempel werden gespeichert und nachgetragen</span>
-    @if (offlineQueue.pendingCount().length > 0) {
-      <span class="offline-count">{{ offlineQueue.pendingCount().length }}</span>
-    }
+    Offline – Stempel werden zwischengespeichert und automatisch nachgetragen
   </div>
 }
 

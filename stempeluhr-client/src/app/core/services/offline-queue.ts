@@ -155,6 +155,10 @@ export class OfflineQueueService {
     // the buffered-only case a PIN login is still impossible, so the terminal
     // must stay unlocked (no back()/reset) - see clock-workflow.
     let anyProcessed = false;
+    // Set when a chunk dies on a transport error (network/timeout/5xx): the
+    // run did NOT complete, so "recovered" must not fire even though earlier
+    // chunks already processed events - PIN logins are still impossible.
+    let replayAborted = false;
 
     replay:
     for (const [endpoint, events] of groups) {
@@ -193,6 +197,7 @@ export class OfflineQueueService {
           // progress survives; the rest retries on the timer. Breaking out of
           // BOTH loops (not just the chunk loop) keeps the remaining groups
           // unsent - the network is down, they would fail the same way.
+          replayAborted = true;
           break replay;
         }
       }
@@ -200,10 +205,13 @@ export class OfflineQueueService {
 
     this.dropResolved(bufferedIds, mentionedIds);
 
-    // The backend answered and actually processed events - connectivity (and
-    // Kimai) are back. A buffered-only run must NOT emit: the PIN login is
-    // still impossible and hosts use this signal to release the terminal.
-    if (results.length > 0 && anyProcessed) {
+    // The backend answered and actually processed events AND the run finished
+    // without a transport error - connectivity (and Kimai) are back. A
+    // buffered-only run must NOT emit (the PIN login is still impossible and
+    // hosts use this signal to release the terminal), and neither may an
+    // ABORTED run whose earlier chunks processed events while a later chunk
+    // hit a network/timeout failure.
+    if (results.length > 0 && anyProcessed && !replayAborted) {
       this.recoveredSubject.next();
     }
 

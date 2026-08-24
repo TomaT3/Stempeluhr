@@ -30,6 +30,17 @@ export abstract class ClockWorkflow implements OnDestroy {
   private nfcPollTimer: number | null = null;
   private lastNfcEventId: string | null = null;
   private hasInitializedNfcPolling = false;
+  /**
+   * True while a connectivity loss (failed NFC poll OR an offline-queued
+   * action whose request died) has not yet seen a follow-up successful
+   * poll. The FIRST successful poll afterwards triggers exactly ONE
+   * immediate queue flush. Tracked separately from isOffline on purpose:
+   * the banner clears only after the sync really processed an event, so
+   * poll success alone is no longer a state edge - keying the flush on
+   * isOffline would re-send every second while the server keeps buffering
+   * (API up, Kimai down).
+   */
+  private pendingRecoveryFlush = false;
   private nfcCardId: string | null = null;
   /** Unsubscribes the offline-queue recovery listener (see constructor). */
   private recoveryUnsubscribe: (() => void) | null = null;
@@ -186,22 +197,28 @@ export abstract class ClockWorkflow implements OnDestroy {
 
     this.kioskApi.latestNfcEvent(this.terminalId).subscribe({
       next: latest => {
-        if (this.isOffline()) {
-          // Connection just recovered: flush the offline queue immediately
-          // instead of waiting for the 15 s retry timer. The deferred
-          // back() is NOT done here - the recovered signal above decides,
-          // and it fires only when events were actually PROCESSED. A
-          // buffered-only flush (API up, Kimai down) must keep the terminal
-          // unlocked: a PIN login is still impossible.
-          this.offlineQueue.syncNow().subscribe();
+        if (this.pendingRecoveryFlush) {
+          // Connection just recovered: flush the offline queue ONCE immediately
+          // instead of waiting for the retry timer. The deferred back() is NOT
+          // done here - the recovered signal above decides, and it fires only
+          // when events were actually PROCESSED. The banner clears on the SAME
+          // proof: isOffline goes false only when the sync really processed at
+          // least one event; a buffered-only flush (API up, Kimai down) keeps
+          // it true because a PIN login is still impossible.
+          this.pendingRecoveryFlush = false;
+          this.offlineQueue.syncNow().subscribe(results => {
+            if (results.some(result => result.results?.some(detail => detail.status !== 'buffered'))) {
+              this.isOffline.set(false);
+            }
+          });
         }
-        this.isOffline.set(false);
         this.handleLatestNfcEvent(latest.event);
       },
       error: () => {
         this.hasInitializedNfcPolling = true;
         // Backend unreachable: keep polling (it will recover automatically).
         this.isOffline.set(true);
+        this.pendingRecoveryFlush = true;
       },
     });
   }
@@ -242,6 +259,11 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   private sendClockAction(action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd'): void {
     this.isBusy.set(true);
+    // Capture the stamp time SYNCHRONOUSLY at button press: a hanging request
+    // (kioskApi.clock has no timeout) reports its failure only seconds to
+    // minutes later - the queued event must carry the moment the employee
+    // acted (payroll data), not the late error time.
+    const performedAt = new Date().toISOString();
     this.kioskApi.clock(this.selectedEmployee()?.id ?? '', this.pin(), action, this.nfcCardId).subscribe({
       next: status => {
         this.isOffline.set(false);
@@ -265,9 +287,14 @@ export abstract class ClockWorkflow implements OnDestroy {
             employeeId,
             pin: this.pin(),
             action,
-            performedAt: new Date().toISOString(),
+            performedAt,
+            // Live-path parity: a session unlocked by NFC touch has NO pin -
+            // the replay resolves the employee via the card instead.
+            nfcCardId: this.nfcCardId,
           });
           this.isOffline.set(true);
+          // Let the next successful NFC poll catch the queue up immediately.
+          this.pendingRecoveryFlush = true;
           this.message.set(
             'Offline gespeichert - wird automatisch nachgetragen.',
           );

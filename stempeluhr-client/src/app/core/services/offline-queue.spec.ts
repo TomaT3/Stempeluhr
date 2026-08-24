@@ -118,7 +118,10 @@ describe('OfflineQueueService sync batching', () => {
     expect(service.pendingCount().length).toBe(0);
   });
 
-  it('keeps already-resolved events when a later chunk fails mid-run', async () => {
+  it('keeps already-resolved events and does NOT emit recovered when a later chunk fails mid-run', async () => {
+    let recovered = 0;
+    service.recovered.subscribe(() => recovered++);
+
     for (let i = 0; i < 120; i++) {
       service.enqueueKiosk(kioskEvent(`k${i}`));
     }
@@ -140,6 +143,11 @@ describe('OfflineQueueService sync batching', () => {
     // Partial progress survives: only the resolved 100 leave the queue.
     expect(service.pendingCount().length).toBe(20);
     expect(service.pendingCount()[0].event.eventId).toBe('k100');
+
+    // Chunk 1 processed events, chunk 2 died on a transport error: the run
+    // was ABORTED mid-way, so no "recovered" may fire - PIN logins are still
+    // impossible and hosts would wrongly release the terminal.
+    expect(recovered).toBe(0);
   });
 
   it('sends kiosk events to the kiosk endpoint only', async () => {

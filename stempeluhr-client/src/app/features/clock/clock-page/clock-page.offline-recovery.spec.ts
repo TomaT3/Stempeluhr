@@ -140,6 +140,9 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
     respondSync(firstRequest, [{ eventId: queued[0].eventId, status: 'buffered' }], 'buffered');
     await drainMicrotasks();
     expect(queue.pendingCount().length).toBe(1); // buffered stays queued
+    // Buffered-only flush: the banner must STAY - the API answering is not
+    // enough while Kimai is down (a PIN login is still impossible).
+    expect(component.isOffline()).toBe(true);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(component.isUnlocked()).toBe(true);
     expect(component.selectedEmployee()).not.toBeNull();
@@ -157,6 +160,9 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
     await drainMicrotasks();
 
     expect(queue.pendingCount().length).toBe(0);
+    // Real processing -> recovered fired through the real chain: the banner
+    // clears together with the terminal release.
+    expect(component.isOffline()).toBe(false);
     expect(component.isUnlocked()).toBe(false);
     expect(component.selectedEmployee()).toBeNull();
   });

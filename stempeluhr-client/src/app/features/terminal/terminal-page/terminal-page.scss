@@ -345,27 +345,16 @@ p {
   }
 }
 
+/* In normal document flow as the first grid item: it spans all columns and
+   pushes the content down instead of overlaying the top-right back button. */
 .offline-banner {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 50;
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
   padding: 0.6rem 1rem;
   background: #b45309;
   color: #fff;
   font-weight: 600;
   letter-spacing: 0.02em;
-
-  .offline-count {
-    min-width: 1.75rem;
-    padding: 0.1rem 0.5rem;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.25);
-    text-align: center;
-  }
 }

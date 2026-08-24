@@ -65,7 +65,7 @@ describe('ClockPage offline behaviour', () => {
         { provide: AudioFeedback, useValue: { playBeeps } },
         {
           provide: OfflineQueueService,
-          useValue: { enqueueKiosk, syncNow: vi.fn(() => of([])), recovered: recovered$.asObservable(), pendingCount: vi.fn(() => []) },
+          useValue: { enqueueKiosk, syncNow: vi.fn(() => of([])), recovered: recovered$.asObservable() },
         },
         {
           provide: ActivatedRoute,
@@ -184,71 +184,107 @@ describe('ClockPage offline behaviour', () => {
     expect(component.isUnlocked()).toBe(false);
     expect(component.selectedEmployee()).toBeNull();
   });
-
-  it('shows the offline banner while offline but keeps all stamp actions available', () => {
+  it('keeps pause actions usable offline and hides the banner only on recovery', async () => {
     const fixture = createComponent();
-    fixture.detectChanges();
     const component = fixture.componentInstance;
 
-    // No banner while online.
-    expect(fixture.nativeElement.querySelector('.offline-banner')).toBeNull();
-
-    // Login, then go offline while working.
     component.pressDigit('1');
     component.pressDigit('2');
     component.pressDigit('3');
     component.pressDigit('4');
-    const workingStatus: ClockStatus = { ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt' };
-    pinLoginResult.next({ employee: session.employee, status: workingStatus });
+    pinLoginResult.next(session);
+    expect(component.isUnlocked()).toBe(true);
+
+    // Working state: Pause + Ausstempeln are offered.
+    component.clockState.setStatus({
+      ...status,
+      isRunning: true,
+      activeTimesheetId: 42,
+      startedAt: '2026-08-24T08:00:00Z',
+      durationSeconds: 600,
+      state: 'working',
+      stateText: 'Eingestempelt',
+    });
     fixture.detectChanges();
 
+    // Offline transition via an ALLOWED action: stop()'s request hangs and
+    // its failure arrives much later - the queued stamp must still carry
+    // the ACTION's timestamp, not the late error time.
     failPolls = true;
-    component.startPause();
+    const stampIso = new Date().toISOString();
+    component.stop();
+    await vi.advanceTimersByTimeAsync(30_000);
     clockResult.error({ status: 0 });
+
+    expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    expect(enqueueKiosk.mock.calls[0][0].performedAt).toBe(stampIso);
+    // PIN-opened session: no card id may leak into the queued event.
+    expect(enqueueKiosk.mock.calls[0][0].nfcCardId ?? null).toBeNull();
+
     fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.offline-banner')).not.toBeNull();
 
-    expect(component.isOffline()).toBe(true);
-
-    // Banner is visible and says stamps are queued (no false "no pause"
-    // limitation: the explicit kiosk path supports pause catch-up).
-    const banner = fixture.nativeElement.querySelector('.offline-banner');
-    expect(banner).not.toBeNull();
-    expect(banner.textContent).toContain('OFFLINE-BETRIEB');
-    expect(banner.textContent).toContain('nachgetragen');
-    expect(banner.textContent).not.toContain('keine Pause');
-
-    // All stamp actions stay available - the kiosk queue supports pause.
-    const pauseButton = fixture.nativeElement.querySelector('.stamp-button.pause');
+    // The pause button must remain visible AND usable while offline.
+    const pauseButton = fixture.nativeElement.querySelector('.stamp-button.pause') as HTMLButtonElement;
     expect(pauseButton).not.toBeNull();
-    const stopButton = fixture.nativeElement.querySelector('.stamp-button.stop');
-    expect(stopButton).not.toBeNull();
+    expect(pauseButton.disabled).toBe(false);
+
+    // Paused state: 'Pause beenden' must stay usable offline as well - an
+    // employee in a break must be able to end it (Issue #11 browser queue).
+    component.clockState.setStatus({
+      ...status,
+      isRunning: false,
+      activeTimesheetId: 42,
+      startedAt: '2026-08-24T08:05:00Z',
+      durationSeconds: 300,
+      state: 'paused',
+      stateText: 'In Pause',
+    });
+    fixture.detectChanges();
+    const resumeButton = fixture.nativeElement.querySelector('.stamp-button.start') as HTMLButtonElement;
+    expect(resumeButton).not.toBeNull();
+    expect(resumeButton.textContent).toContain('Pause beenden');
+    expect(resumeButton.disabled).toBe(false);
+
+    // Recovery: the banner disappears, the action buttons survive.
+    component.isOffline.set(false);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.offline-banner')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.stamp-button.start')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.stamp-button.stop')).not.toBeNull();
   });
 
-  it('shows the pending queue count in the offline banner', () => {
+  it('queues an offline stamp of an NFC-unlocked session with its card id', () => {
     const fixture = createComponent();
     const component = fixture.componentInstance;
-    const queue = TestBed.inject(OfflineQueueService) as unknown as {
-      pendingCount: ReturnType<typeof vi.fn>;
+
+    // Unlock via NFC touch on the polled terminal: no pin entry happened.
+    latestNfcValue = {
+      event: {
+        eventId: 'ev-nfc-1',
+        occurredAt: new Date().toISOString(),
+        terminalId: 'term-1',
+        cardId: '04AB',
+        employee: session.employee,
+        status,
+        message: 'NFC-Karte erkannt.',
+        success: true,
+      },
     };
-    // Two stamps are waiting to be synced.
-    queue.pendingCount.mockReturnValue([{}, {}]);
+    vi.advanceTimersByTime(1_000);
+    expect(component.isUnlocked()).toBe(true);
 
-    component.pressDigit('1');
-    component.pressDigit('2');
-    component.pressDigit('3');
-    component.pressDigit('4');
-    const workingStatus: ClockStatus = { ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt' };
-    pinLoginResult.next({ employee: session.employee, status: workingStatus });
-    fixture.detectChanges();
-
+    // Backend unreachable: the stamp queues for replay ...
     failPolls = true;
-    component.startPause();
+    component.start();
     clockResult.error({ status: 0 });
-    fixture.detectChanges();
 
-    expect(component.isOffline()).toBe(true);
-    const count = fixture.nativeElement.querySelector('.offline-banner .offline-count');
-    expect(count).not.toBeNull();
-    expect(count.textContent.trim()).toBe('2');
+    // ... and MUST carry the card id so the server replay can resolve the
+    // employee without a pin (live-path parity) instead of rejecting it as
+    // "pin wrong" forever.
+    expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    const queued = enqueueKiosk.mock.calls[0][0];
+    expect(queued.employeeId).toBe('max');
+    expect(queued.nfcCardId).toBe('04AB');
   });
 });

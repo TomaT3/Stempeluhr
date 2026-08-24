@@ -2,9 +2,6 @@
   @if (isOffline()) {
     <div class="offline-banner" role="status" aria-live="polite">
       Offline – Stempel werden gespeichert und später automatisch übertragen
-      @if (offlineQueue.pendingCount().length > 0) {
-        <span class="offline-count">{{ offlineQueue.pendingCount().length }}</span>
-      }
     </div>
   }
   <header class="terminal-clock" aria-label="Aktuelle Uhrzeit und Datum">
