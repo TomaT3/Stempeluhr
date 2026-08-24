@@ -244,18 +244,22 @@ describe('OfflineQueueService sync batching', () => {
     expect(service.pendingCount().length).toBe(0);
   });
 
-  it('aborts a hung flush request after the timeout and retries', async () => {
+  it('aborts a hung flush request after its deadline and retries', async () => {
     service.enqueueKiosk(kioskEvent('t1'));
     service.syncNow().subscribe();
     const hung = httpMock.expectOne(r => r.url === kioskEndpoint);
 
-    // The server never answers: advance past the 30 s request timeout. The
-    // flush aborts, the event stays queued, and a retry is scheduled.
-    await vi.advanceTimersByTimeAsync(31_000);
+    // The deadline for a 1-event chunk is base + 1 x per-event budget =
+    // 12.5 s. The server never answers: the flush aborts, the event stays
+    // queued, and a retry is scheduled.
+    await vi.advanceTimersByTimeAsync(13_000);
+    expect(hung.cancelled).toBe(true);
     expect(service.pendingCount().length).toBe(1);
 
-    // Retry (15 s cadence) fires a NEW request that succeeds.
-    await vi.advanceTimersByTimeAsync(15_000);
+    // Retry (15 s cadence) fires a NEW request that succeeds. The small
+    // second hop keeps the fake clock BEHIND the retry request's own fresh
+    // deadline (it would otherwise time out mid-jump like the first one).
+    await vi.advanceTimersByTimeAsync(2_500);
     const retry = httpMock.expectOne(r => r.url === kioskEndpoint);
     retry.flush(resultFor(retry.request.body.events as OfflineKioskClockEvent[], 'applied'));
     await drainMicrotasks();
@@ -263,5 +267,70 @@ describe('OfflineQueueService sync batching', () => {
 
     // The original request was cancelled by the timeout (cannot be flushed).
     expect(hung.cancelled).toBe(true);
+  });
+
+  it('gives a full-size chunk a proportionally larger request deadline', async () => {
+    // A 100-event chunk costs the server 2-4 Kimai roundtrips per event under
+    // its global lock: against a slow Kimai even a healthy batch can run
+    // minutes. The deadline must scale with the chunk size instead of
+    // aborting legitimate requests (every abort would resend the whole chunk
+    // and re-take the server lock).
+    for (let i = 0; i < 100; i++) {
+      service.enqueueKiosk(kioskEvent('c' + i));
+    }
+
+    let done = false;
+    service.syncNow().subscribe(() => (done = true));
+    const hung = httpMock.expectOne(
+      r => r.url === kioskEndpoint && r.body.events.length === 100,
+    );
+
+    // 30 s in (the OLD fixed deadline), the chunk must still be in flight.
+    // Note the retry timer fired at t=15 s and was absorbed by the
+    // in-flight guard - no duplicate request may appear here.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(hung.cancelled).toBe(false);
+    expect(service.pendingCount().length).toBe(100);
+    httpMock.expectNone(r => r.url === kioskEndpoint);
+
+    // Past the scaled deadline (10 s + 100 x 2.5 s = 260 s) the request
+    // aborts like any other failure. flushQueue treats that like a network
+    // error: it stops replaying and schedules the retry itself, so the outer
+    // observable still COMPLETES (with the partial results so far).
+    await vi.advanceTimersByTimeAsync(240_000);
+    expect(hung.cancelled).toBe(true);
+    expect(done).toBe(true);
+    expect(service.pendingCount().length).toBe(100);
+
+    // ...and the normal retry cadence takes over. Again: short hop so the
+    // fresh retry request cannot time out mid-jump.
+    await vi.advanceTimersByTimeAsync(16_000);
+    const retry = httpMock.expectOne(
+      r => r.url === kioskEndpoint && r.body.events.length === 100,
+    );
+    retry.flush(resultFor(retry.request.body.events as OfflineKioskClockEvent[], 'applied'));
+    await drainMicrotasks();
+    expect(service.pendingCount().length).toBe(0);
+  });
+
+  it('flushes only once when the same syncNow() observable is subscribed twice', async () => {
+    service.enqueueKiosk(kioskEvent('d1'));
+
+    // Guard check AND arm happen together inside the defer, so a second
+    // subscriber of the SAME observable can never slip past the guard -
+    // both complete, but only one flush runs.
+    const flush$ = service.syncNow();
+    let doneCount = 0;
+    flush$.subscribe(() => doneCount++);
+    flush$.subscribe();
+    await drainMicrotasks();
+
+    const req = httpMock.expectOne(r => r.url === kioskEndpoint);
+    req.flush(resultFor(req.request.body.events as OfflineKioskClockEvent[], 'applied'));
+    await drainMicrotasks();
+
+    expect(doneCount).toBe(1);
+    httpMock.expectNone(r => r.url === kioskEndpoint);
+    expect(service.pendingCount().length).toBe(0);
   });
 });

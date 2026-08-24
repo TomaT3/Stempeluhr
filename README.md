@@ -42,6 +42,32 @@ Danach in der App oben `Admin` oeffnen:
 Die Pause-Aktivitaet-ID verweist auf eine normale Kimai-Taetigkeit, die als Pause genutzt wird.
 Aktive Timesheets mit dieser Taetigkeit werden in der Stempeluhr als `In Pause` angezeigt.
 
+### Offline-Nachtrag von Pausenenden: Voraussetzungen und Toleranz
+
+Die automatische Recovery eines unterbrochenen Offline-`pauseEnd` (das
+Pausen-Timesheet wurde bereits gestoppt, der Wiedereinstieg in die Arbeit
+schlug transient fehl) setzt eine konfigurierte **Pause-Aktivitaet-ID
+voraus**: Nur mit ihr kann die API ein gestopptes Timesheet ueberhaupt als
+Pause erkennen. Ohne diese Einstellung bleibt ein solcher Fall bewusst ein
+No-op mit lauter Warnung im Log - die Arbeit muss dann manuell nachgetragen
+werden.
+
+Die Erkennung nutzt eine Toleranz (`PauseEndRecoveryToleranceSeconds` in
+der `settings.json`, Standard 30 s): Das Ende des letzten gestoppten
+Pausen-Timesheets darf nur um diesen Betrag vom Zeitstempel des
+nachgetragenen Events abweichen. Trade-off dabei:
+
+- Kleiner Wert = kleines Phantom-Fenster (ein echter Live-Stopp innerhalb
+  des Fensters wuerde sonst faelschlich als unterbrochene Transaktion
+  mitgebucht), braucht aber synchronisierte Uhren.
+- Groesserer Wert = robust gegen Uhrenabweichung zwischen Client
+  (Raspberry Pi, Kiosk-Browser) und Kimai-Server, oeffnet aber eben dieses
+  Fenster.
+
+Clients sollten daher per NTP synchronisiert sein (der Raspberry Pi tut das
+standardmaessig ueber systemd-timesyncd); laeuft ein Client ohne
+Zeitsynchronisation, den Wert in der Admin-Umgebung entsprechend erhoehen.
+
 ## Raspberry Pi NFC-Terminal
 
 Fuer ein Terminal mit Raspberry Pi 5, Touchdisplay und ACR122U gibt es einen

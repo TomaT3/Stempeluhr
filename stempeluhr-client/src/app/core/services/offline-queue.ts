@@ -22,9 +22,24 @@ const SYNC_RETRY_BUFFERED_MS = 60_000;
  * would fail forever and events beyond the limit would never reach Kimai.
  */
 const MAX_SYNC_BATCH_SIZE = 100;
-// Upper bound for a single flush request. Without it a hung connection
-// would hold the in-flight guard forever and block every later flush.
-const SYNC_REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Upper bound for a single flush REQUEST, coupled to the chunk size: the API
+ * processes each event under its global _syncLock with 2-4 Kimai roundtrips
+ * (status check + start/stop; pause actions up to 3-4 calls). Against a slow
+ * Kimai (~300-500 ms/call) a full MAX_SYNC_BATCH_SIZE chunk therefore needs
+ * well over 30 s - a fixed deadline would abort legitimate requests, and
+ * every resend would re-take the server lock and repeat the per-event status
+ * checks (correct thanks to idempotency, but a very slow drain under load).
+ * Fixed overhead plus a budget per event covers that worst case while still
+ * freeing the in-flight guard on a dead connection.
+ */
+const SYNC_REQUEST_TIMEOUT_BASE_MS = 10_000;
+const SYNC_REQUEST_TIMEOUT_PER_EVENT_MS = 2_500;
+
+/** Deadline for one sync request carrying chunkSize events. */
+function syncRequestTimeoutMs(chunkSize: number): number {
+  return SYNC_REQUEST_TIMEOUT_BASE_MS + chunkSize * SYNC_REQUEST_TIMEOUT_PER_EVENT_MS;
+}
 
 interface StoredOfflineEvent {
   kind: 'nfc' | 'kiosk';
@@ -79,27 +94,30 @@ export class OfflineQueueService {
     this.enqueue({ kind: 'kiosk', event });
   }
 
-  /** Attempts to flush everything; returns an observable that completes when done. */
+  /**
+   * Attempts to flush everything; returns an observable that completes when
+   * done. Check AND arm of the in-flight guard live INSIDE the defer, i.e.
+   * at SUBSCRIBE time and atomically in one place: a caller that stores the
+   * observable and subscribes later (or subscribes twice) can never slip
+   * between a free and a set guard - the second subscriber simply sees
+   * syncing === true and skips. Callers must still subscribe exactly once
+   * for a flush to happen at all.
+   */
   syncNow(): Observable<OfflineSyncResult[]> {
-    const snapshot = this.queued();
-    if (snapshot.length === 0) {
-      return of([]);
-    }
-
-    if (this.syncing) {
-      // A flush is already running (constructor, retry timer and NFC poll can
-      // overlap). Skip - the in-flight run drains the same snapshot, and
-      // duplicate chunks are absorbed server-side by _syncLock + idempotency.
-      // Guarding here avoids the wasteful double-send.
-      return of([]);
-    }
-
-    // flushQueue is async because the chunks must be sent SEQUENTIALLY:
-    // each response decides whether the next chunk may go out at all. The
-    // in-flight flag is set at SUBSCRIBE time (defer), not at call time, so
-    // an unsubscribed syncNow() call can never wedge the guard.
     return defer(() => {
+      const snapshot = this.queued();
+      if (snapshot.length === 0 || this.syncing) {
+        // Empty queue: nothing to do. Overlapping call (constructor, retry
+        // timer and NFC poll can overlap): skip - the in-flight run drains
+        // the same queue, and duplicate chunks are absorbed server-side by
+        // _syncLock + idempotency. Guarding here avoids the wasteful
+        // double-send.
+        return of([] as OfflineSyncResult[]);
+      }
+
       this.syncing = true;
+      // flushQueue is async because the chunks must be sent SEQUENTIALLY:
+      // each response decides whether the next chunk may go out at all.
       return this.flushQueue(snapshot);
     }).pipe(
       finalize(() => {
@@ -146,10 +164,11 @@ export class OfflineQueueService {
         }
 
         try {
+          const chunk = events.slice(offset, offset + MAX_SYNC_BATCH_SIZE);
           const result = await firstValueFrom(
             this.http.post<OfflineSyncResult>(endpoint, {
-              events: events.slice(offset, offset + MAX_SYNC_BATCH_SIZE),
-            }).pipe(timeout(SYNC_REQUEST_TIMEOUT_MS)),
+              events: chunk,
+            }).pipe(timeout(syncRequestTimeoutMs(chunk.length))),
           );
           results.push(result);
 

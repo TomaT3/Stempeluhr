@@ -52,6 +52,20 @@ export abstract class ClockWorkflow implements OnDestroy {
     // is still impossible.
     const recoveredSubscription = this.offlineQueue.recovered.subscribe(() => {
       this.isOffline.set(false);
+      // Race guard against an in-flight ONLINE action: while a queue flush
+      // runs (up to its chunk deadline), the employee can act again because
+      // the API answers live. That action owns the screen and arms its OWN
+      // teardown in every outcome (success and 4xx via scheduleReset(); the
+      // 5xx branch re-queues and re-arms pendingResetOnRecovery itself). A
+      // back() here would tear the session out from under the running
+      // request: its late response would paint status/message onto the idle
+      // screen, and its 2.2 s reset could wipe the next employee's fresh PIN
+      // entry. Dropping the deferred reset is safe - the in-flight action
+      // supersedes it.
+      if (this.isBusy()) {
+        this.pendingResetOnRecovery = false;
+        return;
+      }
       if (this.pendingResetOnRecovery) {
         this.pendingResetOnRecovery = false;
         this.back();
