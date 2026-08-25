@@ -140,6 +140,11 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # Chrome's Private Network Access: a request from a PUBLIC site
+        # (e.g. https://...cloudflare...) to a LOCAL address (127.0.0.1)
+        # gets an extended preflight asking for this header - without it
+        # the fetch fails even though plain CORS is satisfied.
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:

@@ -138,6 +138,14 @@ def main() -> int:
                 assert (
                     "POST" in response.headers.get("Access-Control-Allow-Methods", "")
                 ), "preflight must allow POST"
+                assert (
+                    response.headers.get("Access-Control-Allow-Private-Network")
+                    == "true"
+                ), (
+                    "preflight must allow private network access - the kiosk UI "
+                    "is served from a public https origin (cloudflare) and "
+                    "Chrome requires this header for public->local requests"
+                )
             status, headers = get_json(f"{server2.url}/scan/latest")
             assert status in (200, 404), "GET should answer normally"
             try:
