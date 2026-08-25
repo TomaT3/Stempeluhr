@@ -5,15 +5,34 @@ import { Employee, NfcClockEvent } from '../../core/models/kiosk.models';
 import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState } from '../../core/services/clock-state';
 import { KioskApi } from '../../core/services/kiosk-api';
+import { LocalNfcScanService } from '../../core/services/local-nfc-scan.service';
 import { OfflineQueueService } from '../../core/services/offline-queue';
 
 const PIN_LENGTH = 4;
+/** localStorage key for the last known cardId -> employee mapping. */
+const EMPLOYEE_CARD_CACHE_KEY = 'stempeluhr.employee-card-cache.v1';
+
+/** Normalizes card ids the same way the admin page does (hex, uppercase). */
+function normalizeCardId(cardId: string | null | undefined): string | null {
+  const normalized = cardId?.replace(/[^0-9a-f]/gi, '').toUpperCase() ?? '';
+  return normalized.length > 0 ? normalized : null;
+}
+
+function readEmployeeCardCache(): Record<string, Employee> {
+  try {
+    const raw = window.localStorage.getItem(EMPLOYEE_CARD_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, Employee>) : {};
+  } catch {
+    return {};
+  }
+}
 
 @Directive()
 export abstract class ClockWorkflow implements OnDestroy {
   private readonly kioskApi = inject(KioskApi);
   private readonly audioFeedback = inject(AudioFeedback);
   private readonly route = inject(ActivatedRoute);
+  private readonly localNfcScan = inject(LocalNfcScanService);
   protected readonly offlineQueue = inject(OfflineQueueService);
   readonly clockState = inject(ClockState);
 
@@ -28,6 +47,8 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   private resetTimer: number | null = null;
   private nfcPollTimer: number | null = null;
+  /** Interval handle for the local agent scan poll (only while offline). */
+  private localNfcTimer: number | null = null;
   private lastNfcEventId: string | null = null;
   private hasInitializedNfcPolling = false;
   /**
@@ -185,6 +206,8 @@ export abstract class ClockWorkflow implements OnDestroy {
       window.clearInterval(this.nfcPollTimer);
     }
 
+    this.stopLocalNfcPolling();
+
     this.recoveryUnsubscribe?.();
 
     this.clockState.setEmployeeMode(false);
@@ -209,6 +232,8 @@ export abstract class ClockWorkflow implements OnDestroy {
           this.offlineQueue.syncNow().subscribe(results => {
             if (results.some(result => result.results?.some(detail => detail.status !== 'buffered'))) {
               this.isOffline.set(false);
+              // Backend is back: identification goes through the server again.
+              this.stopLocalNfcPolling();
             }
           });
         }
@@ -219,8 +244,95 @@ export abstract class ClockWorkflow implements OnDestroy {
         // Backend unreachable: keep polling (it will recover automatically).
         this.isOffline.set(true);
         this.pendingRecoveryFlush = true;
+        // While the backend is down, the local Pi NFC agent becomes the
+        // identification source: a scan now only UNLOCKS an employee, the
+        // actual stamping happens via the offline-queued buttons.
+        this.startLocalNfcPolling();
       },
     });
+  }
+
+  private startLocalNfcPolling(): void {
+    if (!this.terminalId || this.localNfcTimer !== null) {
+      return;
+    }
+
+    this.pollLocalScan();
+    this.localNfcTimer = window.setInterval(() => this.pollLocalScan(), 1000);
+  }
+
+  private stopLocalNfcPolling(): void {
+    if (this.localNfcTimer !== null) {
+      window.clearInterval(this.localNfcTimer);
+      this.localNfcTimer = null;
+    }
+  }
+
+  private pollLocalScan(): void {
+    if (this.isBusy() || this.isUnlocked()) {
+      return;
+    }
+
+    this.localNfcScan.poll().subscribe(scan => {
+      if (!scan) {
+        return;
+      }
+
+      this.handleLocalScan(scan.cardId);
+    });
+  }
+
+  /**
+   * Resolves a locally scanned card against the cached card -> employee
+   * catalog (built from earlier ONLINE NFC events) and unlocks the matched
+   * employee without stamping anything.
+   */
+  private handleLocalScan(cardId: string): void {
+    const normalized = normalizeCardId(cardId) ?? cardId;
+    const employee = readEmployeeCardCache()[normalized] ?? null;
+    // Consume the scan in every case so the agent does not re-report it.
+    this.localNfcScan.ack().subscribe();
+
+    if (!employee) {
+      this.message.set('Unbekannte Karte');
+      this.audioFeedback.playBeeps(2);
+      return;
+    }
+
+    // Offline the current clock status is unknown - do not fake one; the
+    // status shown updates as soon as the first queued action is stamped
+    // and later synced/replayed.
+    this.selectedEmployee.set(employee);
+    this.clockState.setEmployeeMode(true);
+    this.isUnlocked.set(true);
+    this.pin.set('');
+    this.nfcCardId = normalized;
+    this.message.set(`${employee.displayName} - Offline angemeldet, bitte Aktion waehlen.`);
+    this.audioFeedback.playBeeps(1);
+  }
+
+  /** Remembers a card -> employee pair seen while ONLINE for later offline use. */
+  private cacheEmployeeCard(cardId: string | null, employee: Employee): void {
+    const normalized = normalizeCardId(cardId);
+    if (!normalized) {
+      return;
+    }
+
+    try {
+      const cache = readEmployeeCardCache();
+      const existing = cache[normalized];
+      if (existing?.id === employee.id
+        && existing.displayName === employee.displayName
+        && existing.initials === employee.initials) {
+        return;
+      }
+
+      cache[normalized] = employee;
+      window.localStorage.setItem(EMPLOYEE_CARD_CACHE_KEY, JSON.stringify(cache));
+    } catch {
+      // Storage full/unavailable: offline identification then simply stays
+      // limited to what is still readable from the cache.
+    }
   }
 
   private handleLatestNfcEvent(event: NfcClockEvent | null): void {
@@ -236,6 +348,10 @@ export abstract class ClockWorkflow implements OnDestroy {
 
     this.lastNfcEventId = event.eventId;
     if (event.success && event.employee && event.status) {
+      // Remember the card -> employee pair so a later OFFLINE scan of the
+      // same card can still be identified (the backend does that mapping
+      // online, but is unreachable then).
+      this.cacheEmployeeCard(event.cardId, event.employee);
       this.selectedEmployee.set(event.employee);
       this.clockState.setStatus(event.status);
       this.clockState.setEmployeeMode(true);

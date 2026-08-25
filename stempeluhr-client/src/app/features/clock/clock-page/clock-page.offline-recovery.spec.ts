@@ -8,6 +8,7 @@ import { ClockStatus, KioskEmployeeSession } from '../../../core/models/kiosk.mo
 import { OfflineKioskClockEvent } from '../../../core/models/offline.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
+import { LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
 import { OfflineQueueService } from '../../../core/services/offline-queue';
 import { ClockPage } from './clock-page';
 
@@ -89,6 +90,10 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
+        {
+          provide: LocalNfcScanService,
+          useValue: { poll: vi.fn(() => of(null)), ack: vi.fn(() => of(null)) },
+        },
         {
           provide: ActivatedRoute,
           useValue: { snapshot: { queryParamMap: { get: (key: string) => (key === 'terminalId' ? 'term-1' : null) } } },

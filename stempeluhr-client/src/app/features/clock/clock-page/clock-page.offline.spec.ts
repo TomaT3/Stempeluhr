@@ -5,6 +5,7 @@ import { Subject, of, throwError } from 'rxjs';
 import { ClockStatus, KioskEmployeeSession, NfcLatestEvent } from '../../../core/models/kiosk.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
+import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
 import { OfflineQueueService } from '../../../core/services/offline-queue';
 import { ClockPage } from './clock-page';
 
@@ -17,6 +18,8 @@ describe('ClockPage offline behaviour', () => {
   let terminalIdValue: string | null;
   let enqueueKiosk: ReturnType<typeof vi.fn>;
   let playBeeps: ReturnType<typeof vi.fn>;
+  let localAck: ReturnType<typeof vi.fn>;
+  let localScanValue: LocalNfcScan | null;
 
   const status: ClockStatus = {
     isRunning: false,
@@ -40,6 +43,7 @@ describe('ClockPage offline behaviour', () => {
   };
 
   beforeEach(async () => {
+    window.localStorage.clear();
     pinLoginResult = new Subject<KioskEmployeeSession>();
     clockResult = new Subject<ClockStatus>();
     latestNfcValue = { event: null };
@@ -48,6 +52,8 @@ describe('ClockPage offline behaviour', () => {
     terminalIdValue = 'term-1';
     enqueueKiosk = vi.fn();
     playBeeps = vi.fn();
+    localAck = vi.fn(() => of(null));
+    localScanValue = null;
 
     await TestBed.configureTestingModule({
       imports: [ClockPage],
@@ -64,6 +70,13 @@ describe('ClockPage offline behaviour', () => {
         },
         { provide: AudioFeedback, useValue: { playBeeps } },
         {
+          provide: LocalNfcScanService,
+          useValue: {
+            poll: vi.fn(() => of(localScanValue)),
+            ack: localAck,
+          },
+        },
+        {
           provide: OfflineQueueService,
           useValue: { enqueueKiosk, syncNow: vi.fn(() => of([])), recovered: recovered$.asObservable() },
         },
@@ -79,6 +92,7 @@ describe('ClockPage offline behaviour', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    window.localStorage.clear();
   });
 
   function createComponent() {
@@ -286,5 +300,47 @@ describe('ClockPage offline behaviour', () => {
     const queued = enqueueKiosk.mock.calls[0][0];
     expect(queued.employeeId).toBe('max');
     expect(queued.nfcCardId).toBe('04AB');
+  });
+
+  it('unlocks the employee from a local agent scan while offline and acks it', () => {
+    failPolls = true; // backend unreachable -> offline mode
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+
+    // Card catalog cached from an earlier ONLINE NFC event.
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+
+    // The local agent reports a fresh, unconsumed scan.
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    expect(component.isOffline()).toBe(true);
+    expect(component.selectedEmployee()?.id).toBe('max');
+    expect(component.isUnlocked()).toBe(true);
+    expect(component.message()).toContain('Max Mustermann');
+    expect(playBeeps).toHaveBeenCalledWith(1);
+    expect(localAck).toHaveBeenCalledTimes(1);
+
+    // Normal buttons keep working and go through the offline queue.
+    component.start();
+    clockResult.error({ status: 0 });
+    const queued = enqueueKiosk.mock.calls[0][0];
+    expect(queued.employeeId).toBe('max');
+    expect(queued.nfcCardId).toBe('04ABCD');
+  });
+
+  it('reports an unknown card for a local scan without a cached employee', () => {
+    failPolls = true;
+    const component = createComponent().componentInstance;
+
+    localScanValue = { cardId: 'FFFF01', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    expect(localAck).toHaveBeenCalledTimes(1);
+    expect(component.isUnlocked()).toBe(false);
+    expect(component.message()).toBe('Unbekannte Karte');
   });
 });
