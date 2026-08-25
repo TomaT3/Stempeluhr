@@ -407,7 +407,9 @@ def handle_card_scan(
         scan_server,
         card_id,
         scanned_at,
-        selection_timeout or config.selection_timeout_seconds,
+        selection_timeout
+        if selection_timeout is not None
+        else config.selection_timeout_seconds,
     )
     if outcome == "acked":
         beep("ok")
@@ -417,6 +419,16 @@ def handle_card_scan(
         # A newer scan replaced ours before the timeout - only the newest
         # scan is ever evaluated, so this one stays a no-op.
         return
+
+    if outcome == "timeout":
+        # Late-ack race: the ack may have landed just after _wait_for_ack
+        # gave up. Re-check once; if consumed meanwhile, treat like "acked"
+        # and never fire the fallback (no toggle, no error beep).
+        scan = scan_server.latest_scan() if scan_server is not None else None
+        if scan is not None and scan.card_id == card_id and scan.consumed:
+            beep("ok")
+            LOGGER.info("Card %s published and acked by UI.", card_id)
+            return
 
     if config.fallback_mode == "toggle":
         _fallback_toggle(config, queue, status_cache, card_id, scanned_at, event_id)
@@ -431,7 +443,8 @@ def handle_card_scan(
             "Card %s not acked within %.1fs and fallback_mode is 'none' - "
             "scan dropped (no offline toggle).",
             card_id,
-            selection_timeout or config.selection_timeout_seconds,
+            selection_timeout if selection_timeout is not None
+            else config.selection_timeout_seconds,
         )
 
 

@@ -7,6 +7,7 @@ import json
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -42,6 +43,7 @@ from stempeluhr_nfc_agent import (  # noqa: E402
     handle_card_scan,
 )
 from offline_queue import OfflineQueue  # noqa: E402
+import stempeluhr_nfc_agent as agent_module  # noqa: E402
 
 
 def make_config(queue_path: Path, fallback_mode: str = "none") -> AgentConfig:
@@ -134,8 +136,6 @@ def main() -> int:
                 daemon=True,
             )
             first.start()
-            import time
-
             time.sleep(0.05)
             handle_card_scan(config, queue, cache, "CARD_B", server)
             first.join(timeout=5)
@@ -143,6 +143,38 @@ def main() -> int:
             cards = {event.card_id for event in pending}
             assert cards == {"CARD_B"}, f"only newest scan may fall back, got {cards}"
             assert len(pending) == 1
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        # 5) Late-ack race: the ack lands in the window between the
+        #    watchdog reporting "timeout" and the fallback executing ->
+        #    no queue event, treated like "acked".
+        config = make_config(tmp / "q5.json", fallback_mode="toggle")
+        queue = OfflineQueue.load(config.queue_path)
+        cache = CardStatusCache.load(None)
+        server = LocalScanServer(port=0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            # Force the watchdog verdict to "timeout" even though a real
+            # ack arrives during the wait - this is exactly the late-ack
+            # race window between timeout expiry and the fallback.
+            real_wait = agent_module._wait_for_ack
+
+            def late_timeout(*args, **kwargs):
+                real_wait(*args, **kwargs)
+                return "timeout"
+
+            agent_module._wait_for_ack = late_timeout
+            try:
+                acker = ack_after(server, 0.05)
+                handle_card_scan(config, queue, cache, "CARD5", server)
+                acker.join(timeout=2)
+            finally:
+                agent_module._wait_for_ack = real_wait
+            assert len(queue) == 0, f"late-acked scan must not be queued, got {len(queue)}"
+            scan = server.latest_scan()
+            assert scan is not None and scan.consumed, "scan must be consumed"
         finally:
             server.shutdown()
             server.server_close()
