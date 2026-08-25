@@ -4,5 +4,7 @@
   "reader_token": "change-me",
   "debounce_seconds": 3,
   "reader_name_contains": "ACR122",
-  "local_port": 8737
+  "local_port": 8737,
+  "selection_timeout_seconds": 10,
+  "fallback_mode": "none"
 }
