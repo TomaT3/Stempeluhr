@@ -343,4 +343,59 @@ describe('ClockPage offline behaviour', () => {
     expect(component.isUnlocked()).toBe(false);
     expect(component.message()).toBe('Unbekannte Karte');
   });
+
+  it('fills the card cache from an ONLINE NFC event so a later OFFLINE scan can identify it', () => {
+    // Online phase: the terminal polls successfully and sees an NFC event.
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+
+    latestNfcValue = {
+      event: {
+        eventId: 'ev-nfc-cache-1',
+        occurredAt: new Date().toISOString(),
+        terminalId: 'term-1',
+        cardId: '04ab', // lowercase on purpose: cache must normalize
+        employee: session.employee,
+        status,
+        message: 'NFC-Karte erkannt.',
+        success: true,
+      },
+    };
+    vi.advanceTimersByTime(1_000);
+
+    expect(component.isUnlocked()).toBe(true);
+    const cached = JSON.parse(window.localStorage.getItem('stempeluhr.employee-card-cache.v1') ?? '{}');
+    expect(cached['04AB']).toEqual(session.employee);
+
+    // Offline phase (fresh boot simulation): only the cached mapping exists.
+    failPolls = true;
+    localScanValue = { cardId: '04ABCD', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    expect(component.selectedEmployee()?.id).toBe('max');
+    expect(component.isUnlocked()).toBe(true);
+  });
+
+  it('shows an honest unknown-status badge instead of "ausgestempelt" after an offline card login', () => {
+    failPolls = true;
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+    const fixture = createComponent();
+
+    // No PIN login, no NFC event -> clockState.status stays null.
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.clockState.status()).toBeNull();
+    const badge = fixture.nativeElement.querySelector('app-status-badge');
+    expect(badge?.textContent).toContain('Status unbekannt');
+    expect(fixture.nativeElement.textContent).not.toContain('Nicht eingestempelt');
+
+    // The stamp buttons must stay available despite the unknown status.
+    expect(fixture.nativeElement.querySelector('.stamp-button.start')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.stamp-button.stop')).not.toBeNull();
+  });
 });
