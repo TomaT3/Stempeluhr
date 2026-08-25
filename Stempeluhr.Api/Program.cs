@@ -1,3 +1,5 @@
+using System.Net;
+using Microsoft.AspNetCore.HttpOverrides;
 using Stempeluhr.Api.Api;
 using Stempeluhr.Api.Middleware;
 using Stempeluhr.Api.Services;
@@ -8,9 +10,52 @@ builder.Services.AddSingleton<IRuntimeSettingsStore, RuntimeSettingsStore>();
 builder.Services.AddSingleton<IEmployeeService, EmployeeService>();
 builder.Services.AddSingleton<IAdminAuthorizationService, AdminAuthorizationService>();
 builder.Services.AddSingleton<INfcClockEventStore, NfcClockEventStore>();
+builder.Services.AddSingleton<IOfflineEventIdStore>(sp => new FileOfflineEventIdStore(
+    Path.Combine(builder.Environment.ContentRootPath, "data", "offline-event-ids.json"),
+    sp.GetRequiredService<ILogger<FileOfflineEventIdStore>>()));
+// Singleton: the offline outbox (queues + sync lock) must outlive individual
+// HTTP requests so events buffered during a Kimai outage survive and can be
+// flushed by the background service below.
+builder.Services.AddSingleton<IOfflineClockService, OfflineClockService>();
+builder.Services.AddHostedService<OfflineOutboxBackgroundService>();
+// Throttles the unauthenticated kiosk sync endpoint (per client IP, fixed
+// window; real per-client IPs require Stempeluhr:KnownProxies - see above).
+builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 20));
 builder.Services.AddScoped<IClockService, ClockService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
-builder.Services.AddHttpClient<IKimaiClient, KimaiClient>();
+builder.Services.AddHttpClient<IKimaiClient, KimaiClient>(client =>
+{
+    // Every Kimai call runs under the global sync lock: one hung connection
+    // (TCP black hole) must not freeze sync requests AND outbox flushes for
+    // the HttpClient default timeout of 100 s per call.
+    client.Timeout = TimeSpan.FromSeconds(15);
+}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    // The singleton OfflineClockService holds this typed client for the whole
+    // process lifetime - without pool rotation a Kimai IP change (NAS/Docker
+    // restart) would keep hitting the stale DNS entry until the API restarts.
+    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+});
+
+// Behind a reverse proxy (Cloudflared/nginx on the NAS) every kiosk shares the
+// proxy IP, which would make the kiosk sync rate limiter a single global
+// budget. When trusted proxy IPs are configured, parse X-Forwarded-For so
+// Connection.RemoteIpAddress becomes the real client IP again. Unset => direct
+// exposure: no header trust, so XFF cannot be spoofed.
+var knownProxies = builder.Configuration.GetSection("Stempeluhr:KnownProxies").Get<string[]>() ?? [];
+if (knownProxies.Length > 0)
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+        foreach (var proxy in knownProxies)
+        {
+            options.KnownProxies.Add(IPAddress.Parse(proxy));
+        }
+    });
+}
 
 builder.Services.AddCors(options =>
 {
@@ -24,6 +69,11 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+if (knownProxies.Length > 0)
+{
+    app.UseForwardedHeaders();
+}
 
 app.UseApiExceptionHandling();
 app.UseCors("AngularDev");

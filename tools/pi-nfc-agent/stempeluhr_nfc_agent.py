@@ -1,25 +1,46 @@
 #!/usr/bin/env python3
-"""Read an ACR122U NFC reader via PC/SC and submit cards to Stempeluhr."""
+"""Read an ACR122U NFC reader via PC/SC and submit cards to Stempeluhr.
+
+Offline support: every card scan is appended to a persistent queue before it is
+submitted. If the Stempeluhr API (or the internet) is unreachable, the event
+stays in the queue and a background retry loop drains it once connectivity
+returns. Timestamps are captured at scan time, so the server can replay the
+events with their original times.
+"""
 
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from smartcard.Exceptions import CardConnectionException, NoCardException
 from smartcard.System import readers
 
+from offline_queue import OfflineQueue, QueuedEvent, utc_now_epoch
+
 
 LOGGER = logging.getLogger("stempeluhr-nfc-agent")
 GET_UID_APDU = [0xFF, 0xCA, 0x00, 0x00, 0x00]
+
+# Retry cadence while offline: fast at first, then capped.
+RETRY_DELAYS_SECONDS = [5, 10, 30, 60, 120, 300]
+
+# Known clock states reported by the API for local status feedback.
+STATE_CLOCKED_IN = "clocked_in"
+STATE_PAUSED = "paused"
+STATE_CLOCKED_OUT = "clocked_out"
 
 
 @dataclass(frozen=True)
@@ -29,6 +50,7 @@ class AgentConfig:
     reader_token: str | None
     debounce_seconds: float
     reader_name_contains: str | None
+    queue_path: Path
 
     @staticmethod
     def load(path: Path) -> "AgentConfig":
@@ -46,7 +68,51 @@ class AgentConfig:
             reader_token=str(reader_token) if reader_token else None,
             debounce_seconds=float(raw.get("debounce_seconds") or 3),
             reader_name_contains=raw.get("reader_name_contains"),
+            queue_path=Path(
+                raw.get("queue_path")
+                or "/var/lib/stempeluhr-nfc-agent/offline-queue.json"
+            ),
         )
+
+
+@dataclass
+class CardStatusCache:
+    """Remembers the last known clock state per card so scans toggle correctly
+    even while offline. Access is guarded by a lock because the main scan loop
+    and the background retry thread both update the cache."""
+
+    path: Path | None
+    _states: dict[str, str] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    @staticmethod
+    def load(path: Path | None) -> "CardStatusCache":
+        cache = CardStatusCache(path=path)
+        if path is not None and path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    cache._states = {str(k): str(v) for k, v in raw.items()}
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return cache
+
+    def get(self, card_id: str) -> str | None:
+        with self._lock:
+            return self._states.get(card_id)
+
+    def update(self, card_id: str, state: str) -> None:
+        with self._lock:
+            self._states[card_id] = state
+            if self.path is not None:
+                try:
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    self.path.write_text(
+                        json.dumps(self._states, ensure_ascii=False, indent=1),
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
 
 
 def main() -> int:
@@ -71,11 +137,31 @@ def main() -> int:
 
     config = AgentConfig.load(Path(args.config))
     LOGGER.info("Starting NFC agent for terminal '%s'", config.terminal_id)
-    run(config)
+
+    queue = OfflineQueue.load(config.queue_path)
+    if len(queue) > 0:
+        LOGGER.info("Restored %d queued offline event(s) from %s", len(queue), config.queue_path)
+
+    cache_path = (
+        config.queue_path.parent / "card-status-cache.json"
+        if config.queue_path.parent != Path(".")
+        else None
+    )
+    status_cache = CardStatusCache.load(cache_path)
+
+    retry_thread = threading.Thread(
+        target=retry_loop,
+        args=(config, queue, status_cache),
+        name="nfc-retry-loop",
+        daemon=True,
+    )
+    retry_thread.start()
+
+    run(config, queue, status_cache)
     return 0
 
 
-def run(config: AgentConfig) -> None:
+def run(config: AgentConfig, queue: OfflineQueue, status_cache: CardStatusCache) -> None:
     last_uid: str | None = None
     last_submit_at = 0.0
     selected_reader_name: str | None = None
@@ -98,22 +184,368 @@ def run(config: AgentConfig) -> None:
                 time.sleep(0.2)
                 continue
 
-            LOGGER.info("Read NFC card UID %s", uid)
-
             now = time.monotonic()
             if uid == last_uid and now - last_submit_at < config.debounce_seconds:
                 time.sleep(0.2)
                 continue
 
-            submit_card(config, uid)
-            last_uid = uid
-            last_submit_at = now
-            wait_until_card_removed(reader)
+            # handle_card_scan queues the event BEFORE any submit attempt.
+            # From that moment the event exists and must stay unique per
+            # tap: book the debounce and wait for the card to leave even if
+            # the submit fails - the retry loop delivers what is queued,
+            # and another tap of the same card must not spawn further
+            # events (they would toggle repeatedly on drain).
+            try:
+                handle_card_scan(config, queue, status_cache, uid)
+            finally:
+                last_uid = uid
+                last_submit_at = now
+                wait_until_card_removed(reader)
         except KeyboardInterrupt:
             raise
         except Exception:
             LOGGER.exception("Unexpected NFC loop error")
             time.sleep(2)
+
+
+def handle_card_scan(
+    config: AgentConfig,
+    queue: OfflineQueue,
+    status_cache: CardStatusCache,
+    card_id: str,
+) -> None:
+    """Queue first, then submit. The event survives any network failure."""
+    scanned_at = utc_now_epoch()
+    event_id = uuid.uuid4().hex
+
+    event = QueuedEvent(
+        event_id=event_id,
+        card_id=card_id,
+        terminal_id=config.terminal_id,
+        scanned_at_epoch_seconds=scanned_at,
+    )
+    # Queue-first: from here on the retry loop owns delivery. Documented
+    # semantics divergence (see README.md): online, /api/nfc/clock only
+    # IDENTIFIES the card - the stamp itself comes from the kiosk button
+    # via /api/kiosk/clock. Offline, the queued scan is replayed as a
+    # TOGGLE via /api/nfc/clock/sync. Repeated scans therefore alternate
+    # the assumed booking state while offline: scan a card once per action
+    # and check the UI for the current status when online.
+    queue.append(event)
+
+    delivered = try_submit(config, queue, status_cache, event)
+    if delivered:
+        LOGGER.info("Card %s submitted immediately.", card_id)
+    else:
+        next_state = next_state_for(status_cache.get(card_id))
+        status_cache.update(card_id, next_state)
+        LOGGER.warning(
+            "API unreachable - card %s queued (%d pending). Local feedback: %s",
+            card_id,
+            len(queue),
+            describe_state(next_state),
+        )
+
+
+def retry_loop(
+    config: AgentConfig,
+    queue: OfflineQueue,
+    status_cache: CardStatusCache,
+) -> None:
+    """Drains the offline queue in the background with capped backoff.
+
+    Delivery goes to the idempotent sync endpoint (``/api/nfc/clock/sync``)
+    so replayed events keep their original scan timestamps and a retry after
+    a timeout can never double-toggle. Consecutive successes drain the queue
+    without sleeping; the backoff only applies after failures.
+    """
+    attempt = 0
+    while True:
+        try:
+            pending = queue.snapshot()
+            if not pending:
+                attempt = 0
+                time.sleep(2)
+                continue
+
+            delay_index = min(attempt, len(RETRY_DELAYS_SECONDS) - 1)
+            if attempt > 0:
+                time.sleep(RETRY_DELAYS_SECONDS[delay_index])
+
+            event = pending[0]
+            delivered = submit_sync(config, queue, status_cache, event)
+            if delivered:
+                LOGGER.info(
+                    "Queued event for card %s delivered (scanned %.0f s ago).",
+                    event.card_id,
+                    max(0.0, utc_now_epoch() - event.scanned_at_epoch_seconds),
+                )
+                attempt = 0
+            else:
+                attempt += 1
+                delay_index = min(attempt, len(RETRY_DELAYS_SECONDS) - 1)
+                LOGGER.info(
+                    "Sync still failing; %d event(s) queued. Next retry in %d s.",
+                    len(queue),
+                    RETRY_DELAYS_SECONDS[delay_index],
+                )
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            # submit_sync handles the expected HTTP/network errors itself,
+            # but a single unexpected failure (HTML body from a captive
+            # portal, mid-read reset, ...) must never kill this thread:
+            # the queue would then never drain again until the service
+            # restarts. Log it, count it as a failed attempt (backoff) and
+            # keep going.
+            attempt += 1
+            LOGGER.exception("Unexpected retry-loop error")
+
+
+def iso8601_from_epoch(epoch_seconds: float) -> str:
+    """Converts an epoch timestamp to the ISO-8601 string the API DTO expects."""
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+
+
+def sync_result_state(state: str | None) -> str | None:
+    """Maps the server's ClockStatusDto state to the local cache vocabulary."""
+    if state == "working":
+        return STATE_CLOCKED_IN
+    if state == "paused":
+        return STATE_PAUSED
+    if state == "clockedOut":
+        return STATE_CLOCKED_OUT
+    return None
+
+
+def submit_sync(
+    config: AgentConfig,
+    queue: OfflineQueue,
+    status_cache: CardStatusCache,
+    event: QueuedEvent,
+) -> bool:
+    """Delivers one queued event to the idempotent sync endpoint.
+
+    Returns True when the server accepted the event (applied, duplicate or
+    permanently rejected) and it can be removed from the queue. Returns False
+    when it should be retried later (Kimai down/buffered, network error,
+    malformed request). A 4xx is never treated as a silent drop: events are
+    only removed when the server explicitly classified them.
+    """
+    url = f"{config.api_base_url}/api/nfc/clock/sync"
+    payload = json.dumps(
+        {
+            "events": [
+                {
+                    "eventId": event.event_id,
+                    "cardId": event.card_id,
+                    "terminalId": event.terminal_id,
+                    # The API DTO uses DateTimeOffset - an epoch float would
+                    # fail deserialization and lose the stamp entirely.
+                    "scannedAt": iso8601_from_epoch(event.scanned_at_epoch_seconds),
+                }
+            ]
+        }
+    ).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers=create_headers(config),
+        method="POST",
+    )
+
+    LOGGER.debug("Syncing card %s to %s", event.card_id, url)
+
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            detail = find_event_result(body, event.event_id) or {}
+            status = detail.get("status")
+
+            if status == "applied":
+                # The server derived the action from Kimai's state; mirror it
+                # in the local cache so the next offline toggle is consistent.
+                status_cache.update(
+                    event.card_id,
+                    sync_result_state(detail.get("state"))
+                    or next_state_for(status_cache.get(event.card_id)),
+                )
+                queue.remove(event.event_id)
+                LOGGER.info(
+                    "Card %s synced: %s", event.card_id, detail.get("message") or "applied"
+                )
+                return True
+
+            if status == "duplicate":
+                # Already processed by an earlier request - nothing to do.
+                queue.remove(event.event_id)
+                LOGGER.info("Card %s already known to server (duplicate); dropping from queue.",
+                            event.card_id)
+                return True
+
+            if status == "rejected":
+                # Permanent rejection (unknown card etc.) - do not retry forever.
+                LOGGER.warning("Card %s permanently rejected: %s",
+                               event.card_id, detail.get("message") or status)
+                queue.remove(event.event_id)
+                return True
+
+            # "buffered" (Kimai down on the server) or an unexpected payload:
+            # keep the event queued, the server will apply it later.
+            LOGGER.warning(
+                "Card %s not applied by server (%s); keeping in queue.",
+                event.card_id, status or "no result",
+            )
+            return False
+    except urllib.error.HTTPError as error:
+        body_text = error.read().decode("utf-8", errors="replace")
+        if error.code == 400:
+            # Malformed request (agent bug, e.g. old queue file). Never drop
+            # silently - keep the event and surface the error in the logs.
+            LOGGER.error("Sync rejected with 400 (payload bug?): %s", body_text[:300])
+            return False
+        if error.code == 401:
+            LOGGER.error(
+                "Reader token rejected (401) - check reader_token in the config; "
+                "keeping event in queue."
+            )
+            return False
+        LOGGER.warning("Card %s rejected by API (%s): %s",
+                       event.card_id, error.code, body_text[:200])
+        return False
+    except urllib.error.URLError as error:
+        LOGGER.warning("Stempeluhr API is not reachable: %s", error.reason)
+        return False
+    except TimeoutError:
+        LOGGER.warning("Stempeluhr API timed out")
+        return False
+
+
+def find_event_result(body: Any, event_id: str) -> dict[str, Any] | None:
+    """Finds the per-event result for ``event_id`` in an OfflineSyncResultDto."""
+    if not isinstance(body, dict):
+        return None
+    results = body.get("results")
+    if not isinstance(results, list):
+        return None
+    for entry in results:
+        if isinstance(entry, dict) and entry.get("eventId") == event_id:
+            return entry
+    return None
+
+
+def try_submit(
+    config: AgentConfig,
+    queue: OfflineQueue,
+    status_cache: CardStatusCache,
+    event: QueuedEvent,
+) -> bool:
+    """Attempts delivery of one queued event to the live identify endpoint.
+    Returns True when the API accepted the scan (or rejected the card as
+    unknown - nothing to retry then). Transport or parsing problems are
+    handled internally and return False, so they can never escape into the
+    scan loop and skip its debounce bookkeeping."""
+    url = f"{config.api_base_url}/api/nfc/clock"
+    # The eventId makes the live attempt idempotent too: if the server applies
+    # the stamp but the response times out, this event stays queued and the
+    # sync replay later resolves as duplicate (409) instead of toggling a
+    # second time. scannedAt stays sync-only: the live endpoint stamps with
+    # server time, the sync endpoint backdates.
+    payload = json.dumps(
+        {
+            "eventId": event.event_id,
+            "cardId": event.card_id,
+            "terminalId": event.terminal_id,
+        }
+    ).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers=create_headers(config),
+        method="POST",
+    )
+
+    LOGGER.debug("Submitting card %s to %s", event.card_id, url)
+
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            state = extract_state(body)
+            if state is not None:
+                status_cache.update(event.card_id, state)
+            queue.remove(event.event_id)
+            LOGGER.info("Card %s accepted: %s", event.card_id, body.get("message", response.status))
+            return True
+    except urllib.error.HTTPError as error:
+        body_text = error.read().decode("utf-8", errors="replace")
+        if error.code == 409:
+            # Duplicate (already processed earlier). Treat as delivered.
+            LOGGER.info("Card %s already known to server (409); dropping from queue.",
+                        event.card_id)
+            queue.remove(event.event_id)
+            return True
+        if error.code == 400:
+            # Permanent rejection (unknown card etc.) - do not retry forever.
+            LOGGER.warning("Card %s permanently rejected (%s): %s",
+                           event.card_id, error.code, body_text[:200])
+            queue.remove(event.event_id)
+            return True
+        LOGGER.warning("Card %s rejected by API (%s): %s",
+                       event.card_id, error.code, body_text[:200])
+        return False
+    except urllib.error.URLError as error:
+        LOGGER.warning("Stempeluhr API is not reachable: %s", error.reason)
+        return False
+    except TimeoutError:
+        LOGGER.warning("Stempeluhr API timed out")
+        return False
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        # A proxy or captive portal answering 200 with an HTML login page
+        # yields a garbage body instead of JSON. That is a connectivity
+        # problem, not a permanent failure: treat it as transient so the
+        # event stays queued and the exception cannot escape into the scan
+        # loop (it would skip the debounce booking there).
+        LOGGER.warning("Malformed response for card %s; keeping it queued: %s",
+                       event.card_id, error)
+        return False
+    except (ConnectionError, http.client.HTTPException) as error:
+        # Mid-body connection resets and truncated responses surface as raw
+        # socket/http errors, not as URLError - equally transient.
+        LOGGER.warning("Connection lost while submitting card %s; keeping it queued: %s",
+                       event.card_id, error)
+        return False
+
+
+def extract_state(body: dict[str, Any]) -> str | None:
+    """Maps the NfcClockEventDto payload to a simple local state string."""
+    if not isinstance(body, dict):
+        return None
+    status = body.get("status") or {}
+    state = status.get("state") if isinstance(status, dict) else None
+    if state == "paused":
+        return STATE_PAUSED
+    if status.get("isRunning"):
+        return STATE_CLOCKED_IN
+    if body.get("success"):
+        return STATE_CLOCKED_OUT
+    return None
+
+
+def next_state_for(current: str | None) -> str:
+    """Toggles the assumed state while offline."""
+    if current == STATE_CLOCKED_IN or current == STATE_PAUSED:
+        return STATE_CLOCKED_OUT
+    return STATE_CLOCKED_IN
+
+
+def describe_state(state: str) -> str:
+    return {
+        STATE_CLOCKED_IN: "angenommen EINGESTEMPELT",
+        STATE_PAUSED: "angenommen PAUSE beendet / eingestempelt",
+        STATE_CLOCKED_OUT: "angenommen AUSGESTEMPELT",
+    }.get(state, state)
 
 
 def select_reader(name_filter: str | None):
@@ -153,39 +585,10 @@ def wait_until_card_removed(reader) -> None:
         time.sleep(0.2)
 
 
-def submit_card(config: AgentConfig, uid: str) -> None:
-    url = f"{config.api_base_url}/api/nfc/clock"
-    payload = json.dumps(
-        {
-            "cardId": uid,
-            "terminalId": config.terminal_id,
-        }
-    ).encode("utf-8")
-
-    request = urllib.request.Request(
-        url,
-        data=payload,
-        headers=create_headers(config),
-        method="POST",
-    )
-
-    LOGGER.info("Submitting card %s to %s", uid, url)
-
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            body = json.loads(response.read().decode("utf-8"))
-            LOGGER.info("Card %s submitted: %s", uid, body.get("message", response.status))
-    except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
-        LOGGER.warning("Card %s rejected by API (%s): %s", uid, error.code, body)
-    except urllib.error.URLError as error:
-        LOGGER.warning("Stempeluhr API is not reachable: %s", error.reason)
-
-
 def create_headers(config: AgentConfig) -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "StempeluhrNfcAgent/1.0",
+        "User-Agent": "StempeluhrNfcAgent/1.2",
     }
     if config.reader_token:
         headers["X-Nfc-Reader-Token"] = config.reader_token

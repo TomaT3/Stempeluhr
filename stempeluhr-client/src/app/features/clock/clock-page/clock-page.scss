@@ -7,6 +7,20 @@ p {
   margin: 0;
 }
 
+/* In normal document flow at the very top of the host: it shifts the content
+   down instead of overlaying the back button and the topbar. */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.6rem 1rem;
+  background: #b45309;
+  color: #ffffff;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
 h2 {
   color: #152033;
   font-size: clamp(1.85rem, 4.6vw, 3.55rem);

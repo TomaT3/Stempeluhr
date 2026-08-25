@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Note: a merge to main triggers one additional run - intentional, because
+# it validates the actual merge commit (a merge commit can differ from the
+# tested PR head). Squash merges re-test identical trees, which is cheap
+# (~2 min total) and keeps the guarantee simple.
+permissions:
+  contents: read
+
+# Avoid duplicate runs: on PR branches only the pull_request event runs;
+# the push trigger fires for direct pushes to main (post-merge CI).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-tests:
+    name: API build + unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build API
+        run: dotnet build Stempeluhr.Api/Stempeluhr.Api.csproj -v q
+
+      - name: Run unit tests
+        run: dotnet test Stempeluhr.Api.Tests/Stempeluhr.Api.Tests.csproj -v minimal --logger "console;verbosity=normal"
+
+  client-build:
+    name: Angular build + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: stempeluhr-client
+        run: npm ci
+
+      - name: Production build
+        working-directory: stempeluhr-client
+        run: npx ng build --configuration production
+
+      - name: Unit tests
+        working-directory: stempeluhr-client
+        run: npx ng test --watch=false
+
+  e2e-offline:
+    name: E2E offline integration test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [api-tests]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: NFC agent queue self-test (python)
+        run: python3 tools/pi-nfc-agent/test_offline_queue.py
+
+      - name: Run offline integration tests (Fake-Kimai + real API)
+        run: bash tools/testenv/run_e2e_test.sh

@@ -1,3 +1,9 @@
+@if (isOffline()) {
+  <div class="offline-banner" role="status" aria-live="polite">
+    Offline – Stempel werden zwischengespeichert und automatisch nachgetragen
+  </div>
+}
+
 @if (!selectedEmployee()) {
   <section class="kiosk-login" aria-label="PIN-Anmeldung">
     <h2>PIN eingeben</h2>

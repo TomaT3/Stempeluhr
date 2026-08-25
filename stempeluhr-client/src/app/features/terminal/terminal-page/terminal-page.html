@@ -1,4 +1,9 @@
 <section class="terminal" [class.session]="selectedEmployee()" aria-label="Stempeluhr Terminal">
+  @if (isOffline()) {
+    <div class="offline-banner" role="status" aria-live="polite">
+      Offline – Stempel werden gespeichert und später automatisch übertragen
+    </div>
+  }
   <header class="terminal-clock" aria-label="Aktuelle Uhrzeit und Datum">
     <span class="clock-time">{{ clockState.now() | date: 'HH:mm:ss' }}</span>
     <span class="clock-date">{{ clockState.now() | date: 'dd.MM.yyyy' }}</span>

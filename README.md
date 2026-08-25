@@ -42,6 +42,47 @@ Danach in der App oben `Admin` oeffnen:
 Die Pause-Aktivitaet-ID verweist auf eine normale Kimai-Taetigkeit, die als Pause genutzt wird.
 Aktive Timesheets mit dieser Taetigkeit werden in der Stempeluhr als `In Pause` angezeigt.
 
+### Offline-Nachtrag von Pausenenden: Voraussetzungen und Toleranz
+
+Die automatische Recovery eines unterbrochenen Offline-`pauseEnd` (das
+Pausen-Timesheet wurde bereits gestoppt, der Wiedereinstieg in die Arbeit
+schlug transient fehl) setzt eine konfigurierte **Pause-Aktivitaet-ID
+voraus**: Nur mit ihr kann die API ein gestopptes Timesheet ueberhaupt als
+Pause erkennen. Ohne diese Einstellung bleibt ein solcher Fall bewusst ein
+No-op mit lauter Warnung im Log - die Arbeit muss dann manuell nachgetragen
+werden.
+
+Die Erkennung nutzt eine Toleranz (`PauseEndRecoveryToleranceSeconds` in
+der `settings.json`, Standard 30 s): Das Ende des letzten gestoppten
+Pausen-Timesheets darf nur um diesen Betrag vom Zeitstempel des
+nachgetragenen Events abweichen. Trade-off dabei:
+
+- Kleiner Wert = kleines Phantom-Fenster (ein echter Live-Stopp innerhalb
+  des Fensters wuerde sonst faelschlich als unterbrochene Transaktion
+  mitgebucht), braucht aber synchronisierte Uhren.
+- Groesserer Wert = robust gegen Uhrenabweichung zwischen Client
+  (Raspberry Pi, Kiosk-Browser) und Kimai-Server, oeffnet aber eben dieses
+  Fenster.
+
+Clients sollten daher per NTP synchronisiert sein (der Raspberry Pi tut das
+standardmaessig ueber systemd-timesyncd); laeuft ein Client ohne
+Zeitsynchronisation, den Wert in der Admin-Umgebung entsprechend erhoehen.
+
+### Bekannte Grenze: Reihenfolge beim Live-Apply nach einer Stoerung
+
+Die "eine Timeline"-Garantie gilt fuer die **Outbox**: Sobald Events in der
+Server-Outbox warten, werden alle Backlogs (NFC- und Kiosk-Queue zusammen)
+strikt in Event-Zeitordnung abgespielt. Im **Live-Pfad** dagegen (Outbox leer,
+Kimai erreichbar - der Normalfall direkt nach einer Störungserholung, weil
+beide Clients ihre Events clientseitig queuen und danach selbst synchronisieren)
+werden zwei unabhaengige Sync-Requests in **Ankunftsreihenfolge** angewendet,
+nicht in Event-Zeitordnung. Innerhalb eines Requests bleibt die Ordnung stets
+erhalten; es kann aber passieren, dass z. B. ein NFC-Toggle@09:00 vor einem
+Kiosk-pauseStart@08:00 ankommt und dann gegen einen anderen Zustand abgeleitet
+wird. Praktische Gegenmassnahme: Waehrend einer Stoerung pro Mitarbeiter bei
+einem Terminal bleiben, bis der Nachtrag durch ist. Ein kurzes serverseitiges
+Merge-Fenster ueberlappender Requests ist als moeglicher Ausbau notiert.
+
 ## Raspberry Pi NFC-Terminal
 
 Fuer ein Terminal mit Raspberry Pi 5, Touchdisplay und ACR122U gibt es einen
@@ -105,6 +146,11 @@ services:
       Admin__Password: "change-me"
       Kimai__BaseUrl: "https://kimai.example.local"
       Stempeluhr__NfcReaderToken: "change-me-reader-token"
+      # Optional und nur in besonderen Topologien noetig (siehe
+      # Sicherheitshinweis unten): IP-Adresse(n) vertrauter Reverse-Proxys,
+      # damit X-Forwarded-For ausgewertet wird. Im Standard-Setup (alle Geräte
+      # ueber den Cloudflare-Tunnel) ist KEINE Einstellung noetig.
+      # Stempeluhr__KnownProxies__0: "172.18.0.1"
 ```
 
 Die App ist intern unter `http://<nas-ip>:8002/` erreichbar. Fuer Raspberry Pi,
@@ -124,6 +170,47 @@ Fuer das Raspberry-Pi-Terminal:
 Wichtig: Der Docker-Port `8002:8080` ist nur die interne NAS-Veroeffentlichung.
 Wenn Cloudflared davor liegt, bekommen Chromium und der NFC-Agent die externe
 HTTPS-Adresse. Der Agent bekommt trotzdem nur die Basis-Adresse ohne `/terminal`.
+
+### Sicherheitshinweis: Offline-Queue und PINs
+
+Der Kiosk/Client speichert gequeute Offline-Stempel (inklusive PIN) im
+`localStorage` des Browsers, damit ein Offline-Stempel auch einen Neustart des
+Kiosk-Browsers ueberlebt. Das ist eine bewusste Abwaegung:
+
+- `localStorage` ist auf dem Geraet im Klartext lesbar (lokaler Zugang oder
+  erfolgreicher XSS). Die Stempeluhr geht davon aus, dass Kiosk-Hardware
+  (Tablet am Eingang, Raspberry-Pi-Terminal) vertrauenswuerdig ist.
+- Wer das Risiko senken will: Kiosk-Geraete physisch sichern, Browser im
+  Kiosk-Modus ohne DevTools betreiben, keine weiteren Websites im selben
+  Browser-Profil oeffnen.
+- Sauberste Loesung waere eine Terminal-/Reader-Token-Authentifizierung statt
+  der PIN fuer gequeute Events; das ist als Follow-up eingeplant.
+
+Zusaetzlich gilt: Der Sync-Endpoint `/api/kiosk/clock/sync` ist unauthentifiziert
+(4-stellige PIN als einziger Schutz), wird aber per Client-IP gedrosselt
+(20 Request-Einheiten/60 s) und nimmt maximal 100 Events pro Batch an. Das
+Budget wird dabei nach **Event-Anzahl** bepreist (10 Events = 1
+Request-Einheit), und eine Batch-Verarbeitung bricht beim ersten
+PIN-Fehlschlag ab - die uebrigen Events des Batches bleiben in der
+Client-Queue und werden einzeln in Folgerunden erneut versucht. Pro Request
+entsteht so hoechstens **ein** PIN-Vergleichsergebnis; massenhaftes
+Durchprobieren von PINs ueber grosse Batches ist damit ausgeschlossen (ein
+Angreifer mit eigenen Requests bleibt auf die 20 Requests/60 s begrenzt).
+
+Der Replay akzeptiert daneben die NFC-Karten-ID, mit der die Session am
+Terminal entsperrt wurde (Paritaet zum Live-Pfad, der Karten-Touch ohne PIN
+authentifiziert). Die Karte wird nur akzeptiert, wenn sie demselben
+Mitarbeiter zugeordnet ist wie die Event-Angabe.
+
+Wichtig zur Einordnung: Wenn alle Geraete wie ueblich ueber den
+Cloudflare-Tunnel zugreifen, teilen sie sich die oeffentliche IP des Standorts -
+das Budget ist dann zwangslaeufig ein gemeinsamer Topf, und
+`Stempeluhr__KnownProxies__0` aendert daran nichts. Die Einstellung lohnt nur,
+wenn die App Anfragen mit echten, unterscheidbaren Client-IPs sieht (z. B.
+mehrere Standorte mit eigenen Internetanschluessen, VPN-Zugriffe oder direkte
+LAN-Nutzung). Gegen gezieltes PIN-Raten an einem einzelnen Konto ist ein
+Fehlversuch-Backoff vorgesehen (Issue #8); die sauberste Loesung bleibt die
+Terminal-Token-Auth (Issue #7).
 
 ## Semantische Versionierung
 
