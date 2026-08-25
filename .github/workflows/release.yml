@@ -201,11 +201,49 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Retry push on transient registry error
-        if: failure()
+  # Einmaliger Retry des Container-Builds bei Fehlern (z.B. transiente
+  # GHCR-Fehler wie "unknown blob"). Läuft als eigener Job nach Abschluss
+  # des ersten Container-Jobs — gh run rerun innerhalb eines laufenden
+  # Runs würde von der API abgelehnt.
+  container-retry:
+    runs-on: ubuntu-latest
+    needs: [release, container]
+    if: failure()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Normalize image name
+        id: image
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "Build/push failed — retrying once (transient GHCR errors like 'unknown blob')"
-          gh run rerun "$GITHUB_RUN_ID" --failed
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push (retry)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ needs.release.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
