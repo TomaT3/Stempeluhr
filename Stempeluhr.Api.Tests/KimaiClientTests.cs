@@ -59,7 +59,11 @@ public sealed class KimaiClientTests
             Resp(HttpStatusCode.OK, "{}"));                     // compensating stop succeeds
         var client = CreateClient(handler);
 
-        await client.StartAtAsync(Settings, Employee, 1, 1, T08);
+        // The compensating stop succeeds, but the backdate failure is now
+        // re-thrown so the sync loop buffers the event as transient and a
+        // later replay can recreate the sheet with the intended begin.
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => client.StartAtAsync(Settings, Employee, 1, 1, T08));
 
         // The last request must be the compensating stop of the misdated
         // sheet so a later replay can recreate it with the intended begin.

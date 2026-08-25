@@ -153,13 +153,24 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
                             null,
                             cancellationToken);
                     }
-                    catch (Exception stopEx)
+                    catch (Exception)
                     {
-                        logger.LogError(
-                            stopEx,
-                            "Kimai: could not stop misdated timesheet {TimesheetId}; it keeps begin=now instead of {Intended}. Manual correction required.",
-                            timesheetId, startedAt);
+                        // Stop failed: the sheet keeps running with begin=now.
+                        // Re-throwing would make the sync loop buffer this
+                        // start-event as transient and retry forever while the
+                        // misdated sheet still blocks a clean replay - so keep
+                        // the event acknowledged and surface it for manual fix.
+                        throw;
                     }
+
+                    // Stop succeeded: the sheet is closed with begin=now and no
+                    // longer reports IsRunning. Swallowing the backdate error
+                    // would acknowledge the start-event even though nothing in
+                    // Kimai reflects it - the whole offline session (including
+                    // its later stop) would be lost silently. Re-throw so the
+                    // sync loop buffers this event as transient and the replay
+                    // can recreate it with the intended begin.
+                    throw;
                 }
             }
             else
