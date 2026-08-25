@@ -554,6 +554,33 @@ public sealed class OfflineClockServiceTests
         Assert.False(kimai.IsRunning);
     }
 
+    [Fact]
+    public async Task TransientStartFailure_BuffersEventInsteadOfRejecting()
+    {
+        // Service-level pin for the begin-backdate re-throw contract: a
+        // TRANSIENT failure inside StartAtAsync (e.g. the old-Kimai fallback
+        // whose begin-backdate keeps failing after the compensating stop)
+        // must surface as "buffered", never as "rejected" - otherwise the
+        // whole offline session would be lost silently.
+        var (service, kimai) = CreateService();
+        kimai.FailNextStartCalls = 2; // batch processing + trailing flush
+
+        var result = await service.SyncKioskAsync([Kiosk("e1", "start", T08)]);
+
+        Assert.Equal(0, result.Accepted);
+        var single = Assert.Single(result.Results);
+        Assert.Equal("buffered", single.Status);
+        Assert.Empty(kimai.Operations);
+
+        // Once Kimai recovers, the buffered event replays cleanly.
+        await service.FlushOutboxAsync();
+
+        var op = Assert.Single(kimai.Operations);
+        Assert.Equal("start", op.Kind);
+        Assert.Equal(T08, op.At);
+        Assert.True(kimai.IsRunning);
+    }
+
     private static DateTimeOffset Parse(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
 

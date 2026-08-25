@@ -62,8 +62,11 @@ public sealed class KimaiClientTests
         // The compensating stop succeeds, but the backdate failure is now
         // re-thrown so the sync loop buffers the event as transient and a
         // later replay can recreate the sheet with the intended begin.
-        await Assert.ThrowsAnyAsync<Exception>(
+        // Pin the concrete transient exception type: a permanent error here
+        // would be classified as "rejected" and lose the stamp instead.
+        var thrown = await Assert.ThrowsAnyAsync<KimaiApiException>(
             () => client.StartAtAsync(Settings, Employee, 1, 1, T08));
+        Assert.Equal(HttpStatusCode.BadGateway, thrown.StatusCode);
 
         // The last request must be the compensating stop of the misdated
         // sheet so a later replay can recreate it with the intended begin.
