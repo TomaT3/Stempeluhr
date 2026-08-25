@@ -1,6 +1,7 @@
 @if (isOffline()) {
   <div class="offline-banner" role="status" aria-live="polite">
-    Offline – Stempel werden zwischengespeichert und automatisch nachgetragen
+    Offline – Stempel werden zwischengespeichert und automatisch nachgetragen.
+    NFC-Scan meldet Sie an – stempeln Sie dann per Button.
   </div>
 }
 
@@ -48,17 +49,17 @@
 
     @if (!isUnlocked()) {
       <p class="message">Bitte erneut mit PIN anmelden.</p>
-    } @else {
+    } @else if (clockState.status(); as clockStatus) {
       <app-status-badge
-        [text]="clockState.status()?.stateText ?? ''"
-        [running]="clockState.status()?.state === 'working'"
-        [paused]="clockState.status()?.state === 'paused'" />
+        [text]="clockStatus.stateText"
+        [running]="clockStatus.state === 'working'"
+        [paused]="clockStatus.state === 'paused'" />
 
-      <dl class="time-info" [class.single]="!clockState.status()?.isRunning" aria-label="Zeitinformationen">
+      <dl class="time-info" [class.single]="!clockStatus.isRunning" aria-label="Zeitinformationen">
         @if (clockState.isWorking()) {
           <div>
             <dt>Eingestempelt seit</dt>
-            <dd>{{ clockState.status()?.startedAt | date: 'HH:mm' }}</dd>
+            <dd>{{ clockStatus.startedAt | date: 'HH:mm' }}</dd>
           </div>
           <div>
             <dt>Dauer</dt>
@@ -67,7 +68,7 @@
         } @else if (clockState.isPaused()) {
           <div>
             <dt>In Pause seit</dt>
-            <dd>{{ clockState.status()?.startedAt | date: 'HH:mm' }}</dd>
+            <dd>{{ clockStatus.startedAt | date: 'HH:mm' }}</dd>
           </div>
           <div>
             <dt>Pausendauer</dt>
@@ -109,6 +110,33 @@
           <span class="stamp-label">Einstempeln</span>
         </button>
       }
+    } @else {
+      <!-- Offline per Karte angemeldet: der echte Status ist nicht bekannt -
+           "Nicht eingestempelt" zu zeigen waere irrefuehrend. -->
+      <app-status-badge
+        text="Status unbekannt (offline)"
+        [running]="false"
+        [paused]="false" />
+
+      <dl class="time-info single" aria-label="Zeitinformationen">
+        <div>
+          <dt>Status</dt>
+          <dd>Offline – kein Status bekannt</dd>
+        </div>
+      </dl>
+
+      <!-- Status unbekannt: beide Richtungen anbieten, der Replay
+           validiert serverseitig (Doppelstempel wird dort erkannt). -->
+      <div class="stamp-actions">
+        <button class="stamp-button start" type="button" (click)="start()" [disabled]="isBusy()">
+          <span class="stamp-icon play"></span>
+          <span class="stamp-label">Einstempeln</span>
+        </button>
+        <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+          <span class="stamp-icon square"></span>
+          <span class="stamp-label">Ausstempeln</span>
+        </button>
+      </div>
     }
 
     @if (message()) {
