@@ -119,7 +119,7 @@ jobs:
               notes+=$'\n\n### '"$title"$'\n'"$body"
             fi
           done
-          other="$(echo "$subjects" | { grep -viE '^(feat|fix|perf)(\([^)]*\))?:' || true; } | sed 's/^/- /')"
+          other="$(echo "$subjects" | { grep -viE '^(feat|fix|perf)(\([^)]*\))?:' || true; } | { grep -v '^Merge pull request #' || true; } | sed 's/^/- /')"
           if [ -n "$other" ]; then
             notes+=$'\n\n### Other\n'"$other"
           fi
@@ -192,6 +192,53 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ needs.release.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # Einmaliger Retry des Container-Builds bei Fehlern (z.B. transiente
+  # GHCR-Fehler wie "unknown blob"). Läuft als eigener Job nach Abschluss
+  # des ersten Container-Jobs — gh run rerun innerhalb eines laufenden
+  # Runs würde von der API abgelehnt.
+  container-retry:
+    runs-on: ubuntu-latest
+    needs: [release, container]
+    if: failure() && needs.release.result == 'success'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Normalize image name
+        id: image
+        shell: bash
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push (retry)
         uses: docker/build-push-action@v6
         with:
           context: .
