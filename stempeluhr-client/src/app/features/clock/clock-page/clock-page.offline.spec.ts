@@ -399,18 +399,27 @@ describe('ClockPage offline behaviour', () => {
     expect(enqueueKiosk).not.toHaveBeenCalled();
   });
 
-  it('does NOT switch the employee via scan while LOCKED and BUSY (identity frozen at press time)', () => {
-    // Locked + busy: the pending clock action was pressed by the PIN user;
-    // an arriving scan must be consumed but must not change the identity of
-    // that in-flight action. sendClockAction snapshots identity at press
-    // time, so even if handleLocalScan unlocked someone else, the queued
-    // event would keep the original employee. Here: unknown card -> no
-    // unlock at all, and the hung action keeps its original subject.
+  it('keeps the pressed employee in a queued event even if identity changes while the request hangs', () => {
+    // The REAL regression pin for the press-time identity snapshot:
+    // 1) max unlocks via PIN and presses START - the clock request hangs.
+    // 2) back() locks the terminal and clears selectedEmployee/nfcCardId
+    //    while the subscription is still alive.
+    // 3) A scan then unlocks BERTA.
+    // 4) Only NOW does the hung request fail offline.
+    // The queued event must carry max (press-time snapshot), never berta's
+    // id or an empty string - against 1e5f388 this test fails with ''.
     failPolls = true;
     const fixture = createComponent();
     const component = fixture.componentInstance;
 
-    // Unlock via PIN (session = max), then start an action that hangs.
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({
+        '04ABCD': session.employee,
+        '04BB': { ...session.employee, id: 'berta', displayName: 'Berta Beispiel' },
+      }),
+    );
+
     component.pressDigit('1');
     component.pressDigit('2');
     component.pressDigit('3');
@@ -418,20 +427,25 @@ describe('ClockPage offline behaviour', () => {
     pinLoginResult.next(session);
     expect(component.isUnlocked()).toBe(true);
 
-    // Lock again (back) - now locked, no selected employee, but simulate the
-    // in-flight action by starting one BEFORE locking is impossible; instead
-    // verify the simpler invariant: while busy from a hung start(), an
-    // unknown-card scan does not unlock anyone new.
-    component.start(); // hangs: clockResult never settles
+    component.start(); // hangs: clockResult never settles (yet)
     expect(component.isBusy()).toBe(true);
 
-    localScanValue = { cardId: 'FFFF01', scannedAt: new Date(Date.now() + 5_000).toISOString(), consumed: false };
-    vi.advanceTimersByTime(1_000);
+    component.back();
+    expect(component.isUnlocked()).toBe(false);
+    expect(component.selectedEmployee()).toBeNull();
 
-    // Consumed, but no identity change: still the PIN session's employee.
-    expect(localAck).toHaveBeenCalledTimes(1);
-    expect(component.selectedEmployee()?.id).toBe('max');
-    expect(enqueueKiosk).not.toHaveBeenCalled();
+    localScanValue = { cardId: '04bb', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+    expect(component.selectedEmployee()?.id).toBe('berta');
+
+    // Only now does the hung request fail offline.
+    clockResult.error({ status: 0 });
+
+    expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    const queued = enqueueKiosk.mock.calls[0][0];
+    // Press-time snapshot wins: max started the action, not berta.
+    expect(queued.employeeId).toBe('max');
+    expect(queued.action).toBe('start');
   });
 
   it('fills the card cache from an ONLINE NFC event so a later OFFLINE scan can identify it', () => {
