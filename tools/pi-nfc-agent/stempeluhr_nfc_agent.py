@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import http.client
+import http.server
 import json
 import logging
 import sys
@@ -42,6 +43,9 @@ STATE_CLOCKED_IN = "clocked_in"
 STATE_PAUSED = "paused"
 STATE_CLOCKED_OUT = "clocked_out"
 
+# Loopback port of the local scan server (offline identification bridge).
+DEFAULT_LOCAL_SCAN_PORT = 8737
+
 
 @dataclass(frozen=True)
 class AgentConfig:
@@ -51,6 +55,7 @@ class AgentConfig:
     debounce_seconds: float
     reader_name_contains: str | None
     queue_path: Path
+    local_port: int = DEFAULT_LOCAL_SCAN_PORT
 
     @staticmethod
     def load(path: Path) -> "AgentConfig":
@@ -72,7 +77,124 @@ class AgentConfig:
                 raw.get("queue_path")
                 or "/var/lib/stempeluhr-nfc-agent/offline-queue.json"
             ),
+            local_port=int(raw.get("local_port") or DEFAULT_LOCAL_SCAN_PORT),
         )
+
+
+@dataclass
+class LastScan:
+    card_id: str
+    scanned_at_epoch: float
+    consumed: bool = False
+
+
+class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
+    """Serves the last NFC scan to the kiosk UI on the loopback interface."""
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib naming convention
+        scan_server: LocalScanServer = self.server.scan_server  # type: ignore[attr-defined]
+        if self.path != "/scan/latest":
+            self._send_json(404, {"error": "not found"})
+            return
+
+        scan = scan_server.latest_scan()
+        if scan is None:
+            self._send_json(404, {"error": "no scan available"})
+            return
+
+        self._send_json(
+            200,
+            {
+                "cardId": scan.card_id,
+                "scannedAt": iso8601_from_epoch(scan.scanned_at_epoch),
+                "consumed": scan.consumed,
+            },
+        )
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib naming convention
+        scan_server: LocalScanServer = self.server.scan_server  # type: ignore[attr-defined]
+        if self.path != "/scan/ack":
+            self._send_json(404, {"error": "not found"})
+            return
+
+        if scan_server.ack_latest():
+            self._send_json(200, {"ok": True})
+        else:
+            self._send_json(404, {"error": "no scan available"})
+
+    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        LOGGER.debug("Local scan server: " + format, *args)
+
+
+class LocalScanServer:
+    """Loopback HTTP server exposing the most recent card scan.
+
+    Offline identification bridge for the Angular UI: the UI polls
+    ``GET /scan/latest`` and confirms handling via ``POST /scan/ack``. Binds
+    only on 127.0.0.1 so the endpoint is never reachable from the network.
+    """
+
+    def __init__(self, port: int = DEFAULT_LOCAL_SCAN_PORT) -> None:
+        self._scan: LastScan | None = None
+        self._lock = threading.Lock()
+        outer = self
+
+        class _Server(http.server.ThreadingHTTPServer):
+            scan_server = outer
+
+        self._httpd = _Server(("127.0.0.1", port), _LocalScanHandler)
+        self._httpd.daemon_threads = True
+
+    @property
+    def url(self) -> str:
+        """Base URL, resolving port 0 to the actually bound port."""
+        return f"http://127.0.0.1:{self._httpd.server_address[1]}"
+
+    def publish_scan(self, card_id: str, scanned_at_epoch: float) -> None:
+        """Records a new scan, replacing any previous one."""
+        with self._lock:
+            self._scan = LastScan(card_id=card_id, scanned_at_epoch=scanned_at_epoch)
+
+    def latest_scan(self) -> LastScan | None:
+        with self._lock:
+            return self._scan
+
+    def ack_latest(self) -> bool:
+        with self._lock:
+            if self._scan is None:
+                return False
+            self._scan.consumed = True
+            return True
+
+    def start_background(self) -> threading.Thread:
+        thread = threading.Thread(
+            target=self.serve_forever,
+            name="local-scan-server",
+            daemon=True,
+        )
+        thread.start()
+        return thread
+
+    def serve_forever(self) -> None:
+        try:
+            self._httpd.serve_forever()
+        except Exception:
+            # The retry loop must survive transient errors; so must this one.
+            LOGGER.exception("Local scan server crashed")
+
+    def shutdown(self) -> None:
+        self._httpd.shutdown()
+
+    def server_close(self) -> None:
+        self._httpd.server_close()
 
 
 @dataclass
@@ -157,11 +279,25 @@ def main() -> int:
     )
     retry_thread.start()
 
-    run(config, queue, status_cache)
+    scan_server = LocalScanServer(port=config.local_port)
+    scan_thread = scan_server.start_background()
+    LOGGER.info("Local scan server listening on %s", scan_server.url)
+
+    try:
+        run(config, queue, status_cache, scan_server)
+    finally:
+        # Clean shutdown of the loopback server when the NFC loop exits.
+        scan_server.shutdown()
+        scan_thread.join(timeout=5)
     return 0
 
 
-def run(config: AgentConfig, queue: OfflineQueue, status_cache: CardStatusCache) -> None:
+def run(
+    config: AgentConfig,
+    queue: OfflineQueue,
+    status_cache: CardStatusCache,
+    scan_server: LocalScanServer | None = None,
+) -> None:
     last_uid: str | None = None
     last_submit_at = 0.0
     selected_reader_name: str | None = None
@@ -196,7 +332,7 @@ def run(config: AgentConfig, queue: OfflineQueue, status_cache: CardStatusCache)
             # and another tap of the same card must not spawn further
             # events (they would toggle repeatedly on drain).
             try:
-                handle_card_scan(config, queue, status_cache, uid)
+                handle_card_scan(config, queue, status_cache, uid, scan_server)
             finally:
                 last_uid = uid
                 last_submit_at = now
@@ -213,10 +349,14 @@ def handle_card_scan(
     queue: OfflineQueue,
     status_cache: CardStatusCache,
     card_id: str,
+    scan_server: LocalScanServer | None = None,
 ) -> None:
     """Queue first, then submit. The event survives any network failure."""
     scanned_at = utc_now_epoch()
     event_id = uuid.uuid4().hex
+
+    if scan_server is not None:
+        scan_server.publish_scan(card_id, scanned_at)
 
     event = QueuedEvent(
         event_id=event_id,
