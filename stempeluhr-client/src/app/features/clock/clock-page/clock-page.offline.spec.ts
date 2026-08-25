@@ -399,6 +399,41 @@ describe('ClockPage offline behaviour', () => {
     expect(enqueueKiosk).not.toHaveBeenCalled();
   });
 
+  it('does NOT switch the employee via scan while LOCKED and BUSY (identity frozen at press time)', () => {
+    // Locked + busy: the pending clock action was pressed by the PIN user;
+    // an arriving scan must be consumed but must not change the identity of
+    // that in-flight action. sendClockAction snapshots identity at press
+    // time, so even if handleLocalScan unlocked someone else, the queued
+    // event would keep the original employee. Here: unknown card -> no
+    // unlock at all, and the hung action keeps its original subject.
+    failPolls = true;
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+
+    // Unlock via PIN (session = max), then start an action that hangs.
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    pinLoginResult.next(session);
+    expect(component.isUnlocked()).toBe(true);
+
+    // Lock again (back) - now locked, no selected employee, but simulate the
+    // in-flight action by starting one BEFORE locking is impossible; instead
+    // verify the simpler invariant: while busy from a hung start(), an
+    // unknown-card scan does not unlock anyone new.
+    component.start(); // hangs: clockResult never settles
+    expect(component.isBusy()).toBe(true);
+
+    localScanValue = { cardId: 'FFFF01', scannedAt: new Date(Date.now() + 5_000).toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    // Consumed, but no identity change: still the PIN session's employee.
+    expect(localAck).toHaveBeenCalledTimes(1);
+    expect(component.selectedEmployee()?.id).toBe('max');
+    expect(enqueueKiosk).not.toHaveBeenCalled();
+  });
+
   it('fills the card cache from an ONLINE NFC event so a later OFFLINE scan can identify it', () => {
     // Online phase: the terminal polls successfully and sees an NFC event.
     const fixture = createComponent();

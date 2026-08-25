@@ -204,6 +204,30 @@ def main() -> int:
             server.shutdown()
             server.server_close()
 
+        # 6b) Toggle variant: the fallback queued + expired the scan; a late
+        #     ack must not enable a second toggle for the same tap (the
+        #     client queue and the agent toggle would both act otherwise).
+        config = make_config(tmp / "q6b.json", fallback_mode="toggle")
+        queue = OfflineQueue.load(config.queue_path)
+        cache = CardStatusCache.load(None)
+        server = LocalScanServer(port=0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            handle_card_scan(config, queue, cache, "CARD7", server)
+            assert len(queue) == 1, "toggle fallback must queue once"
+            scan = server.latest_scan()
+            assert scan is not None and scan.consumed, (
+                "toggle fallback must expire the scan immediately"
+            )
+            # A subsequent late ack cannot re-arm anything: state unchanged.
+            before = server.latest_scan()
+            server.ack_latest()
+            assert server.latest_scan() == before
+            assert len(queue) == 1, "late ack must not produce a second event"
+        finally:
+            server.shutdown()
+            server.server_close()
+
         # Config defaults.
         assert (
             AgentConfig.__dataclass_fields__["selection_timeout_seconds"].default == 10

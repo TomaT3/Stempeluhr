@@ -409,12 +409,17 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   private sendClockAction(action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd'): void {
     this.isBusy.set(true);
-    // Capture the stamp time SYNCHRONOUSLY at button press: a hanging request
-    // (kioskApi.clock has no timeout) reports its failure only seconds to
-    // minutes later - the queued event must carry the moment the employee
-    // acted (payroll data), not the late error time.
+    // Capture the stamp time AND the acting identity SYNCHRONOUSLY at button
+    // press: a hanging request (kioskApi.clock has no timeout) reports its
+    // failure only seconds to minutes later - and in between a new scan
+    // (handleLocalScan), a back() or another unlock may have changed
+    // selectedEmployee/pin/nfcCardId. The queued event must describe WHO
+    // acted WHEN, so freeze both at press time.
     const performedAt = new Date().toISOString();
-    this.kioskApi.clock(this.selectedEmployee()?.id ?? '', this.pin(), action, this.nfcCardId).subscribe({
+    const employeeId = this.selectedEmployee()?.id ?? '';
+    const pin = this.pin();
+    const nfcCardId = this.nfcCardId;
+    this.kioskApi.clock(employeeId, pin, action, nfcCardId).subscribe({
       next: status => {
         this.isOffline.set(false);
         this.clockState.setStatus(status);
@@ -431,16 +436,15 @@ export abstract class ClockWorkflow implements OnDestroy {
           // connectivity returns. 4xx responses are permanent (wrong PIN,
           // deleted employee, ...) - showing the error is better than queuing
           // an event that can never succeed.
-          const employeeId = this.selectedEmployee()?.id ?? '';
           this.offlineQueue.enqueueKiosk({
             eventId: this.generateEventId(),
             employeeId,
-            pin: this.pin(),
+            pin,
             action,
             performedAt,
             // Live-path parity: a session unlocked by NFC touch has NO pin -
             // the replay resolves the employee via the card instead.
-            nfcCardId: this.nfcCardId,
+            nfcCardId,
           });
           this.isOffline.set(true);
           // Let the next successful NFC poll catch the queue up immediately.
