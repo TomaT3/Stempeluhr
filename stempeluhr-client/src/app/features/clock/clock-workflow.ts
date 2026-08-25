@@ -9,7 +9,17 @@ import { LocalNfcScanService } from '../../core/services/local-nfc-scan.service'
 import { OfflineQueueService } from '../../core/services/offline-queue';
 
 const PIN_LENGTH = 4;
-/** localStorage key for the last known cardId -> employee mapping. */
+/**
+ * localStorage key for the last known cardId -> employee mapping.
+ *
+ * Known limitation: entries are ONLY overwritten by NEW online NFC events
+ * (`cacheEmployeeCard`). Revoking a card assignment on the server does NOT
+ * proactively invalidate the cached entry, so a revoked card may still
+ * unlock its former employee while offline. Risk is bounded: the offline
+ * path only IDENTIFIES the employee (no stamping), and every queued event
+ * is re-validated server-side during replay - the server then rejects
+ * events for the revoked card/employee.
+ */
 const EMPLOYEE_CARD_CACHE_KEY = 'stempeluhr.employee-card-cache.v1';
 
 /** Normalizes card ids the same way the admin page does (hex, uppercase). */
@@ -288,8 +298,12 @@ export abstract class ClockWorkflow implements OnDestroy {
    * employee without stamping anything.
    */
   private handleLocalScan(cardId: string): void {
-    const normalized = normalizeCardId(cardId) ?? cardId;
-    const employee = readEmployeeCardCache()[normalized] ?? null;
+    // A card id that normalizes to nothing (only non-hex characters) can
+    // never match a cache key - treat it as unknown instead of falling back
+    // to the unnormalized raw value (which would bypass the hex/uppercase
+    // convention shared with the admin page and the cached keys).
+    const normalized = normalizeCardId(cardId);
+    const employee = normalized ? readEmployeeCardCache()[normalized] ?? null : null;
     // Consume the scan in every case so the agent does not re-report it.
     this.localNfcScan.ack().subscribe();
 
