@@ -279,9 +279,11 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   private pollLocalScan(): void {
-    if (this.isBusy()) {
-      return;
-    }
+    // Deliberately runs even while isBusy(): kioskApi.clock has no request
+    // timeout, so a hung stamp request would keep isBusy true indefinitely
+    // and every tap would fall into the agent's fallback (reader blocked
+    // for the whole selection timeout, phantom toggle with mode=toggle).
+    // Consuming scans is always safe - it only acks, never stamps.
     // Also consume scans while UNLOCKED (offline the kiosk stays unlocked):
     // otherwise every tap blocks the agent's reader loop for the whole
     // selection timeout and - with fallback_mode=toggle - fires a phantom

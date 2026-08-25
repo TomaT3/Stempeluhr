@@ -344,6 +344,61 @@ describe('ClockPage offline behaviour', () => {
     expect(component.message()).toBe('Unbekannte Karte');
   });
 
+  it('acks scans even while UNLOCKED so the agent fallback never fires on them', () => {
+    // Unlock first (offline card login), then a second tap must be consumed
+    // (ack) WITHOUT switching employees - otherwise every tap would block
+    // the agent reader loop for the selection timeout and could fire a
+    // phantom toggle from the stale status cache.
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+    failPolls = true;
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+    expect(component.isUnlocked()).toBe(true);
+    expect(localAck).toHaveBeenCalledTimes(1);
+
+    // Second tap while unlocked.
+    localScanValue = { cardId: '04abcd', scannedAt: new Date(Date.now() + 5_000).toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    expect(localAck).toHaveBeenCalledTimes(2);
+    // No employee switch happened (still the same session, still unlocked,
+    // and no new stamp was queued).
+    expect(enqueueKiosk).not.toHaveBeenCalled();
+  });
+
+  it('acks scans even while BUSY so a hung stamp request cannot starve the agent', () => {
+    // Regression pin: kioskApi.clock has no timeout - while isBusy stays
+    // true, polls must STILL consume scans (ack only, no employee switch).
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+    failPolls = true;
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+    expect(component.isUnlocked()).toBe(true);
+
+    // Start an action whose clock request never settles -> isBusy stays true.
+    component.start(); // clockResult never emits/errors
+
+    localScanValue = { cardId: '04abcd', scannedAt: new Date(Date.now() + 5_000).toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    expect(component.isBusy()).toBe(true);
+    expect(localAck).toHaveBeenCalledTimes(2);
+    // The busy action must not be interrupted or double-queued.
+    expect(enqueueKiosk).not.toHaveBeenCalled();
+  });
+
   it('fills the card cache from an ONLINE NFC event so a later OFFLINE scan can identify it', () => {
     // Online phase: the terminal polls successfully and sees an NFC event.
     const fixture = createComponent();

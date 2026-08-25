@@ -179,6 +179,31 @@ def main() -> int:
             server.shutdown()
             server.server_close()
 
+        # 6) After the fallback fired, the scan is EXPIRED: a late UI ack
+        #    must not consume an already-handled scan (which would let the
+        #    client queue AND the agent toggle both act on the same tap).
+        config = make_config(tmp / "q6.json", fallback_mode="none")
+        queue = OfflineQueue.load(config.queue_path)
+        cache = CardStatusCache.load(None)
+        server = LocalScanServer(port=0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            handle_card_scan(config, queue, cache, "CARD6", server)
+            scan = server.latest_scan()
+            assert scan is not None, "scan must still be present"
+            assert (
+                scan.consumed
+            ), "fallback (mode none) must expire the scan immediately"
+            # A late UI ack must not resurrect the scan: the fallback already
+            # owns it, so acking again must not change any state the watchdog
+            # or a second fallback could act on.
+            before = server.latest_scan()
+            server.ack_latest()
+            assert server.latest_scan() == before, "late ack after fallback is a no-op"
+        finally:
+            server.shutdown()
+            server.server_close()
+
         # Config defaults.
         assert (
             AgentConfig.__dataclass_fields__["selection_timeout_seconds"].default == 10
