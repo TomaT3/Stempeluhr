@@ -208,7 +208,7 @@ jobs:
   container-retry:
     runs-on: ubuntu-latest
     needs: [release, container]
-    if: failure()
+    if: failure() && needs.release.result == 'success'
 
     steps:
       - name: Checkout
