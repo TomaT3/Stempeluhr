@@ -132,10 +132,21 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         else:
             self._send_json(404, {"error": "no scan available"})
 
+    def do_OPTIONS(self) -> None:  # noqa: N802 - stdlib naming convention
+        # CORS preflight: the kiosk UI runs on a different origin (the
+        # backend host) than this loopback server, so the browser blocks
+        # both the GET and the POST without these headers.
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -172,6 +183,18 @@ class LocalScanServer:
         """Records a new scan, replacing any previous one."""
         with self._lock:
             self._scan = LastScan(card_id=card_id, scanned_at_epoch=scanned_at_epoch)
+
+    def expire_latest(self) -> None:
+        """Marks the current scan as consumed after its fallback fired.
+
+        Without this a LATE UI ack (tab throttling can delay the poll by
+        seconds) would consume an already-handled scan and - with
+        fallback_mode=toggle - the client queue AND the agent toggle would
+        both act on the same tap (two events).
+        """
+        with self._lock:
+            if self._scan is not None:
+                self._scan.consumed = True
 
     def latest_scan(self) -> LastScan | None:
         with self._lock:
@@ -446,6 +469,12 @@ def handle_card_scan(
             selection_timeout if selection_timeout is not None
             else config.selection_timeout_seconds,
         )
+    # The fallback owns this scan now: expire it so a LATE UI ack (tab
+    # throttling can delay the poll by seconds) cannot consume an
+    # already-handled scan - with toggle mode that would produce a second
+    # event for the same tap (agent toggle + client queue).
+    if scan_server is not None:
+        scan_server.expire_latest()
 
 
 def _wait_for_ack(

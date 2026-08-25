@@ -121,6 +121,36 @@ def main() -> int:
         try:
             status, _ = get_json(f"{server2.url}/other/path")
             assert status == 404, f"unknown path should 404, got {status}"
+
+            # CORS: the kiosk UI runs on a DIFFERENT origin than this
+            # loopback server - without these headers the browser blocks
+            # both the GET response and the POST preflight entirely.
+            request = urllib.request.Request(
+                f"{server2.url}/scan/latest", method="OPTIONS"
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                assert response.status == 204, (
+                    f"OPTIONS preflight should return 204, got {response.status}"
+                )
+                assert (
+                    response.headers.get("Access-Control-Allow-Origin") is not None
+                ), "preflight must carry Access-Control-Allow-Origin"
+                assert (
+                    "POST" in response.headers.get("Access-Control-Allow-Methods", "")
+                ), "preflight must allow POST"
+            status, headers = get_json(f"{server2.url}/scan/latest")
+            assert status in (200, 404), "GET should answer normally"
+            try:
+                with urllib.request.urlopen(
+                    f"{server2.url}/scan/latest", timeout=5
+                ) as response:
+                    assert (
+                        response.headers.get("Access-Control-Allow-Origin") is not None
+                    ), "GET responses must carry Access-Control-Allow-Origin"
+            except urllib.error.HTTPError as error:
+                assert (
+                    error.headers.get("Access-Control-Allow-Origin") is not None
+                ), "404 GET responses must also carry Access-Control-Allow-Origin"
         finally:
             server2.shutdown()
             server2.server_close()

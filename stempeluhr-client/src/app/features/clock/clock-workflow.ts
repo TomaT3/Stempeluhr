@@ -279,7 +279,25 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   private pollLocalScan(): void {
-    if (this.isBusy() || this.isUnlocked()) {
+    if (this.isBusy()) {
+      return;
+    }
+    // Also consume scans while UNLOCKED (offline the kiosk stays unlocked):
+    // otherwise every tap blocks the agent's reader loop for the whole
+    // selection timeout and - with fallback_mode=toggle - fires a phantom
+    // toggle from a possibly stale status cache. We only ack here; no
+    // employee switch while an action is in flight.
+    if (this.isUnlocked()) {
+      this.localNfcScan.poll().subscribe(scan => {
+        if (!scan) {
+          return;
+        }
+
+        this.localNfcScan.ack().subscribe();
+        this.message.set(
+          'Karte erkannt - bitte zuerst abmelden oder Aktion waehlen.',
+        );
+      });
       return;
     }
 
