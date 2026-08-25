@@ -114,12 +114,12 @@ jobs:
           notes="$header"
           for pair in "Breaking Changes ^[a-z]+(\[[^]]*\])?(\([^)]*\))?!" "Features feat" "Bug Fixes (fix|fix\+test)" "Performance perf"; do
             read -r title pattern <<< "$pair"
-            body="$(echo "$subjects" | grep -iE "${pattern}:" | sed -E 's/^[a-z]+(\+test)?(\([^)]*\))?!?: */- /')"
+            body="$(echo "$subjects" | { grep -iE "${pattern}:" || true; } | sed -E 's/^[a-z]+(\+test)?(\([^)]*\))?!?: */- /')"
             if [ -n "$body" ]; then
               notes+=$'\n\n### '"$title"$'\n'"$body"
             fi
           done
-          other="$(echo "$subjects" | grep -viE '^(feat|fix|perf)(\([^)]*\))?:' | sed 's/^/- /')"
+          other="$(echo "$subjects" | { grep -viE '^(feat|fix|perf)(\([^)]*\))?:' || true; } | sed 's/^/- /')"
           if [ -n "$other" ]; then
             notes+=$'\n\n### Other\n'"$other"
           fi
