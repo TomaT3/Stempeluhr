@@ -181,15 +181,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+      - name: Docker tags
+        id: tags
+        shell: bash
+        run: |
+          # workflow_dispatch liefert github.ref=refs/heads/main - die semver-
+          # Filter von docker/metadata-action greifen dann nie (nur "latest").
+          # Tags deshalb explizit aus der Release-Version bauen (X.Y.Z, X.Y).
+          version="${{ needs.release.outputs.version }}"
+          major_minor="${version%.*}"
+          image="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}"
+          echo "tags=${image}:${version},${image}:${major_minor},${image}:latest" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -198,8 +200,7 @@ jobs:
           push: true
           build-args: |
             VERSION=${{ needs.release.outputs.version }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.tags.outputs.tags }}
 
   # Einmaliger Retry des Container-Builds bei Fehlern (z.B. transiente
   # GHCR-Fehler wie "unknown blob"). Läuft als eigener Job nach Abschluss
@@ -228,15 +229,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+      - name: Docker tags
+        id: tags
+        shell: bash
+        run: |
+          # workflow_dispatch liefert github.ref=refs/heads/main - die semver-
+          # Filter von docker/metadata-action greifen dann nie (nur "latest").
+          # Tags deshalb explizit aus der Release-Version bauen (X.Y.Z, X.Y).
+          version="${{ needs.release.outputs.version }}"
+          major_minor="${version%.*}"
+          image="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}"
+          echo "tags=${image}:${version},${image}:${major_minor},${image}:latest" >> "$GITHUB_OUTPUT"
 
       - name: Build and push (retry)
         uses: docker/build-push-action@v6
@@ -245,5 +248,4 @@ jobs:
           push: true
           build-args: |
             VERSION=${{ needs.release.outputs.version }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.tags.outputs.tags }}
