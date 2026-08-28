@@ -126,6 +126,39 @@ assert_status '"clockedOut"' "$R" "Zustand nach Ausstempeln"
 BOOKINGS=$(curl -s "$KIMAI_URL/_bookings")
 echo "$BOOKINGS" | grep -q '"activity": 2' && ok "Pause wurde mit Pause-Aktivität gebucht" || bad "Keine Pause-Aktivität im Kimai-Log"
 
+# ------------------------------------------------- Test 1b: Stundenübersicht
+say "Test 1b: Stundenübersicht (Max stempelt heute 2h -> /api/kiosk/hours)"
+
+START_ISO=$(date -d '2 hours ago' +%Y-%m-%dT%H:%M:%S%:z)
+STOP_ISO=$(date +%Y-%m-%dT%H:%M:%S%:z)
+
+R=$(post_sync "{\"events\":[{\"eventId\":\"${RUN}-hours-1\",\"employeeId\":\"test-max\",\"pin\":\"1234\",\"action\":\"start\",\"performedAt\":\"$START_ISO\"}]}")
+assert_status '"applied"' "$R" "Stundenübersicht: Start vor 2h"
+
+R=$(post_sync "{\"events\":[{\"eventId\":\"${RUN}-hours-2\",\"employeeId\":\"test-max\",\"pin\":\"1234\",\"action\":\"stop\",\"performedAt\":\"$STOP_ISO\"}]}")
+assert_status '"applied"' "$R" "Stundenübersicht: Stop jetzt"
+
+R=$(curl -s -m 15 -X POST "$API_URL/api/kiosk/hours" -H 'Content-Type: application/json' -d '{"pin":"1234"}')
+assert_status '"todaySeconds":7200' "$R" "Stundenübersicht: Heute = 7200s (2h Netto)"
+assert_status '"todayPauseSeconds":0' "$R" "Stundenübersicht: Pause heute = 0"
+WEEK=$(echo "$R" | grep -oP '"weekSeconds":\K[0-9]+' || true)
+if [[ -n "$WEEK" ]] && [ "$WEEK" -ge 7200 ]; then
+  ok "Stundenübersicht: Woche >= 7200s (war $WEEK)"
+else
+  bad "Stundenübersicht: Woche erwartet >= 7200, war: $R"
+fi
+MONTH=$(echo "$R" | grep -oP '"monthSeconds":\K[0-9]+' || true)
+# Monat ist laufzeitabhängig (Backdate-Events vom 23.08. liegen je nach
+# Ausführmonat im Zeitraum) - heute 2h müssen auf jeden Fall enthalten sein.
+if [[ -n "$MONTH" ]] && [ "$MONTH" -ge 7200 ]; then
+  ok "Stundenübersicht: Monat >= 7200s (war $MONTH)"
+else
+  bad "Stundenübersicht: Monat erwartet >= 7200, war: $R"
+fi
+
+HTTP=$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "$API_URL/api/kiosk/hours" -H 'Content-Type: application/json' -d '{"pin":"9999"}')
+[ "$HTTP" = "401" ] && ok "Stundenübersicht: unbekannter PIN -> 401" || bad "Stundenübersicht: unbekannter PIN erwartet 401, war $HTTP"
+
 # ------------------------------------------------- Test 2: Offline-Szenario
 say "Test 2: Offline-Szenario (Kimai stoppen → Anna stempelt offline → Kimai starten → Nachtrag)"
 

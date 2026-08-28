@@ -3,6 +3,7 @@
 
 Simuliert die Kimai-REST-Endpoints, die der StempeluhrKimaiClient nutzt:
 - GET  /api/timesheets/active        -> aktives Timesheet (Array)
+- GET  /api/timesheets?begin=&end=   -> Timesheet-Liste (Pagination, user=me)
 - POST /api/timesheets?full=true     -> Timesheet erstellen (begin akzeptiert)
 - PATCH /api/timesheets/{id}         -> begin/end nachtragen
 - PATCH /api/timesheets/{id}/stop    -> Timesheet stoppen (end = jetzt)
@@ -18,6 +19,7 @@ import json
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 LOCK = threading.Lock()
 TIMESHEETS: list[dict] = []
@@ -34,6 +36,38 @@ def log(action: str, payload: dict) -> None:
     with open(LOG_PATH, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry) + "\n")
     print("LOG:", json.dumps(entry), flush=True)
+
+
+def parse_query(path: str) -> dict:
+    """Query-Parameter (z.B. user, begin, end, size, page) als Strings."""
+    return {k: v[0] for k, v in parse_qs(urlparse(path).query).items()}
+
+
+def to_local_naive(iso_str: str) -> datetime:
+    """ISO-String (mit Offset) -> naive Lokalzeit, wie Kimai sie filtert."""
+    return datetime.fromisoformat(iso_str).astimezone().replace(tzinfo=None)
+
+
+def to_list_dto(sheet: dict) -> dict:
+    """Kimai-Listenformat: activity/project als Objekt, duration in Sekunden."""
+    begin = sheet.get("begin")
+    end = sheet.get("end")
+    duration = 0
+    if begin and end:
+        try:
+            duration = max(0, int((datetime.fromisoformat(end) - datetime.fromisoformat(begin)).total_seconds()))
+        except (TypeError, ValueError):
+            duration = 0
+    activity = sheet.get("activity")
+    project = sheet.get("project")
+    return {
+        "id": sheet["id"],
+        "begin": begin,
+        "end": end,
+        "duration": duration,
+        "activity": {"id": activity} if isinstance(activity, int) else activity,
+        "project": {"id": project} if isinstance(project, int) else project,
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -63,6 +97,32 @@ class Handler(BaseHTTPRequestHandler):
                 active = [t for t in TIMESHEETS if t.get("end") is None]
                 # Kimai liefert nur das erste aktive Timesheet
                 self._send(200, active[:1])
+            return
+        if self.path.startswith("/api/timesheets"):
+            # Liste (Stundenübersicht): user=me, begin/end-Filter auf begin,
+            # sortiert nach begin ASC, Pagination über size/page.
+            query = parse_query(self.path)
+            try:
+                begin_q = datetime.fromisoformat(query["begin"]) if query.get("begin") else None
+                end_q = datetime.fromisoformat(query["end"]) if query.get("end") else None
+            except ValueError:
+                self._send(400, {"error": "invalid begin/end"})
+                return
+            try:
+                size = max(1, int(query.get("size", "50")))
+                page = max(1, int(query.get("page", "1")))
+            except ValueError:
+                self._send(400, {"error": "invalid size/page"})
+                return
+            with LOCK:
+                filtered = [
+                    t for t in TIMESHEETS
+                    if (begin_q is None or to_local_naive(t["begin"]) >= begin_q)
+                    and (end_q is None or to_local_naive(t["begin"]) <= end_q)
+                ]
+                filtered.sort(key=lambda t: to_local_naive(t["begin"]))
+                start = (page - 1) * size
+                self._send(200, [to_list_dto(t) for t in filtered[start:start + size]])
             return
         if self.path.startswith("/_bookings"):
             with LOCK:
