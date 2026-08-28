@@ -16,6 +16,15 @@ public static class KioskEndpoints
             return session is null ? Results.Unauthorized() : Results.Ok(session);
         });
 
+        app.MapPost("/api/kiosk/hours", async (
+            KioskPinLoginRequest request,
+            IClockService clockService,
+            CancellationToken cancellationToken) =>
+        {
+            var hours = await clockService.GetHoursOverviewAsync(request.Pin, cancellationToken);
+            return hours is null ? Results.Unauthorized() : Results.Ok(hours);
+        });
+
         app.MapPost("/api/kiosk/clock", async (
             KioskClockRequest request,
             IClockService clockService,
