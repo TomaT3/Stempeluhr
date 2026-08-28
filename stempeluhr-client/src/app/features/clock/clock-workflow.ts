@@ -1,7 +1,7 @@
 import { Directive, OnDestroy, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 
-import { Employee, NfcClockEvent } from '../../core/models/kiosk.models';
+import { Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
 import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState } from '../../core/services/clock-state';
 import { KioskApi } from '../../core/services/kiosk-api';
@@ -54,6 +54,9 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** True while the backend cannot be reached; drives the offline banner. */
   readonly isOffline = signal(false);
+
+  /** Stundenübersicht des angemeldeten Mitarbeiters (Heute/Woche/Monat, Netto). */
+  readonly hoursOverview = signal<HoursOverview | null>(null);
 
   private resetTimer: number | null = null;
   private nfcPollTimer: number | null = null;
@@ -141,6 +144,18 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.message.set('');
   }
 
+  private loadHoursOverview(): void {
+    const pin = this.pin();
+    if (!pin) {
+      return;
+    }
+    this.kioskApi.hoursOverview(pin).subscribe({
+      next: hours => this.hoursOverview.set(hours),
+      // Fehler (offline/4xx): Karte bleibt ausgeblendet bzw. zeigt letzte Werte.
+      error: () => undefined,
+    });
+  }
+
   confirmPin(): void {
     if (!this.pin() || this.isBusy()) {
       return;
@@ -157,6 +172,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.nfcCardId = null;
         this.message.set('');
         this.isBusy.set(false);
+        this.loadHoursOverview();
       },
       error: (err) => {
         const status = err?.status ?? 0;
@@ -204,6 +220,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.isUnlocked.set(false);
     this.message.set('');
     this.isBusy.set(false);
+    this.hoursOverview.set(null);
     this.pendingResetOnRecovery = false;
   }
 
@@ -426,6 +443,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.message.set(status.stateText);
         this.isBusy.set(false);
         this.audioFeedback.playBeeps(1);
+        this.loadHoursOverview();
         this.scheduleReset();
       },
       error: (err) => {
