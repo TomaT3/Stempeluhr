@@ -15,4 +15,7 @@ public interface IClockService
     Task<ClockActionResponse> ClockAsync(KioskClockRequest request, CancellationToken cancellationToken = default);
 
     Task<NfcClockEventDto> IdentifyWithNfcCardAsync(NfcClockRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Stundenübersicht (Heute/Woche/Monat) des PIN-Mitarbeiters; null bei unbekanntem PIN.</summary>
+    Task<HoursOverviewDto?> GetHoursOverviewAsync(string? pin, CancellationToken cancellationToken = default);
 }

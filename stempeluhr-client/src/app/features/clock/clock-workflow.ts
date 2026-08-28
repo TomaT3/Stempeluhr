@@ -1,7 +1,7 @@
 import { Directive, OnDestroy, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 
-import { Employee, NfcClockEvent } from '../../core/models/kiosk.models';
+import { Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
 import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState } from '../../core/services/clock-state';
 import { KioskApi } from '../../core/services/kiosk-api';
@@ -54,6 +54,9 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** True while the backend cannot be reached; drives the offline banner. */
   readonly isOffline = signal(false);
+
+  /** Stundenübersicht des angemeldeten Mitarbeiters (Heute/Woche/Monat, Netto). */
+  readonly hoursOverview = signal<HoursOverview | null>(null);
 
   private resetTimer: number | null = null;
   private nfcPollTimer: number | null = null;
@@ -141,6 +144,24 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.message.set('');
   }
 
+  private loadHoursOverview(pin: string): void {
+    if (!pin) {
+      return;
+    }
+    this.kioskApi.hoursOverview(pin).subscribe({
+      next: hours => {
+        // Stale Responses verwerfen: nach back()/Identitätswechsel ist pin()
+        // leer, nach einem neuen Login unterscheidet der PIN - so können die
+        // Stunden des Vorgängers nie unter einem anderen Namen erscheinen.
+        if (this.pin() === pin) {
+          this.hoursOverview.set(hours);
+        }
+      },
+      // Fehler (offline/4xx): Karte bleibt ausgeblendet bzw. zeigt letzte Werte.
+      error: () => undefined,
+    });
+  }
+
   confirmPin(): void {
     if (!this.pin() || this.isBusy()) {
       return;
@@ -148,6 +169,9 @@ export abstract class ClockWorkflow implements OnDestroy {
 
     this.isBusy.set(true);
     this.message.set('');
+    // Neuer Login: nie kurz die Stunden des Vorgängers stehen lassen
+    // (in-flight Responses werden zusätzlich per PIN-Guard verworfen).
+    this.hoursOverview.set(null);
     this.kioskApi.pinLogin(this.pin()).subscribe({
       next: session => {
         this.selectedEmployee.set(session.employee);
@@ -157,6 +181,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.nfcCardId = null;
         this.message.set('');
         this.isBusy.set(false);
+        this.loadHoursOverview(this.pin());
       },
       error: (err) => {
         const status = err?.status ?? 0;
@@ -204,6 +229,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.isUnlocked.set(false);
     this.message.set('');
     this.isBusy.set(false);
+    this.hoursOverview.set(null);
     this.pendingResetOnRecovery = false;
   }
 
@@ -340,6 +366,9 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clockState.setEmployeeMode(true);
     this.isUnlocked.set(true);
     this.pin.set('');
+    // Offline card login is also an identity switch: never keep the hours
+    // of a previous employee (privacy) - and without a pin no reload happens.
+    this.hoursOverview.set(null);
     this.nfcCardId = normalized;
     this.message.set(`${employee.displayName} - Offline angemeldet, bitte Aktion waehlen.`);
     this.audioFeedback.playBeeps(1);
@@ -391,6 +420,9 @@ export abstract class ClockWorkflow implements OnDestroy {
       this.clockState.setEmployeeMode(true);
       this.isUnlocked.set(true);
       this.pin.set('');
+      // Identity switch: the previous employee's hours must never stay on
+      // screen - the new identity has no pin, so no reload can happen.
+      this.hoursOverview.set(null);
       this.nfcCardId = event.cardId;
       this.message.set(event.message);
       this.audioFeedback.playBeeps(1);
@@ -402,6 +434,8 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clockState.setEmployeeMode(this.keepFocusedShellAfterReset());
     this.isUnlocked.set(false);
     this.pin.set('');
+    // Identity switch: drop any hours of the previous employee (privacy).
+    this.hoursOverview.set(null);
     this.nfcCardId = null;
     this.message.set(event.message || 'NFC-Karte nicht erkannt');
     this.audioFeedback.playBeeps(2);
@@ -426,6 +460,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.message.set(status.stateText);
         this.isBusy.set(false);
         this.audioFeedback.playBeeps(1);
+        this.loadHoursOverview(pin);
         this.scheduleReset();
       },
       error: (err) => {

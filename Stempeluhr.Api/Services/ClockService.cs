@@ -20,6 +20,25 @@ public sealed class ClockService(
         return new KioskEmployeeSessionDto(employees.ToEmployeeDto(employee), status);
     }
 
+    public async Task<HoursOverviewDto?> GetHoursOverviewAsync(string? pin, CancellationToken cancellationToken = default)
+    {
+        var settings = settingsStore.Load();
+        var employee = employees.FindEmployeeByPin(settings, pin);
+        if (employee is null)
+        {
+            return null;
+        }
+
+        var now = DateTimeOffset.Now;
+        var localNow = now.ToLocalTime().DateTime;
+        var unionStart = HoursOverviewCalculator.GetUnionStart(localNow);
+
+        var entries = await kimai.GetTimesheetsAsync(
+            settings, employee, unionStart, localNow, cancellationToken);
+
+        return HoursOverviewCalculator.Calculate(entries, settings.PauseActivityId, now);
+    }
+
     public async Task<ClockStatusDto?> GetStatusAsync(ClockRequest request, CancellationToken cancellationToken = default)
     {
         var context = FindEmployee(request);

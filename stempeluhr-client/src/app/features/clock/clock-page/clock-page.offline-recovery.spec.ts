@@ -87,6 +87,7 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
             latestNfcEvent: vi.fn(() =>
               failPolls ? throwError(() => ({ status: 0 })) : of({ event: null }),
             ),
+            hoursOverview: vi.fn(() => of(null)),
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },

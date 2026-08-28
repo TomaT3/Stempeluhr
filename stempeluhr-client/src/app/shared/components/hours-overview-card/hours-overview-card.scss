@@ -1,0 +1,109 @@
+.hours-overview {
+  display: grid;
+  gap: clamp(8px, 1.5vh, 12px);
+  width: min(680px, 100%);
+  padding: clamp(14px, 2vw, 20px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--shadow-soft);
+}
+
+.hours-overview h3 {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: clamp(0.72rem, 1.7vw, 0.88rem);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.hours-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(8px, 1.5vw, 12px);
+  margin: 0;
+}
+
+.hours-grid div {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-height: clamp(66px, 9vh, 82px);
+  align-content: center;
+  padding: clamp(10px, 1.8vw, 14px) clamp(12px, 2vw, 18px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.9);
+  text-align: center;
+  box-shadow: 0 8px 20px rgba(24, 39, 75, 0.06);
+}
+
+.hours-grid dt {
+  color: var(--color-muted);
+  font-size: clamp(0.72rem, 1.7vw, 0.88rem);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.hours-grid dd {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  color: #172033;
+  font-size: clamp(1.2rem, 3.6vw, 2rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.hours-pause {
+  color: var(--color-muted);
+  font-size: clamp(0.8rem, 1.8vw, 1rem);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Schmale Handys (inkl. 430px-Grenzfall): Werte stapeln statt 3 enge Spalten. */
+@media (max-width: 520px) {
+  .hours-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Kompakte Kiosk-Variante auf dem Terminal (7"-Display 800x480): die Karte
+   liegt als volle Breite unter den Stempel-Buttons - Platz sparen, damit
+   nichts scrollt. */
+:host-context(.terminal) .hours-overview {
+  gap: 6px;
+  width: 100%;
+  max-width: none;
+  padding: 8px 12px;
+}
+
+:host-context(.terminal) .hours-overview h3 {
+  font-size: 0.62rem;
+}
+
+:host-context(.terminal) .hours-grid {
+  gap: 6px;
+}
+
+:host-context(.terminal) .hours-grid div {
+  gap: 3px;
+  min-height: 42px;
+  padding: 5px 8px;
+}
+
+:host-context(.terminal) .hours-grid dt {
+  font-size: 0.62rem;
+}
+
+:host-context(.terminal) .hours-grid dd {
+  font-size: clamp(1rem, 2.6vw, 1.3rem);
+}
+
+:host-context(.terminal) .hours-pause {
+  font-size: 0.7rem;
+}

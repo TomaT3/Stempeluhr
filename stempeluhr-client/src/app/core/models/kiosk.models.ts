@@ -36,4 +36,11 @@ export interface NfcLatestEvent {
   event: NfcClockEvent | null;
 }
 
+export interface HoursOverview {
+  todaySeconds: number;
+  todayPauseSeconds: number;
+  weekSeconds: number;
+  monthSeconds: number;
+}
+
 export type ClockAction = 'start' | 'stop' | 'pauseStart' | 'pauseEnd';

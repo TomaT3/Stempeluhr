@@ -82,6 +82,10 @@
         }
       </dl>
 
+      @if (hoursOverview(); as hours) {
+        <app-hours-overview-card [hours]="hours" />
+      }
+
       @if (clockState.isWorking()) {
         <div class="stamp-actions">
           <button class="stamp-button pause" type="button" (click)="startPause()" [disabled]="isBusy()">

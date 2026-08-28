@@ -94,3 +94,14 @@ public enum ClockActionResult
 }
 
 public sealed record ClockActionResponse(ClockActionResult Result, ClockStatusDto? Status);
+
+/// <summary>
+/// Stundenübersicht des Mitarbeiters. <see cref="TodaySeconds"/> ist die
+/// Netto-Arbeitszeit heute; <see cref="TodayPauseSeconds"/> die Pausenzeit
+/// heute (separat, da die Karte beides anzeigt). Woche/Monat: nur Netto.
+/// </summary>
+public sealed record HoursOverviewDto(
+    int TodaySeconds,
+    int TodayPauseSeconds,
+    int WeekSeconds,
+    int MonthSeconds);

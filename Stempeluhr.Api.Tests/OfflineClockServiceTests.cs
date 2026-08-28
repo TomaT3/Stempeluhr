@@ -848,5 +848,13 @@ public sealed class OfflineClockServiceTests
 
         public Task<IReadOnlyCollection<KimaiProjectDto>> GetProjectsAsync(string baseUrl, string apiToken, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+
+        public Task<IReadOnlyCollection<KimaiTimesheetEntryDto>> GetTimesheetsAsync(
+            RuntimeSettings settings,
+            EmployeeSettings employee,
+            DateTime begin,
+            DateTime end,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }
