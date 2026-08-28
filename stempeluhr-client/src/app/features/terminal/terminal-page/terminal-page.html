@@ -87,6 +87,11 @@
           </button>
         }
       </section>
+
+      <!-- Arbeitszeiten unter den Stempel-Buttons: das Stempeln bleibt damit
+           immer sichtbar (Priorität auf dem 7"-Kiosk), die Karte nutzt die
+           restliche Breite als Band. -->
+      <app-hours-overview-card [hours]="hoursOverview()" />
     }
   }
 </section>

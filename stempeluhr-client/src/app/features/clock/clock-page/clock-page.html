@@ -83,28 +83,7 @@
       </dl>
 
       @if (hoursOverview(); as hours) {
-        <section class="hours-overview" aria-label="Meine Stunden">
-          <h3>Meine Stunden</h3>
-          <dl class="hours-grid">
-            <div>
-              <dt>Heute</dt>
-              <dd>
-                <span class="hours-net">{{ hours.todaySeconds | duration }}</span>
-                @if (hours.todayPauseSeconds > 0) {
-                  <span class="hours-pause">+ {{ hours.todayPauseSeconds | duration }} Pause</span>
-                }
-              </dd>
-            </div>
-            <div>
-              <dt>Diese Woche</dt>
-              <dd>{{ hours.weekSeconds | duration }}</dd>
-            </div>
-            <div>
-              <dt>Dieser Monat</dt>
-              <dd>{{ hours.monthSeconds | duration }}</dd>
-            </div>
-          </dl>
-        </section>
+        <app-hours-overview-card [hours]="hours" />
       }
 
       @if (clockState.isWorking()) {

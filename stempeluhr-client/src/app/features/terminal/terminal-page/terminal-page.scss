@@ -312,6 +312,13 @@ p {
   text-align: center;
 }
 
+/* Stundenübersicht als Band unter den drei Spalten: die Stempel-Buttons
+   (rechte Spalte) bleiben dadurch auf ihrer Position sichtbar. */
+app-hours-overview-card {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .keypad button:active,
 .back-button:active,
 .action-button:active {
