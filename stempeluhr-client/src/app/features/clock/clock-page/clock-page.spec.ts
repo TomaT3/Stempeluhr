@@ -242,6 +242,56 @@ describe('ClockPage', () => {
     fixture.destroy();
   });
 
+  it('never shows previous employee hours after back() with a stale in-flight response', () => {
+    // Login A: Request A bleibt offen (in-flight), Login B: Request B schlägt fehl.
+    const hoursA = new Subject<HoursOverview>();
+    const hoursB = new Subject<HoursOverview>();
+    hoursOverview
+      .mockReturnValueOnce(hoursA)
+      .mockReturnValueOnce(hoursB);
+    // Login B bekommt ein EIGENES Subject: das geteilte pinLoginResult würde
+    // beim zweiten next() auch den alten Login-A-Callback feuern lassen.
+    const pinLoginB = new Subject<KioskEmployeeSession>();
+    pinLogin
+      .mockReturnValueOnce(pinLoginResult)
+      .mockReturnValueOnce(pinLoginB);
+
+    const fixture = TestBed.createComponent(ClockPage);
+    const component = fixture.componentInstance;
+
+    // Login A (PIN 1234) - Request A läuft noch (pending, noch keine Daten).
+    unlock(fixture);
+    fixture.detectChanges();
+    expect(hoursOverview).toHaveBeenCalledWith('1234');
+    expect(component.hoursOverview()).toBeNull();
+
+    // Zurück, während Request A noch läuft.
+    component.back();
+    fixture.detectChanges();
+    expect(component.hoursOverview()).toBeNull();
+
+    // A's Response kommt zu spät - der PIN-Guard muss sie verwerfen.
+    hoursA.next(overview);
+    fixture.detectChanges();
+    expect(component.hoursOverview()).toBeNull();
+
+    // Login B (PIN 5678, andere Person) - Request B schlägt fehl.
+    component.pressDigit('5');
+    component.pressDigit('6');
+    component.pressDigit('7');
+    component.pressDigit('8');
+    pinLoginB.next({
+      employee: { ...session.employee, id: 'berta', displayName: 'Berta Beispiel', initials: 'BB' },
+      status,
+    });
+    hoursB.error({ status: 500 });
+    fixture.detectChanges();
+
+    // Die Stunden von A dürfen unter B nie erscheinen.
+    expect(component.hoursOverview()).toBeNull();
+    expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
+  });
+
   describe('NFC identity switch', () => {
     /** Creates the component on a polled terminal (terminalId = 'term-1'). */
     function createPollingFixture(): ComponentFixture<ClockPage> {

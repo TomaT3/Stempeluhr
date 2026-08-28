@@ -149,7 +149,14 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
     this.kioskApi.hoursOverview(pin).subscribe({
-      next: hours => this.hoursOverview.set(hours),
+      next: hours => {
+        // Stale Responses verwerfen: nach back()/Identitätswechsel ist pin()
+        // leer, nach einem neuen Login unterscheidet der PIN - so können die
+        // Stunden des Vorgängers nie unter einem anderen Namen erscheinen.
+        if (this.pin() === pin) {
+          this.hoursOverview.set(hours);
+        }
+      },
       // Fehler (offline/4xx): Karte bleibt ausgeblendet bzw. zeigt letzte Werte.
       error: () => undefined,
     });
@@ -162,6 +169,9 @@ export abstract class ClockWorkflow implements OnDestroy {
 
     this.isBusy.set(true);
     this.message.set('');
+    // Neuer Login: nie kurz die Stunden des Vorgängers stehen lassen
+    // (in-flight Responses werden zusätzlich per PIN-Guard verworfen).
+    this.hoursOverview.set(null);
     this.kioskApi.pinLogin(this.pin()).subscribe({
       next: session => {
         this.selectedEmployee.set(session.employee);
