@@ -350,6 +350,48 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         return projects.Select(ParseKimaiProject).OrderBy(project => project.Name).ToArray();
     }
 
+    public async Task<IReadOnlyCollection<KimaiTimesheetEntryDto>> GetTimesheetsAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        DateTime begin,
+        DateTime end,
+        CancellationToken cancellationToken = default)
+    {
+        var entries = new List<KimaiTimesheetEntryDto>();
+        var page = 1;
+
+        while (true)
+        {
+            var path = $"api/timesheets?user=me&begin={begin:yyyy-MM-ddTHH:mm:ss}&end={end:yyyy-MM-ddTHH:mm:ss}&size=500&page={page}&orderBy=begin&order=ASC";
+            var batch = await SendAsync<JsonElement[]>(settings.BaseUrl, employee.ApiToken, HttpMethod.Get, path, null, cancellationToken);
+
+            foreach (var item in batch)
+            {
+                entries.Add(new KimaiTimesheetEntryDto(
+                    item.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.Number ? idProp.GetInt32() : 0,
+                    ParseDateTimeOffset(item, "begin"),
+                    ParseDateTimeOffset(item, "end"),
+                    item.TryGetProperty("duration", out var durProp) && durProp.ValueKind == JsonValueKind.Number ? durProp.GetInt32() : null,
+                    GetId(item, "activity")));
+            }
+
+            if (batch.Length < 500)
+            {
+                return entries;
+            }
+
+            page++;
+        }
+    }
+
+    private static DateTimeOffset? ParseDateTimeOffset(JsonElement element, string name)
+    {
+        return element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(property.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : null;
+    }
+
     private async Task<T> SendAsync<T>(
         string baseUrl,
         string apiToken,

@@ -93,6 +93,30 @@ public sealed class KimaiClientTests
         ], handler.Requests);
     }
 
+    [Fact]
+    public async Task GetTimesheetsAsync_BuildsDateRangeQuery_AndParsesEntries()
+    {
+        var handler = new ScriptedHandler(
+            Resp(HttpStatusCode.OK, """
+                [
+                    {"id":1,"begin":"2026-08-28T08:00:00+02:00","end":"2026-08-28T12:00:00+02:00","duration":14400,"activity":{"id":5}},
+                    {"id":2,"begin":"2026-08-28T13:00:00+02:00","end":null,"duration":0,"activity":{"id":5}}
+                ]
+                """));
+        var client = CreateClient(handler);
+
+        var entries = await client.GetTimesheetsAsync(
+            Settings, Employee,
+            new DateTime(2026, 8, 28, 0, 0, 0),
+            new DateTime(2026, 8, 28, 13, 30, 0));
+
+        Assert.Equal("GET /api/timesheets?user=me&begin=2026-08-28T00:00:00&end=2026-08-28T13:30:00&size=500&page=1&orderBy=begin&order=ASC", handler.Requests.Single());
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(14400, entries.ElementAt(0).DurationSeconds);
+        Assert.Null(entries.ElementAt(1).End);
+        Assert.Equal(5, entries.ElementAt(0).ActivityId);
+    }
+
     private static DateTimeOffset Parse(string value) =>
         DateTimeOffset.Parse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal);
 

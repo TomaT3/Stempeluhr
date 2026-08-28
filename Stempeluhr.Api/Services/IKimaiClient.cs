@@ -60,6 +60,14 @@ public interface IKimaiClient
         string baseUrl,
         string apiToken,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Alle Timesheets des Token-Inhabers, deren begin im Zeitraum liegt (HTML5-lokale Grenzen).</summary>
+    Task<IReadOnlyCollection<KimaiTimesheetEntryDto>> GetTimesheetsAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        DateTime begin,
+        DateTime end,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Minimal view of a finished timesheet, for replay verification.</summary>
