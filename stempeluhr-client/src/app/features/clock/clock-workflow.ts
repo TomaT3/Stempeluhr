@@ -144,8 +144,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.message.set('');
   }
 
-  private loadHoursOverview(): void {
-    const pin = this.pin();
+  private loadHoursOverview(pin: string): void {
     if (!pin) {
       return;
     }
@@ -172,7 +171,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.nfcCardId = null;
         this.message.set('');
         this.isBusy.set(false);
-        this.loadHoursOverview();
+        this.loadHoursOverview(this.pin());
       },
       error: (err) => {
         const status = err?.status ?? 0;
@@ -357,6 +356,9 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clockState.setEmployeeMode(true);
     this.isUnlocked.set(true);
     this.pin.set('');
+    // Offline card login is also an identity switch: never keep the hours
+    // of a previous employee (privacy) - and without a pin no reload happens.
+    this.hoursOverview.set(null);
     this.nfcCardId = normalized;
     this.message.set(`${employee.displayName} - Offline angemeldet, bitte Aktion waehlen.`);
     this.audioFeedback.playBeeps(1);
@@ -408,6 +410,9 @@ export abstract class ClockWorkflow implements OnDestroy {
       this.clockState.setEmployeeMode(true);
       this.isUnlocked.set(true);
       this.pin.set('');
+      // Identity switch: the previous employee's hours must never stay on
+      // screen - the new identity has no pin, so no reload can happen.
+      this.hoursOverview.set(null);
       this.nfcCardId = event.cardId;
       this.message.set(event.message);
       this.audioFeedback.playBeeps(1);
@@ -419,6 +424,8 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clockState.setEmployeeMode(this.keepFocusedShellAfterReset());
     this.isUnlocked.set(false);
     this.pin.set('');
+    // Identity switch: drop any hours of the previous employee (privacy).
+    this.hoursOverview.set(null);
     this.nfcCardId = null;
     this.message.set(event.message || 'NFC-Karte nicht erkannt');
     this.audioFeedback.playBeeps(2);
@@ -443,7 +450,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.message.set(status.stateText);
         this.isBusy.set(false);
         this.audioFeedback.playBeeps(1);
-        this.loadHoursOverview();
+        this.loadHoursOverview(pin);
         this.scheduleReset();
       },
       error: (err) => {

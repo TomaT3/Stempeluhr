@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { of, Subject, throwError } from 'rxjs';
 
-import { ClockStatus, HoursOverview, KioskEmployeeSession } from '../../../core/models/kiosk.models';
+import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcLatestEvent } from '../../../core/models/kiosk.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
@@ -13,6 +13,10 @@ describe('ClockPage', () => {
   let pinLoginResult: Subject<KioskEmployeeSession>;
   let clockResult: Subject<ClockStatus>;
   let hoursOverview: ReturnType<typeof vi.fn>;
+  /** Poll result for kioskApi.latestNfcEvent (only polled with a terminalId). */
+  let latestNfcValue: NfcLatestEvent;
+  /** terminalId served by the ActivatedRoute mock (null = /clock default route). */
+  let terminalIdValue: string | null;
 
   const status: ClockStatus = {
     isRunning: false,
@@ -47,6 +51,8 @@ describe('ClockPage', () => {
     clockResult = new Subject<ClockStatus>();
     hoursOverview = vi.fn(() => of(overview));
     pinLogin = vi.fn(() => pinLoginResult);
+    latestNfcValue = { event: null };
+    terminalIdValue = null;
 
     await TestBed.configureTestingModule({
       imports: [ClockPage],
@@ -57,6 +63,7 @@ describe('ClockPage', () => {
             pinLogin,
             clock: vi.fn(() => clockResult),
             hoursOverview,
+            latestNfcEvent: vi.fn(() => of(latestNfcValue)),
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
@@ -68,7 +75,11 @@ describe('ClockPage', () => {
         },
         {
           provide: ActivatedRoute,
-          useValue: { snapshot: { queryParamMap: { get: () => null } } },
+          useValue: {
+            snapshot: {
+              queryParamMap: { get: (key: string) => (key === 'terminalId' ? terminalIdValue : null) },
+            },
+          },
         },
       ],
     }).compileComponents();
@@ -179,5 +190,154 @@ describe('ClockPage', () => {
 
     // Cancels the scheduled reset timer from the successful action.
     fixture.destroy();
+  });
+
+  it('keeps the hours card hidden before login and clears it on back()', () => {
+    const fixture = TestBed.createComponent(ClockPage);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+
+    expect(component.hoursOverview()).toBeNull();
+    expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
+
+    unlock(fixture);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.hours-overview')).not.toBeNull();
+
+    component.back();
+    fixture.detectChanges();
+    expect(component.hoursOverview()).toBeNull();
+    expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
+  });
+
+  it('keeps the last hours values visible when a reload after a clock action fails', () => {
+    const fixture = TestBed.createComponent(ClockPage);
+    const component = fixture.componentInstance;
+    unlock(fixture);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.hours-overview')).not.toBeNull();
+
+    // The reload triggered by the successful clock action now fails.
+    hoursOverview.mockReturnValue(throwError(() => ({ status: 500 })));
+    component.stop();
+    clockResult.next({
+      isRunning: true,
+      activeTimesheetId: 7,
+      startedAt: new Date().toISOString(),
+      durationSeconds: 0,
+      state: 'working',
+      stateText: 'Eingestempelt',
+    });
+    fixture.detectChanges();
+
+    expect(hoursOverview).toHaveBeenCalledTimes(2);
+    // Old values stay visible - the failed reload must neither clear the
+    // signal nor throw.
+    expect(component.hoursOverview()).toEqual(overview);
+    const card = fixture.nativeElement.querySelector('.hours-overview') as HTMLElement;
+    expect(card).not.toBeNull();
+    expect(card.textContent ?? '').toContain('08:00:00');
+
+    // Cancels the scheduled reset timer from the successful action.
+    fixture.destroy();
+  });
+
+  describe('NFC identity switch', () => {
+    /** Creates the component on a polled terminal (terminalId = 'term-1'). */
+    function createPollingFixture(): ComponentFixture<ClockPage> {
+      terminalIdValue = 'term-1';
+      return TestBed.createComponent(ClockPage);
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      window.localStorage.clear();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      window.localStorage.clear();
+    });
+
+    it('renders no hours card after an NFC login without pin and never calls the hours API', () => {
+      const fixture = createPollingFixture();
+      const component = fixture.componentInstance;
+
+      latestNfcValue = {
+        event: {
+          eventId: 'ev-nfc-1',
+          occurredAt: new Date().toISOString(),
+          terminalId: 'term-1',
+          cardId: '04AB',
+          employee: session.employee,
+          status,
+          message: 'NFC-Karte erkannt.',
+          success: true,
+        },
+      };
+      vi.advanceTimersByTime(1_000);
+
+      expect(component.isUnlocked()).toBe(true);
+      expect(component.selectedEmployee()?.id).toBe('max');
+      // No pin was entered, so no hours reload may happen.
+      expect(hoursOverview).not.toHaveBeenCalled();
+      expect(component.hoursOverview()).toBeNull();
+
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
+    });
+
+    it('hides the previous employee hours when an NFC card switches the identity', () => {
+      const fixture = createPollingFixture();
+      const component = fixture.componentInstance;
+
+      // max logs in via PIN: his hours card is visible.
+      unlock(fixture);
+      fixture.detectChanges();
+      expect(component.hoursOverview()).toEqual(overview);
+      expect(fixture.nativeElement.querySelector('.hours-overview')).not.toBeNull();
+
+      // berta taps her NFC card: the identity switches without any pin.
+      const berta = {
+        ...session.employee,
+        id: 'berta',
+        displayName: 'Berta Beispiel',
+        initials: 'BB',
+      };
+      const bertaStatus: ClockStatus = {
+        ...status,
+        isRunning: true,
+        activeTimesheetId: 9,
+        startedAt: new Date().toISOString(),
+        durationSeconds: 0,
+        state: 'working',
+        stateText: 'Eingestempelt',
+      };
+      latestNfcValue = {
+        event: {
+          eventId: 'ev-nfc-2',
+          occurredAt: new Date().toISOString(),
+          terminalId: 'term-1',
+          cardId: 'BB01',
+          employee: berta,
+          status: bertaStatus,
+          message: 'NFC-Karte erkannt.',
+          success: true,
+        },
+      };
+      vi.advanceTimersByTime(1_000);
+      fixture.detectChanges();
+
+      // Berta's identity and status are shown ...
+      expect(component.selectedEmployee()?.id).toBe('berta');
+      expect(component.isUnlocked()).toBe(true);
+      expect(component.clockState.status()?.stateText).toBe('Eingestempelt');
+      expect(fixture.nativeElement.textContent).toContain('Berta Beispiel');
+
+      // ... but NOT max's hours: the stale card must disappear instead of
+      // leaking the previous employee's data (privacy).
+      expect(component.hoursOverview()).toBeNull();
+      expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
+    });
   });
 });
