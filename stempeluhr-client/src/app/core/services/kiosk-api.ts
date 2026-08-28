@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 
-import { ClockAction, ClockStatus, KioskEmployeeSession, NfcLatestEvent } from '../models/kiosk.models';
+import { ClockAction, ClockStatus, HoursOverview, KioskEmployeeSession, NfcLatestEvent } from '../models/kiosk.models';
 
 @Injectable({
   providedIn: 'root',
@@ -19,5 +19,9 @@ export class KioskApi {
 
   latestNfcEvent(terminalId = 'default') {
     return this.http.get<NfcLatestEvent>('/api/nfc/events/latest', { params: { terminalId } });
+  }
+
+  hoursOverview(pin: string) {
+    return this.http.post<HoursOverview>('/api/kiosk/hours', { pin });
   }
 }
