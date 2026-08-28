@@ -31,9 +31,7 @@ public sealed class ClockService(
 
         var now = DateTimeOffset.Now;
         var localNow = now.ToLocalTime().DateTime;
-        var weekStart = HoursOverviewCalculator.StartOfWeek(localNow);
-        var monthStart = new DateTime(localNow.Year, localNow.Month, 1);
-        var unionStart = weekStart < monthStart ? weekStart : monthStart;
+        var unionStart = HoursOverviewCalculator.GetUnionStart(localNow);
 
         var entries = await kimai.GetTimesheetsAsync(
             settings, employee, unionStart, localNow, cancellationToken);

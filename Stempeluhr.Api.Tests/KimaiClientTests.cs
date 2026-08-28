@@ -117,6 +117,27 @@ public sealed class KimaiClientTests
         Assert.Equal(5, entries.ElementAt(0).ActivityId);
     }
 
+    [Fact]
+    public async Task GetTimesheetsAsync_PaginatesPastFullPages()
+    {
+        var page1 = "[" + string.Join(",", Enumerable.Range(1, 500).Select(i =>
+            $$$"""{"id":{{{i}}},"begin":"2026-08-01T08:00:00+02:00","end":"2026-08-01T12:00:00+02:00","duration":14400,"activity":{"id":5}}""")) + "]";
+        var handler = new ScriptedHandler(
+            Resp(HttpStatusCode.OK, page1),
+            Resp(HttpStatusCode.OK, """[{"id":501,"begin":"2026-08-02T08:00:00+02:00","end":"2026-08-02T12:00:00+02:00","duration":14400,"activity":{"id":5}}]"""));
+        var client = CreateClient(handler);
+
+        var entries = await client.GetTimesheetsAsync(
+            Settings, Employee,
+            new DateTime(2026, 8, 1, 0, 0, 0),
+            new DateTime(2026, 8, 31, 23, 59, 59));
+
+        Assert.Equal(501, entries.Count);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Contains("page=1", handler.Requests[0]);
+        Assert.Contains("page=2", handler.Requests[1]);
+    }
+
     private static DateTimeOffset Parse(string value) =>
         DateTimeOffset.Parse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal);
 

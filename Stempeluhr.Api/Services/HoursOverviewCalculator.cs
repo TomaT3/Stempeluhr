@@ -6,7 +6,7 @@ public static class HoursOverviewCalculator
 {
     public static HoursOverviewDto Calculate(
         IReadOnlyCollection<KimaiTimesheetEntryDto> entries,
-        int? PauseActivityId,
+        int? pauseActivityId,
         DateTimeOffset now)
     {
         var localNow = now.ToLocalTime().DateTime;
@@ -27,7 +27,7 @@ public static class HoursOverviewCalculator
             }
 
             var day = entry.Begin.Value.ToLocalTime().Date;
-            var isPause = PauseActivityId is not null && entry.ActivityId == PauseActivityId;
+            var isPause = pauseActivityId is not null && entry.ActivityId == pauseActivityId;
             var seconds = entry.DurationSeconds ?? 0;
 
             if (entry.End is null)
@@ -35,7 +35,7 @@ public static class HoursOverviewCalculator
                 // Laufendes Timesheet: Kimai liefert duration=0 -> Live-Elapsed.
                 seconds = (int)Math.Max(0, (now - entry.Begin.Value).TotalSeconds);
             }
-            else if (seconds == 0 && entry.End is not null)
+            else if (seconds == 0)
             {
                 seconds = (int)Math.Max(0, (entry.End.Value - entry.Begin.Value).TotalSeconds);
             }
@@ -58,5 +58,13 @@ public static class HoursOverviewCalculator
         var dayOfWeek = (int)localNow.DayOfWeek; // Sonntag = 0
         var daysSinceMonday = dayOfWeek == 0 ? 6 : dayOfWeek - 1;
         return localNow.Date.AddDays(-daysSinceMonday);
+    }
+
+    /// <summary>Frühester benötigter Beginn für den Kimai-Zeitraum-Call: min(Wochenstart, Monatsstart).</summary>
+    public static DateTime GetUnionStart(DateTime localNow)
+    {
+        var weekStart = StartOfWeek(localNow);
+        var monthStart = new DateTime(localNow.Year, localNow.Month, 1);
+        return weekStart < monthStart ? weekStart : monthStart;
     }
 }
