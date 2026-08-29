@@ -110,7 +110,7 @@ public sealed class KimaiClientTests
             new DateTime(2026, 8, 28, 0, 0, 0),
             new DateTime(2026, 8, 28, 13, 30, 0));
 
-        Assert.Equal("GET /api/timesheets?user=me&begin=2026-08-28T00:00:00&end=2026-08-28T13:30:00&size=500&page=1&orderBy=begin&order=ASC", handler.Requests.Single());
+        Assert.Equal("GET /api/timesheets?begin=2026-08-28T00:00:00&end=2026-08-28T13:30:00&size=500&page=1&orderBy=begin&order=ASC", handler.Requests.Single());
         Assert.Equal(2, entries.Count);
         Assert.Equal(14400, entries.ElementAt(0).DurationSeconds);
         Assert.Null(entries.ElementAt(1).End);

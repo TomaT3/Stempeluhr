@@ -264,13 +264,15 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         CancellationToken cancellationToken = default)
     {
         // state=stopped excludes running and already-exported/closed entries;
-        // user=me scopes the query to the token owner so another employee's
-        // timesheet can never satisfy the interrupted-pauseEnd check.
+        // ohne user-Filter liefert Kimai nur die Timesheets des Token-Inhabers
+        // (jeder Mitarbeiter hat seinen eigenen API-Token), sodass das Timesheet
+        // eines anderen Mitarbeiters den interrupted-pauseEnd-Check nie erfuellen
+        // kann. user=me waere expliziter, wird von Kimai aber mit 400 abgelehnt.
         var latest = await SendAsync<JsonElement[]>(
             settings.BaseUrl,
             employee.ApiToken,
             HttpMethod.Get,
-            "api/timesheets?size=1&orderBy=end&sort=DESC&state=stopped&user=me",
+            "api/timesheets?size=1&orderBy=end&order=DESC&state=stopped",
             null,
             cancellationToken);
 
@@ -362,7 +364,10 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
 
         while (true)
         {
-            var path = $"api/timesheets?user=me&begin={begin:yyyy-MM-ddTHH:mm:ss}&end={end:yyyy-MM-ddTHH:mm:ss}&size=500&page={page}&orderBy=begin&order=ASC";
+            // Kein user-Filter: Kimai liefert ohne ihn nur die Timesheets des Token-Inhabers
+            // (jeder Mitarbeiter hat seinen eigenen API-Token). user=me waere der explizite
+            // Wunschwert, wird von Kimai aber mit 400 abgelehnt (requirements: \d+|all).
+            var path = $"api/timesheets?begin={begin:yyyy-MM-ddTHH:mm:ss}&end={end:yyyy-MM-ddTHH:mm:ss}&size=500&page={page}&orderBy=begin&order=ASC";
             var batch = await SendAsync<JsonElement[]>(settings.BaseUrl, employee.ApiToken, HttpMethod.Get, path, null, cancellationToken);
 
             foreach (var item in batch)
