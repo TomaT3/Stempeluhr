@@ -3,7 +3,7 @@
 
 Simuliert die Kimai-REST-Endpoints, die der StempeluhrKimaiClient nutzt:
 - GET  /api/timesheets/active        -> aktives Timesheet (Array)
-- GET  /api/timesheets?begin=&end=   -> Timesheet-Liste (Pagination, user=me)
+- GET  /api/timesheets?begin=&end=   -> Timesheet-Liste (Pagination, ohne user = Token-Inhaber)
 - POST /api/timesheets?full=true     -> Timesheet erstellen (begin akzeptiert)
 - PATCH /api/timesheets/{id}         -> begin/end nachtragen
 - PATCH /api/timesheets/{id}/stop    -> Timesheet stoppen (end = jetzt)
@@ -99,9 +99,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, active[:1])
             return
         if self.path.startswith("/api/timesheets"):
-            # Liste (Stundenübersicht): user=me, begin/end-Filter auf begin,
-            # sortiert nach begin ASC, Pagination über size/page.
+            # Liste (Stundenübersicht): ohne user (= Token-Inhaber), begin/end-Filter
+            # auf begin, sortiert nach begin ASC, Pagination über size/page.
             query = parse_query(self.path)
+            # Kimai-Vertrag: user akzeptiert nur \d+|all (strict) - user=me -> 400.
+            user = query.get("user")
+            if user is not None and user != "all" and not user.isdigit():
+                self._send(400, {"code": 400, "message": "Bad Request"})
+                return
             try:
                 begin_q = datetime.fromisoformat(query["begin"]) if query.get("begin") else None
                 end_q = datetime.fromisoformat(query["end"]) if query.get("end") else None

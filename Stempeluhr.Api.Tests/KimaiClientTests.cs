@@ -94,6 +94,26 @@ public sealed class KimaiClientTests
     }
 
     [Fact]
+    public async Task GetLatestStoppedTimesheetAsync_BuildsQueryWithoutUserFilter_AndParsesLatestEntry()
+    {
+        var handler = new ScriptedHandler(
+            Resp(HttpStatusCode.OK, """
+                [
+                    {"id":9,"begin":"2026-08-28T07:00:00+02:00","end":"2026-08-28T11:30:00+02:00","duration":16200,"activity":{"id":5}}
+                ]
+                """));
+        var client = CreateClient(handler);
+
+        var latest = await client.GetLatestStoppedTimesheetAsync(Settings, Employee, CancellationToken.None);
+
+        // No user filter: Kimai rejects user=me with 400 (requirements \d+|all),
+        // the default is the token owner. The sort parameter is spelled order.
+        Assert.Equal("GET /api/timesheets?size=1&orderBy=end&order=DESC&state=stopped", handler.Requests.Single());
+        Assert.Equal(5, latest!.ActivityId);
+        Assert.Equal(DateTimeOffset.Parse("2026-08-28T11:30:00+02:00"), latest.EndedAt);
+    }
+
+    [Fact]
     public async Task GetTimesheetsAsync_BuildsDateRangeQuery_AndParsesEntries()
     {
         var handler = new ScriptedHandler(
@@ -110,7 +130,7 @@ public sealed class KimaiClientTests
             new DateTime(2026, 8, 28, 0, 0, 0),
             new DateTime(2026, 8, 28, 13, 30, 0));
 
-        Assert.Equal("GET /api/timesheets?user=me&begin=2026-08-28T00:00:00&end=2026-08-28T13:30:00&size=500&page=1&orderBy=begin&order=ASC", handler.Requests.Single());
+        Assert.Equal("GET /api/timesheets?begin=2026-08-28T00:00:00&end=2026-08-28T13:30:00&size=500&page=1&orderBy=begin&order=ASC", handler.Requests.Single());
         Assert.Equal(2, entries.Count);
         Assert.Equal(14400, entries.ElementAt(0).DurationSeconds);
         Assert.Null(entries.ElementAt(1).End);
