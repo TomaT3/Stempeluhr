@@ -1,10 +1,14 @@
 # syntax=docker/dockerfile:1
 
 FROM node:24-alpine AS client-build
+ARG VERSION=0.0.0-local
 WORKDIR /src/stempeluhr-client
 COPY stempeluhr-client/package*.json ./
 RUN npm ci
 COPY stempeluhr-client/ ./
+# Client-Version aus dem Release-Tag in die App injizieren (Version-Badge auf
+# Terminal-/Admin-Seite). Default bleibt '0.0.0-local' für lokale Builds.
+RUN sed -i "s|export const APP_VERSION = '0.0.0-local'|export const APP_VERSION = '${VERSION}'|" src/app/core/app-version.ts
 RUN npm run build
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS api-build

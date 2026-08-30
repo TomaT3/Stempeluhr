@@ -8,10 +8,11 @@ import { NfcClockEvent } from '../../../core/models/kiosk.models';
 import { AdminApi } from '../../../core/services/admin-api';
 import { Avatar } from '../../../shared/components/avatar/avatar';
 import { StatusBadge } from '../../../shared/components/status-badge/status-badge';
+import { VersionBadge } from '../../../shared/components/version-badge/version-badge';
 
 @Component({
   selector: 'app-admin-page',
-  imports: [Avatar, DatePipe, RouterLink, StatusBadge],
+  imports: [Avatar, DatePipe, RouterLink, StatusBadge, VersionBadge],
   templateUrl: './admin-page.html',
   styleUrl: './admin-page.scss',
 })

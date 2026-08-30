@@ -1,0 +1,8 @@
+<footer
+  class="version-badge"
+  [class.version-mismatch]="versionMismatch()"
+  aria-label="App-Versionen">
+  <span class="version-client">Client v{{ clientVersion }}</span>
+  <span class="version-sep" aria-hidden="true">·</span>
+  <span class="version-server">Server v{{ serverVersion() ?? '–' }}</span>
+</footer>
