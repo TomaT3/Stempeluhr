@@ -15,8 +15,13 @@
 # unangetastet; die .py-Dateien werden mit Zeitstempel-Backup ersetzt.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
 PIS_CONF="${PIS_CONF:-$SCRIPT_DIR/pis.conf}"
+
+# Aufräumen am Skript-Ende (auch bei exit 1): EXIT statt RETURN, damit der
+# tmp-Ordner nicht liegen bleibt, wenn deploy_agent vorzeitig endet.
+TMP_ZIP_DIR=""
+trap 'if [ -n "$TMP_ZIP_DIR" ]; then rm -rf "$TMP_ZIP_DIR"; fi' EXIT
 
 usage() {
   echo "Verwendung: $0 {agent <version> | kiosk | all <version>}" >&2
@@ -86,8 +91,18 @@ if [ "$ACTIVE" != "yes" ]; then
   done
   sudo chown root:root "$AGENT_DIR/stempeluhr_nfc_agent.py" "$AGENT_DIR/offline_queue.py"
   sudo systemctl restart stempeluhr-nfc-agent
-  sleep 2
-  if ! systemctl is-active --quiet stempeluhr-nfc-agent; then
+
+  # Rollback-Folge-Check mit Retry (bis 10 s): bei trägem Start (pyscard-Init)
+  # nicht sofort eine falsch-negative Warnung melden.
+  ROLLBACK_ACTIVE=""
+  for _ in $(seq 1 10); do
+    sleep 1
+    if systemctl is-active --quiet stempeluhr-nfc-agent; then
+      ROLLBACK_ACTIVE="yes"
+      break
+    fi
+  done
+  if [ "$ROLLBACK_ACTIVE" != "yes" ]; then
     echo "  ✗ AUCH Rollback-Version nicht aktiv - manuelles Eingreifen nötig!" >&2
     exit 1
   fi
@@ -101,13 +116,12 @@ REMOTE_EOF
 )
 
 deploy_agent() {
-  local version="$1" tmp zipfile host
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  local version="$1" zipfile host
+  TMP_ZIP_DIR="$(mktemp -d)"
 
   echo "==> Lade pi-nfc-agent-${version}.zip von GitHub (Release-Asset)..."
-  gh release download "$version" --pattern "pi-nfc-agent-*.zip" --dir "$tmp" >/dev/null
-  zipfile="$(ls "$tmp"/pi-nfc-agent-*.zip 2>/dev/null | head -1 || true)"
+  gh release download "$version" --pattern "pi-nfc-agent-*.zip" --dir "$TMP_ZIP_DIR" >/dev/null
+  zipfile="$(ls "$TMP_ZIP_DIR"/pi-nfc-agent-*.zip 2>/dev/null | head -1 || true)"
   [ -n "$zipfile" ] || { echo "FEHLER: kein pi-nfc-agent-*.zip in Release $version gefunden." >&2; exit 1; }
 
   for host in "${HOSTS[@]}"; do
