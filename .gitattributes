@@ -1,0 +1,7 @@
+# Shell-Skripte immer mit LF auschecken - CRLF (Windows) bricht bash auf
+# Linux (z. B. per scp übertragene Deploy-Skripte): 'set: pipefail: invalid
+# option name' und Befehle mit angehängtem \r.
+*.sh text eol=lf
+
+# Agent-Python-Dateien ebenfalls LF (werden per scp/ZIP auf die Pis gespielt).
+*.py text eol=lf

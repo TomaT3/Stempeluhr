@@ -158,8 +158,9 @@ reset_kiosk() {
       echo "  ✗ scp fehlgeschlagen" >&2
       continue
     fi
-    # reboot via SSH beendet die Verbindung -> exit != 0 ist erwartet.
-    if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "sudo bash /tmp/kiosk-cache-reset.sh"; then
+    # CRLF-Schutz: auf Windows ausgecheckte .sh-Dateien können CR-Zeilenenden
+    # haben, die Linux-bash als Teil der Befehle sieht (z.B. 'pipefail\r').
+    if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "sed -i 's/\r$//' /tmp/kiosk-cache-reset.sh && sudo bash /tmp/kiosk-cache-reset.sh"; then
       echo "  ✓ Cache-Reset ausgeführt"
     else
       echo "  → Cache-Reset gestartet (Pi bootet neu; SSH-Abbruch ist normal)"
