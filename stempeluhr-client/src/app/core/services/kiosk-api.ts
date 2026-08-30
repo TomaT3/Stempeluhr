@@ -1,7 +1,11 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
+import { timeout } from 'rxjs';
 
 import { ClockAction, ClockStatus, HealthStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../models/kiosk.models';
+
+/** Timeout für den read-only identify-Call (Kiosk bleibt sonst stumm bei hängendem Backend). */
+export const IDENTIFY_TIMEOUT_MS = 10_000;
 
 @Injectable({
   providedIn: 'root',
@@ -28,7 +32,11 @@ export class KioskApi {
    * means the card is unknown or unreadable.
    */
   identify(cardId: string, terminalId = 'default') {
-    return this.http.post<NfcClockEvent>('/api/kiosk/identify', { cardId, terminalId });
+    // Timeout: identify ist read-only/idempotent - anders als clock darf es
+    // nie den Kiosk stumm lassen, wenn das Backend hängt.
+    return this.http.post<NfcClockEvent>('/api/kiosk/identify', { cardId, terminalId }).pipe(
+      timeout(IDENTIFY_TIMEOUT_MS),
+    );
   }
 
   hoursOverview(pin: string) {

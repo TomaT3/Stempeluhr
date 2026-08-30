@@ -41,10 +41,22 @@ public static class KioskEndpoints
         });
 
         app.MapPost("/api/kiosk/identify", async (
+            HttpRequest httpRequest,
             KioskIdentifyRequest request,
             IClockService clockService,
+            RequestRateLimiter kioskIdentifyRateLimiter,
             CancellationToken cancellationToken) =>
         {
+            // The endpoint is unauthenticated (the kiosk has no token) and
+            // every call hits Kimai (GetStatusAsync) - throttle per client IP
+            // like the kiosk sync endpoint. The real client IP requires
+            // Stempeluhr:KnownProxies to be configured (see Program.cs).
+            var ip = httpRequest.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            if (!kioskIdentifyRateLimiter.TryAcquire(ip))
+            {
+                return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+            }
+
             // Resolves a scanned card id to an employee WITHOUT stamping.
             // The kiosk uses this on its local-scan path when the card is not
             // in its local cache yet; the result is cached client-side so

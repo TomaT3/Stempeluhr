@@ -428,12 +428,35 @@ export abstract class ClockWorkflow implements OnDestroy {
 
     if (employee && normalized) {
       this.applyLocalEmployee(employee, normalized);
+      // Seit der Local-Poll IMMER läuft, trifft der Cache-Pfad auch online
+      // zu - dort ist die API erreichbar, also den frischen Status still
+      // nachladen (der Cache kennt keinen). Fehler (429, Netz) ignorieren:
+      // der Employee ist bereits freigeschaltet, der Status kommt mit der
+      // ersten Aktion.
+      if (!this.isOffline()) {
+        this.kioskApi.identify(normalized, this.terminalId ?? 'default').subscribe({
+          next: event => {
+            if (event.success && event.status) {
+              this.clockState.setStatus(event.status);
+            }
+          },
+          error: () => {},
+        });
+      }
       return;
     }
 
     // Not in the local cache: resolve ONLINE via the server (no stamping).
     // The result is cached so later scans work offline too. Unknown cards
     // and network failures share the same UX as the cache miss.
+    // While offline the identify call can only fail (or hang until its
+    // timeout) - skip it and answer immediately instead.
+    if (this.isOffline()) {
+      this.message.set('Unbekannte Karte');
+      this.audioFeedback.playBeeps(2);
+      return;
+    }
+
     const identifyCardId = normalized ?? cardId;
     this.kioskApi.identify(identifyCardId, this.terminalId ?? 'default').subscribe({
       next: event => {

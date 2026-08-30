@@ -340,6 +340,41 @@ describe('ClockPage offline behaviour', () => {
     expect(queued.nfcCardId).toBe('04ABCD');
   });
 
+  it('refreshes the status after an ONLINE cache-hit scan', () => {
+    // Backend reachable: the card is in the local cache, so the employee is
+    // unlocked immediately - and the fresh status is loaded from the server
+    // in the background (the cache itself stores no status).
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    // Unlocked right away from the cache, no status applied yet.
+    expect(component.selectedEmployee()?.id).toBe('max');
+    expect(component.isUnlocked()).toBe(true);
+    expect(component.clockState.status()).toBeNull();
+
+    // The background identify refreshes the status.
+    identifyValue.next({
+      eventId: 'ev-ident-1',
+      occurredAt: new Date().toISOString(),
+      terminalId: 'term-1',
+      cardId: '04ABCD',
+      employee: session.employee,
+      status: { ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt' },
+      message: 'NFC-Karte erkannt.',
+      success: true,
+    });
+
+    expect(component.clockState.status()?.state).toBe('working');
+  });
+
   it('resolves an uncached card ONLINE via identify, caches it and unlocks', () => {
     // Backend reachable: the cache miss goes to the server, which knows the
     // card even though this browser never saw it before.
@@ -385,8 +420,23 @@ describe('ClockPage offline behaviour', () => {
     expect(localAck).toHaveBeenCalledTimes(1);
     expect(component.isUnlocked()).toBe(false);
 
-    // The cache miss resolves online; an unknown card (success: false) keeps
-    // the terminal locked with the same message as before.
+    // Offline the identify call is skipped entirely (it could only fail or
+    // hang) - the cache miss answers immediately.
+    expect(component.message()).toBe('Unbekannte Karte');
+  });
+
+  it('reports the server message for an uncached card that is unknown ONLINE', () => {
+    // Backend reachable: the cache miss goes to identify, and an unknown
+    // card (success: false) keeps the terminal locked with the server's
+    // message.
+    const component = createComponent().componentInstance;
+
+    localScanValue = { cardId: 'FFFF01', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    expect(localAck).toHaveBeenCalledTimes(1);
+    expect(component.isUnlocked()).toBe(false);
+
     identifyValue.next({
       eventId: 'ev-ident-1',
       occurredAt: new Date().toISOString(),
