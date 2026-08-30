@@ -25,6 +25,9 @@ pnpm-debug.log*
 TestResults/
 artifacts/
 
+# Vom Docker-Build erzeugter Client-Build (Stempeluhr.Api/wwwroot)
+Stempeluhr.Api/wwwroot/
+
 # Local configuration and secrets
 .env
 .env.*

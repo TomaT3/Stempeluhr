@@ -1,12 +1,18 @@
 import { Directive, OnDestroy, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
+import { Subscription } from 'rxjs';
 
+import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
 import { Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
+import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState } from '../../core/services/clock-state';
 import { KioskApi } from '../../core/services/kiosk-api';
 import { LocalNfcScanService } from '../../core/services/local-nfc-scan.service';
 import { OfflineQueueService } from '../../core/services/offline-queue';
+
+/** Wartezeit zwischen Versions-Hinweis und Auto-Reload (Mitarbeiter kann abbrechen). */
+const VERSION_RELOAD_DELAY_MS = 3000;
 
 const PIN_LENGTH = 4;
 /**
@@ -43,6 +49,7 @@ export abstract class ClockWorkflow implements OnDestroy {
   private readonly audioFeedback = inject(AudioFeedback);
   private readonly route = inject(ActivatedRoute);
   private readonly localNfcScan = inject(LocalNfcScanService);
+  private readonly appVersion = inject(AppVersionService);
   protected readonly offlineQueue = inject(OfflineQueueService);
   readonly clockState = inject(ClockState);
 
@@ -85,6 +92,9 @@ export abstract class ClockWorkflow implements OnDestroy {
    */
   private pendingResetOnRecovery = false;
   private readonly terminalId = this.readTerminalId();
+  /** Auto-Reload: Timer-Handle für den verzögerten Reload bei Server-Update. */
+  private versionReloadTimer: number | null = null;
+  private versionReloadSub: Subscription | null = null;
 
   constructor() {
     // Hosts without a terminalId (the /clock default route) have no NFC
@@ -118,12 +128,63 @@ export abstract class ClockWorkflow implements OnDestroy {
     });
     this.recoveryUnsubscribe = () => recoveredSubscription.unsubscribe();
 
+    // Auto-Reload bei Server-Update: der Kiosk läuft tagelang. Sobald der
+    // Server eine ANDERE Version ausliefert als die geladene App, lädt die
+    // Seite nach kurzem Hinweis neu (nur im Idle: kein Mitarbeiter
+    // angemeldet, keine laufende Aktion, keine PIN-Eingabe). Dev-Builds
+    // ('0.0.0-local') sind ausgenommen — dort ist ein Mismatch der Normalfall.
+    this.versionReloadSub = this.appVersion.version$.subscribe(version => {
+      this.handleServerVersionChange(version);
+    });
+
     if (!this.terminalId) {
       return;
     }
 
     this.pollNfcEvents();
     this.nfcPollTimer = window.setInterval(() => this.pollNfcEvents(), 1000);
+  }
+
+  /**
+   * Reagiert auf Server-Versionswechsel: bei Mismatch (und Idle) Hinweis
+   * zeigen und nach kurzer Verzögerung neu laden. Der erneute Idle-Check
+   * beim Timer-Fire verhindert, dass eine inzwischen gestartete Aktion
+   * unterbrochen wird — der nächste Poll (60 s) versucht es dann erneut.
+   */
+  private handleServerVersionChange(version: string | null): void {
+    if (!this.isReleaseBuild()) {
+      return; // Dev-Build ('0.0.0-local'): Mismatch ist der Normalfall, nie reloaden
+    }
+    if (version === null || version === APP_VERSION) {
+      return;
+    }
+    if (this.selectedEmployee() || this.isBusy() || this.pin().length > 0) {
+      return; // nicht in eine laufende Interaktion platzen
+    }
+    this.message.set('Neue Version verfügbar – Aktualisierung...');
+    if (this.versionReloadTimer !== null) {
+      window.clearTimeout(this.versionReloadTimer);
+    }
+    this.versionReloadTimer = window.setTimeout(() => {
+      this.versionReloadTimer = null;
+      if (this.selectedEmployee() || this.isBusy() || this.pin().length > 0) {
+        // Abort: inzwischen ist jemand aktiv geworden — den Hinweis wieder
+        // entfernen, sonst bleibt er (ohne weiteren Poll) dauerhaft stehen.
+        this.message.set('');
+        return;
+      }
+      this.performReload();
+    }, VERSION_RELOAD_DELAY_MS);
+  }
+
+  /** True im echten Release-Build; getrennt gehalten, damit Tests den Guard überschreiben können. */
+  protected isReleaseBuild(): boolean {
+    return APP_VERSION !== DEV_VERSION;
+  }
+
+  /** Getrennt gehalten, damit Tests den Reload spyen können. */
+  protected performReload(): void {
+    window.location.reload();
   }
 
   pressDigit(digit: string): void {
@@ -241,6 +302,11 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (this.nfcPollTimer) {
       window.clearInterval(this.nfcPollTimer);
     }
+
+    if (this.versionReloadTimer !== null) {
+      window.clearTimeout(this.versionReloadTimer);
+    }
+    this.versionReloadSub?.unsubscribe();
 
     this.stopLocalNfcPolling();
 

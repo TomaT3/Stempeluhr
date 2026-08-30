@@ -17,6 +17,8 @@ describe('ClockPage', () => {
   let latestNfcValue: NfcLatestEvent;
   /** terminalId served by the ActivatedRoute mock (null = /clock default route). */
   let terminalIdValue: string | null;
+  /** Health-Poll für AppVersionService (Badge + Auto-Reload). */
+  let healthMock: ReturnType<typeof vi.fn>;
 
   const status: ClockStatus = {
     isRunning: false,
@@ -53,6 +55,7 @@ describe('ClockPage', () => {
     pinLogin = vi.fn(() => pinLoginResult);
     latestNfcValue = { event: null };
     terminalIdValue = null;
+    healthMock = vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }));
 
     await TestBed.configureTestingModule({
       imports: [ClockPage],
@@ -64,7 +67,7 @@ describe('ClockPage', () => {
             clock: vi.fn(() => clockResult),
             hoursOverview,
             latestNfcEvent: vi.fn(() => of(latestNfcValue)),
-            health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
+            health: healthMock,
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
@@ -389,6 +392,80 @@ describe('ClockPage', () => {
       // leaking the previous employee's data (privacy).
       expect(component.hoursOverview()).toBeNull();
       expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
+    });
+  });
+
+  describe('Auto-Reload bei Server-Update', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function createPageWithVersion(version: string | null) {
+      healthMock.mockReturnValue(
+        of({ ok: true, version, configuredEmployees: 0, settingsConfigured: true }),
+      );
+      // Prototype-Spies MÜSSEN vor createComponent aktiv sein: der health-Poll
+      // feuert synchron im Konstruktor (startWith), die Instanz existiert dann
+      // noch nicht zum Überschreiben.
+      const reloadSpy = vi
+        .spyOn(ClockPage.prototype as unknown as { performReload: () => void }, 'performReload')
+        .mockImplementation(() => {});
+      vi.spyOn(
+        ClockPage.prototype as unknown as { isReleaseBuild: () => boolean },
+        'isReleaseBuild',
+      ).mockReturnValue(true);
+      const fixture = TestBed.createComponent(ClockPage);
+      const component = fixture.componentInstance as unknown as {
+        pin: { set: (v: string) => void };
+        message: () => string;
+      };
+      fixture.detectChanges();
+      return { fixture, component, reloadSpy };
+    }
+
+    it('lädt bei Server-Versions-Mismatch automatisch neu (Idle)', () => {
+      vi.useFakeTimers();
+      try {
+        const { component, reloadSpy } = createPageWithVersion('9.9.9');
+        expect(component.message()).toContain('Neue Version verfügbar');
+
+        vi.advanceTimersByTime(3_000);
+        expect(reloadSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('lädt nicht neu, solange eine PIN-Eingabe läuft', () => {
+      vi.useFakeTimers();
+      try {
+        const { component, reloadSpy } = createPageWithVersion('9.9.9');
+        component.pin.set('1'); // Mitarbeiter tippt gerade
+        vi.advanceTimersByTime(3_000);
+        expect(reloadSpy).not.toHaveBeenCalled();
+        // Abort entfernt den Hinweis wieder (kein toter Text auf dem Bildschirm)
+        expect(component.message()).toBe('');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('lädt im Dev-Build (0.0.0-local) nie automatisch neu', () => {
+      vi.useFakeTimers();
+      try {
+        healthMock.mockReturnValue(
+          of({ ok: true, version: '9.9.9', configuredEmployees: 0, settingsConfigured: true }),
+        );
+        const reloadSpy = vi
+          .spyOn(ClockPage.prototype as unknown as { performReload: () => void }, 'performReload')
+          .mockImplementation(() => {});
+        // KEIN isReleaseBuild-Override: APP_VERSION='0.0.0-local' im Test -> false.
+        TestBed.createComponent(ClockPage);
+        vi.advanceTimersByTime(3_000);
+        expect(reloadSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

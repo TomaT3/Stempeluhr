@@ -77,10 +77,30 @@ if (knownProxies.Length > 0)
 
 app.UseApiExceptionHandling();
 app.UseCors("AngularDev");
+// SPA-Cache-Strategie: index.html IMMER frisch validieren (no-cache) — der
+// Kiosk bekommt nach jedem Deploy die neue App statt der alten Cache-Kopie.
+// Die gehashten Bundles (main-*.js, styles-*.css) ändern ihren Namen bei
+// jedem Build und sind immutable cachebar.
+// WICHTIG: dieselbe Logik gilt für UseStaticFiles UND den SPA-Fallback
+// (MapFallbackToFile) — der Kiosk lädt die App über /terminal?terminalId=...
+// und das ist ein Fallback-Pfad mit eigener StaticFile-Instanz.
+void ApplyCacheHeaders(Microsoft.AspNetCore.StaticFiles.StaticFileResponseContext context)
+{
+    var headers = context.Context.Response.Headers;
+    if (string.Equals(context.File.Name, "index.html", StringComparison.OrdinalIgnoreCase))
+    {
+        headers.CacheControl = "no-cache";
+    }
+    else
+    {
+        headers.CacheControl = "public, max-age=31536000, immutable";
+    }
+}
+
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions { OnPrepareResponse = ApplyCacheHeaders });
 
 app.MapApiEndpoints();
-app.MapFallbackToFile("index.html");
+app.MapFallbackToFile("index.html", new StaticFileOptions { OnPrepareResponse = ApplyCacheHeaders });
 
 app.Run();
