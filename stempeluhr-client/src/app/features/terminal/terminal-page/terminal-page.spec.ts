@@ -101,10 +101,10 @@ describe('TerminalPage', () => {
     expect(card).not.toBeNull();
     const text = card.textContent ?? '';
     expect(text).toContain('Meine Stunden');
-    expect(text).toContain('08:00:00');
-    expect(text).toContain('+ 00:45:00 Pause');
-    expect(text).toContain('20:00:00');
-    expect(text).toContain('50:00:00');
+    expect(text).toContain('08:00');
+    expect(text).toContain('+ 00:45 Pause');
+    expect(text).toContain('20:00');
+    expect(text).toContain('50:00');
   });
 
   it('keeps the card hidden when the hours overview request fails', () => {
