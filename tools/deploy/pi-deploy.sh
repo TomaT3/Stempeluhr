@@ -15,7 +15,7 @@
 # unangetastet; die .py-Dateien werden mit Zeitstempel-Backup ersetzt.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIS_CONF="${PIS_CONF:-$SCRIPT_DIR/pis.conf}"
 
 # Aufräumen am Skript-Ende (auch bei exit 1): EXIT statt RETURN, damit der
@@ -126,11 +126,13 @@ deploy_agent() {
 
   for host in "${HOSTS[@]}"; do
     echo "==> [$host] Agent-Update auf $version"
-    if ! scp -q "$zipfile" "$host:/tmp/pi-nfc-agent.zip"; then
+    # ConnectTimeout: offline Pis (Tailscale antwortet nicht) scheitern nach
+    # 10 s statt nach TCP-Timeout; BatchMode: keine Passwort-Prompts.
+    if ! scp -q -o ConnectTimeout=10 -o BatchMode=yes "$zipfile" "$host:/tmp/pi-nfc-agent.zip"; then
       echo "  ✗ scp fehlgeschlagen (Tailscale/SSH ok?)" >&2
       continue
     fi
-    if ssh "$host" "sudo bash -s" <<< "$REMOTE_SCRIPT"; then
+    if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "sudo bash -s" <<< "$REMOTE_SCRIPT"; then
       echo "  ✓ Agent aktualisiert"
     else
       echo "  ✗ Agent-Update fehlgeschlagen" >&2
@@ -142,12 +144,12 @@ reset_kiosk() {
   local host
   for host in "${HOSTS[@]}"; do
     echo "==> [$host] Kiosk-Cache-Reset"
-    if ! scp -q "$SCRIPT_DIR/kiosk-cache-reset.sh" "$host:/tmp/kiosk-cache-reset.sh"; then
+    if ! scp -q -o ConnectTimeout=10 -o BatchMode=yes "$SCRIPT_DIR/kiosk-cache-reset.sh" "$host:/tmp/kiosk-cache-reset.sh"; then
       echo "  ✗ scp fehlgeschlagen" >&2
       continue
     fi
     # reboot via SSH beendet die Verbindung -> exit != 0 ist erwartet.
-    if ssh "$host" "sudo bash /tmp/kiosk-cache-reset.sh"; then
+    if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "sudo bash /tmp/kiosk-cache-reset.sh"; then
       echo "  ✓ Cache-Reset ausgeführt"
     else
       echo "  → Cache-Reset gestartet (Pi bootet neu; SSH-Abbruch ist normal)"
