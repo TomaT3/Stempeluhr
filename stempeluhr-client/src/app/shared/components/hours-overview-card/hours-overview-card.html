@@ -5,19 +5,19 @@
       <div>
         <dt>Heute</dt>
         <dd>
-          <span class="hours-net">{{ hours.todaySeconds | duration }}</span>
+          <span class="hours-net">{{ hours.todaySeconds | duration: false }}</span>
           @if (hours.todayPauseSeconds > 0) {
-            <span class="hours-pause">+ {{ hours.todayPauseSeconds | duration }} Pause</span>
+            <span class="hours-pause">+ {{ hours.todayPauseSeconds | duration: false }} Pause</span>
           }
         </dd>
       </div>
       <div>
         <dt>Diese Woche</dt>
-        <dd>{{ hours.weekSeconds | duration }}</dd>
+        <dd>{{ hours.weekSeconds | duration: false }}</dd>
       </div>
       <div>
         <dt>Dieser Monat</dt>
-        <dd>{{ hours.monthSeconds | duration }}</dd>
+        <dd>{{ hours.monthSeconds | duration: false }}</dd>
       </div>
     </dl>
   </section>

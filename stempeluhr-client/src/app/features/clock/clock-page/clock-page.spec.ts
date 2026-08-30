@@ -137,10 +137,10 @@ describe('ClockPage', () => {
     expect(card).not.toBeNull();
     const text = card.textContent ?? '';
     expect(text).toContain('Meine Stunden');
-    expect(text).toContain('08:00:00');
-    expect(text).toContain('+ 00:45:00 Pause');
-    expect(text).toContain('20:00:00');
-    expect(text).toContain('50:00:00');
+    expect(text).toContain('08:00');
+    expect(text).toContain('+ 00:45 Pause');
+    expect(text).toContain('20:00');
+    expect(text).toContain('50:00');
   });
 
   it('keeps the card hidden when the hours overview request fails', () => {
@@ -164,7 +164,7 @@ describe('ClockPage', () => {
     const card = fixture.nativeElement.querySelector('.hours-overview') as HTMLElement;
     expect(card).not.toBeNull();
     expect(card.querySelector('.hours-pause')).toBeNull();
-    expect(card.textContent ?? '').toContain('08:00:00');
+    expect(card.textContent ?? '').toContain('08:00');
   });
 
   it('reloads the hours overview after a successful clock action', () => {
@@ -236,7 +236,7 @@ describe('ClockPage', () => {
     expect(component.hoursOverview()).toEqual(overview);
     const card = fixture.nativeElement.querySelector('.hours-overview') as HTMLElement;
     expect(card).not.toBeNull();
-    expect(card.textContent ?? '').toContain('08:00:00');
+    expect(card.textContent ?? '').toContain('08:00');
 
     // Cancels the scheduled reset timer from the successful action.
     fixture.destroy();
