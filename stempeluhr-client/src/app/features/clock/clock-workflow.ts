@@ -3,7 +3,7 @@ import { ActivatedRoute } from '@angular/router';
 import { Subscription } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
-import { Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
+import { ClockStatus, Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState } from '../../core/services/clock-state';
@@ -143,6 +143,11 @@ export abstract class ClockWorkflow implements OnDestroy {
 
     this.pollNfcEvents();
     this.nfcPollTimer = window.setInterval(() => this.pollNfcEvents(), 1000);
+    // Der Agent publiziert Karten NUR an den LocalScanServer (nicht mehr an
+    // die API) - der Local-Poll ist damit die einzige Kartenquelle und läuft
+    // IMMER, online wie offline. Der Guard in startLocalNfcPolling
+    // verhindert einen Doppelstart.
+    this.startLocalNfcPolling();
   }
 
   /**
@@ -332,10 +337,12 @@ export abstract class ClockWorkflow implements OnDestroy {
           // it true because a PIN login is still impossible.
           this.pendingRecoveryFlush = false;
           this.offlineQueue.syncNow().subscribe(results => {
-            if (results.some(result => result.results?.some(detail => detail.status !== 'buffered'))) {
+            // Leere Queue: nichts nachzutragen - die API antwortet, also
+            // online. Buffered-only (API up, Kimai down) bleibt offline,
+            // weil ein PIN-Login weiterhin unmöglich ist. Der Local-Poll
+            // läuft IMMER weiter - der Agent publiziert nur noch lokal.
+            if (results.length === 0 || results.some(result => result.results?.some(detail => detail.status !== 'buffered'))) {
               this.isOffline.set(false);
-              // Backend is back: identification goes through the server again.
-              this.stopLocalNfcPolling();
             }
           });
         }
@@ -419,24 +426,74 @@ export abstract class ClockWorkflow implements OnDestroy {
     // Consume the scan in every case so the agent does not re-report it.
     this.localNfcScan.ack().subscribe();
 
-    if (!employee) {
+    if (employee && normalized) {
+      this.applyLocalEmployee(employee, normalized);
+      // Seit der Local-Poll IMMER läuft, trifft der Cache-Pfad auch online
+      // zu - dort ist die API erreichbar, also den frischen Status still
+      // nachladen (der Cache kennt keinen). Fehler (429, Netz) ignorieren:
+      // der Employee ist bereits freigeschaltet, der Status kommt mit der
+      // ersten Aktion.
+      if (!this.isOffline()) {
+        this.kioskApi.identify(normalized, this.terminalId ?? 'default').subscribe({
+          next: event => {
+            if (event.success && event.status) {
+              this.clockState.setStatus(event.status);
+            }
+          },
+          error: () => {},
+        });
+      }
+      return;
+    }
+
+    // Not in the local cache: resolve ONLINE via the server (no stamping).
+    // The result is cached so later scans work offline too. Unknown cards
+    // and network failures share the same UX as the cache miss.
+    // While offline the identify call can only fail (or hang until its
+    // timeout) - skip it and answer immediately instead.
+    if (this.isOffline()) {
       this.message.set('Unbekannte Karte');
       this.audioFeedback.playBeeps(2);
       return;
     }
 
-    // Offline the current clock status is unknown - do not fake one; the
-    // status shown updates as soon as the first queued action is stamped
-    // and later synced/replayed.
+    const identifyCardId = normalized ?? cardId;
+    this.kioskApi.identify(identifyCardId, this.terminalId ?? 'default').subscribe({
+      next: event => {
+        if (event.success && event.employee) {
+          this.cacheEmployeeCard(event.cardId, event.employee);
+          this.applyLocalEmployee(event.employee, event.cardId ?? identifyCardId, event.status);
+        } else {
+          this.message.set(event.message || 'Unbekannte Karte');
+          this.audioFeedback.playBeeps(2);
+        }
+      },
+      error: () => {
+        this.message.set('Unbekannte Karte');
+        this.audioFeedback.playBeeps(2);
+      },
+    });
+  }
+
+  /**
+   * Unlocks the kiosk for an employee identified by a LOCAL scan. Offline the
+   * current clock status is unknown - do not fake one; the status shown
+   * updates as soon as the first queued action is stamped and later
+   * synced/replayed. Online (API identify) the fresh status is applied.
+   */
+  private applyLocalEmployee(employee: Employee, cardId: string, status?: ClockStatus | null): void {
     this.selectedEmployee.set(employee);
     this.clockState.setEmployeeMode(true);
+    if (status) {
+      this.clockState.setStatus(status);
+    }
     this.isUnlocked.set(true);
     this.pin.set('');
-    // Offline card login is also an identity switch: never keep the hours
-    // of a previous employee (privacy) - and without a pin no reload happens.
+    // Card login is also an identity switch: never keep the hours of a
+    // previous employee (privacy) - and without a pin no reload happens.
     this.hoursOverview.set(null);
-    this.nfcCardId = normalized;
-    this.message.set(`${employee.displayName} - Offline angemeldet, bitte Aktion waehlen.`);
+    this.nfcCardId = cardId;
+    this.message.set(`${employee.displayName} - bitte Aktion waehlen.`);
     this.audioFeedback.playBeeps(1);
   }
 
