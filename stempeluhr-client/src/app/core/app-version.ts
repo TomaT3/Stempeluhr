@@ -16,4 +16,4 @@ export const APP_VERSION = '0.0.0-local';
  * Dockerfile-sed ersetzt NUR die APP_VERSION-Zeile (gezieltes Muster), also
  * bleibt DEV_VERSION im Container unverändert.
  */
-export const DEV_VERSION = '0.0.0-local';
+export const DEV_VERSION: string = '0.0.0-local';
