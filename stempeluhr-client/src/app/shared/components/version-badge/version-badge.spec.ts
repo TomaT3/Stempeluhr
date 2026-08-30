@@ -107,4 +107,29 @@ describe('VersionBadge', () => {
       vi.useRealTimers();
     }
   });
+
+  it('behält die Server-Version bei einem hängenden Request (Timeout nach 10 s)', () => {
+    vi.useFakeTimers();
+    try {
+      fixture.detectChanges();
+      httpMock
+        .expectOne('/api/health')
+        .flush({ ok: true, version: '0.6.3', configuredEmployees: 0, settingsConfigured: true });
+      fixture.detectChanges();
+      expect(fixture.nativeElement.textContent).toContain('Server v0.6.3');
+
+      // Nächster Poll: Server akzeptiert TCP, antwortet aber nie.
+      vi.advanceTimersByTime(60_000);
+      httpMock.expectOne('/api/health');
+
+      // Nach 10 s greift der timeout()-Operator -> Fehler -> letzte Version bleibt.
+      // Der Operator cancelt den Request; verify() im afterEach ignoriert
+      // gecancelte Requests, daher ist kein manuelles Aufräumen nötig.
+      vi.advanceTimersByTime(10_000);
+      fixture.detectChanges();
+      expect(fixture.nativeElement.textContent).toContain('Server v0.6.3');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

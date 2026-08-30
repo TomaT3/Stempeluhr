@@ -1,6 +1,6 @@
 import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { catchError, interval, of, startWith, switchMap } from 'rxjs';
+import { catchError, interval, of, startWith, switchMap, timeout } from 'rxjs';
 
 import { APP_VERSION } from '../../../core/app-version';
 import { KioskApi } from '../../../core/services/kiosk-api';
@@ -42,7 +42,15 @@ export class VersionBadge implements OnInit {
     interval(VersionBadge.RefreshIntervalMs)
       .pipe(
         startWith(0),
-        switchMap(() => this.kioskApi.health().pipe(catchError(() => of(null)))),
+        switchMap(() =>
+          this.kioskApi
+            .health()
+            // Kein Default-Timeout im HttpClient: bei einem Server, der TCP
+            // akzeptiert aber nie antwortet, schlägt der Poll nach 10 s
+            // deterministisch fehl (letzte bekannte Version bleibt stehen),
+            // statt bis zum nächsten Tick offen zu bleiben.
+            .pipe(timeout(10_000), catchError(() => of(null))),
+        ),
         takeUntilDestroyed(this.destroyRef),
       )
       .subscribe(health => {
