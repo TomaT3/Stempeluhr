@@ -78,7 +78,25 @@ if (knownProxies.Length > 0)
 app.UseApiExceptionHandling();
 app.UseCors("AngularDev");
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = staticFileContext =>
+    {
+        // SPA-Cache-Strategie: index.html IMMER frisch validieren (no-cache) —
+        // der Kiosk bekommt nach jedem Deploy die neue App statt der alten
+        // Cache-Kopie. Die gehashten Bundles (main-*.js, styles-*.css) ändern
+        // ihren Namen bei jedem Build und sind immutable cachebar.
+        var headers = staticFileContext.Context.Response.Headers;
+        if (string.Equals(staticFileContext.File.Name, "index.html", StringComparison.OrdinalIgnoreCase))
+        {
+            headers.CacheControl = "no-cache";
+        }
+        else
+        {
+            headers.CacheControl = "public, max-age=31536000, immutable";
+        }
+    }
+});
 
 app.MapApiEndpoints();
 app.MapFallbackToFile("index.html");
