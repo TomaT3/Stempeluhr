@@ -64,6 +64,7 @@ describe('ClockPage', () => {
             clock: vi.fn(() => clockResult),
             hoursOverview,
             latestNfcEvent: vi.fn(() => of(latestNfcValue)),
+            health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },

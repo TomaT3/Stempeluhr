@@ -5,9 +5,15 @@
 
 // Das Offline-Banner ist fixed oben und würde sonst den Kopfbereich
 // (Uhrzeit/Datum) bzw. den Login-Bereich überdecken. Inhalt beim Sichtbar-
-// werden des Banners um dessen Höhe nach unten schieben.
+// werden des Banners um dessen Höhe nach unten schieben. Die Terminal-Section
+// zieht die Banner-Höhe von ihrer min-height ab, damit auch offline (Banner
+// aktiv) nichts über den Viewport hinausläuft (keine Scrollbar am 800x480-Kiosk).
 :host:has(.offline-banner) {
   padding-top: 2.75rem;
+}
+
+:host:has(.offline-banner) .terminal {
+  min-height: calc(100vh - 2.75rem - clamp(20px, 4vw, 44px));
 }
 
 h1,
