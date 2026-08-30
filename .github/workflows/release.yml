@@ -156,7 +156,10 @@ jobs:
           # eine Quelle pro Version, kein manuelles ZIP-Bauen mehr.
           cd tools/pi-nfc-agent
           zip -j "pi-nfc-agent-${TAG}.zip" stempeluhr_nfc_agent.py offline_queue.py config.example.json
-          gh release upload "$TAG" "pi-nfc-agent-${TAG}.zip"
+          # --clobber: Idempotenz — nach einem fehlgeschlagenen Upload (Release
+          # existiert dann schon) kann der Job re-runt werden, ohne dass
+          # "gh release create" am existierenden Tag scheitert.
+          gh release upload "$TAG" "pi-nfc-agent-${TAG}.zip" --clobber
 
       - name: Summary
         shell: bash

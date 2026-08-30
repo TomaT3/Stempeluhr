@@ -66,11 +66,37 @@ sudo rm -rf /tmp/pi-nfc-agent-extract /tmp/pi-nfc-agent.zip
 
 echo "  Service neu starten..."
 sudo systemctl restart stempeluhr-nfc-agent
-sleep 1
 
-echo "  Health-Check:"
-systemctl is-active stempeluhr-nfc-agent
-journalctl -u stempeluhr-nfc-agent -n 5 --no-pager | grep -E "Local scan server listening|Using PC/SC reader" || true
+echo "  Health-Check (warte bis zu 15 s auf aktiven Service)..."
+ACTIVE=""
+for _ in $(seq 1 15); do
+  sleep 1
+  if systemctl is-active --quiet stempeluhr-nfc-agent; then
+    ACTIVE="yes"
+    break
+  fi
+done
+
+if [ "$ACTIVE" != "yes" ]; then
+  echo "  ✗ Service wurde nicht aktiv - Rollback auf Backup (.bak-$TS)..." >&2
+  for f in stempeluhr_nfc_agent.py offline_queue.py; do
+    if [ -f "$AGENT_DIR/$f.bak-$TS" ]; then
+      sudo cp "$AGENT_DIR/$f.bak-$TS" "$AGENT_DIR/$f"
+    fi
+  done
+  sudo chown root:root "$AGENT_DIR/stempeluhr_nfc_agent.py" "$AGENT_DIR/offline_queue.py"
+  sudo systemctl restart stempeluhr-nfc-agent
+  sleep 2
+  if ! systemctl is-active --quiet stempeluhr-nfc-agent; then
+    echo "  ✗ AUCH Rollback-Version nicht aktiv - manuelles Eingreifen nötig!" >&2
+    exit 1
+  fi
+  echo "  ↻ Rollback abgeschlossen, vorherige Version läuft wieder"
+  exit 1
+fi
+
+echo "  ✓ Service aktiv"
+journalctl -u stempeluhr-nfc-agent -n 10 --no-pager | grep -E "Local scan server listening|Using PC/SC reader" || true
 REMOTE_EOF
 )
 
