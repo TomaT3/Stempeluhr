@@ -43,4 +43,11 @@ export interface HoursOverview {
   monthSeconds: number;
 }
 
+export interface HealthStatus {
+  ok: boolean;
+  version: string | null;
+  configuredEmployees: number;
+  settingsConfigured: boolean;
+}
+
 export type ClockAction = 'start' | 'stop' | 'pauseStart' | 'pauseEnd';

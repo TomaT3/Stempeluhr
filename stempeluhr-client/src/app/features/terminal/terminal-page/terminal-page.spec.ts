@@ -56,6 +56,7 @@ describe('TerminalPage', () => {
             clock: vi.fn(),
             hoursOverview,
             latestNfcEvent: vi.fn(() => of<NfcLatestEvent>({ event: null })),
+            health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
