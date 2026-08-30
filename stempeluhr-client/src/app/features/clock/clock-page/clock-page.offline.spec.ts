@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { Subject, of, throwError } from 'rxjs';
 
-import { ClockStatus, KioskEmployeeSession, NfcLatestEvent } from '../../../core/models/kiosk.models';
+import { ClockStatus, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../../../core/models/kiosk.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
@@ -20,6 +20,8 @@ describe('ClockPage offline behaviour', () => {
   let playBeeps: ReturnType<typeof vi.fn>;
   let localAck: ReturnType<typeof vi.fn>;
   let localScanValue: LocalNfcScan | null;
+  /** Online card identification (kioskApi.identify); unknown by default. */
+  let identifyValue: Subject<NfcClockEvent>;
 
   const status: ClockStatus = {
     isRunning: false,
@@ -54,6 +56,9 @@ describe('ClockPage offline behaviour', () => {
     playBeeps = vi.fn();
     localAck = vi.fn(() => of(null));
     localScanValue = null;
+    // Default: identify fails like an unreachable backend would - the card
+    // stays unknown. Tests that need an online match replace this.
+    identifyValue = new Subject<NfcClockEvent>();
 
     await TestBed.configureTestingModule({
       imports: [ClockPage],
@@ -67,6 +72,7 @@ describe('ClockPage offline behaviour', () => {
               failPolls ? throwError(() => ({ status: 0 })) : of(latestNfcValue),
             ),
             hoursOverview: vi.fn(() => of(null)),
+            identify: vi.fn(() => identifyValue),
             health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
           },
         },
@@ -334,6 +340,41 @@ describe('ClockPage offline behaviour', () => {
     expect(queued.nfcCardId).toBe('04ABCD');
   });
 
+  it('resolves an uncached card ONLINE via identify, caches it and unlocks', () => {
+    // Backend reachable: the cache miss goes to the server, which knows the
+    // card even though this browser never saw it before.
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+
+    localScanValue = { cardId: '7788AA', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    expect(localAck).toHaveBeenCalledTimes(1);
+    expect(component.isUnlocked()).toBe(false);
+
+    identifyValue.next({
+      eventId: 'ev-ident-1',
+      occurredAt: new Date().toISOString(),
+      terminalId: 'term-1',
+      cardId: '7788AA',
+      employee: session.employee,
+      status,
+      message: 'NFC-Karte erkannt.',
+      success: true,
+    });
+
+    expect(component.selectedEmployee()?.id).toBe('max');
+    expect(component.isUnlocked()).toBe(true);
+    expect(component.message()).toContain('Max Mustermann');
+
+    // The pair is cached so a later OFFLINE scan of the same card works.
+    const cache = JSON.parse(window.localStorage.getItem('stempeluhr.employee-card-cache.v1') ?? '{}');
+    expect(cache['7788AA'].id).toBe('max');
+
+    // The fresh status from the server is applied (online identify).
+    expect(component.clockState.status()).toEqual(status);
+  });
+
   it('reports an unknown card for a local scan without a cached employee', () => {
     failPolls = true;
     const component = createComponent().componentInstance;
@@ -343,7 +384,21 @@ describe('ClockPage offline behaviour', () => {
 
     expect(localAck).toHaveBeenCalledTimes(1);
     expect(component.isUnlocked()).toBe(false);
-    expect(component.message()).toBe('Unbekannte Karte');
+
+    // The cache miss resolves online; an unknown card (success: false) keeps
+    // the terminal locked with the same message as before.
+    identifyValue.next({
+      eventId: 'ev-ident-1',
+      occurredAt: new Date().toISOString(),
+      terminalId: 'term-1',
+      cardId: 'FFFF01',
+      employee: null,
+      status: null,
+      message: 'NFC-Karte ist keinem Mitarbeiter zugeordnet.',
+      success: false,
+    });
+
+    expect(component.message()).toBe('NFC-Karte ist keinem Mitarbeiter zugeordnet.');
   });
 
   it('acks scans even while UNLOCKED so the agent fallback never fires on them', () => {

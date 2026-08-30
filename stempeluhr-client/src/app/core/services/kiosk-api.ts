@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 
-import { ClockAction, ClockStatus, HealthStatus, HoursOverview, KioskEmployeeSession, NfcLatestEvent } from '../models/kiosk.models';
+import { ClockAction, ClockStatus, HealthStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../models/kiosk.models';
 
 @Injectable({
   providedIn: 'root',
@@ -19,6 +19,16 @@ export class KioskApi {
 
   latestNfcEvent(terminalId = 'default') {
     return this.http.get<NfcLatestEvent>('/api/nfc/events/latest', { params: { terminalId } });
+  }
+
+  /**
+   * Resolves a scanned card id to an employee WITHOUT stamping (used by the
+   * kiosk's local-scan path when the card is not in the local cache yet).
+   * Returns the NfcClockEvent the server would publish for that card; 4xx
+   * means the card is unknown or unreadable.
+   */
+  identify(cardId: string, terminalId = 'default') {
+    return this.http.post<NfcClockEvent>('/api/kiosk/identify', { cardId, terminalId });
   }
 
   hoursOverview(pin: string) {

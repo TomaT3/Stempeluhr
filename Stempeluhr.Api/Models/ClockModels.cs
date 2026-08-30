@@ -17,6 +17,13 @@ public sealed record KioskPinLoginRequest(string? Pin);
 public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action, string? NfcCardId);
 
 /// <summary>
+/// Card identification request from the kiosk browser: resolves a scanned
+/// card id to an employee without stamping anything. Used by the kiosk's
+/// local-scan path when the card is not in its local cache.
+/// </summary>
+public sealed record KioskIdentifyRequest(string? CardId, string? TerminalId);
+
+/// <summary>
 /// Live stamp request from an NFC terminal. <paramref name="EventId"/> is
 /// optional; when present the live endpoint registers it in the offline
 /// event-ID store so a retry after an ambiguous timeout (server applied the

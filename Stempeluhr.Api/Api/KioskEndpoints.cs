@@ -40,6 +40,23 @@ public static class KioskEndpoints
             };
         });
 
+        app.MapPost("/api/kiosk/identify", async (
+            KioskIdentifyRequest request,
+            IClockService clockService,
+            CancellationToken cancellationToken) =>
+        {
+            // Resolves a scanned card id to an employee WITHOUT stamping.
+            // The kiosk uses this on its local-scan path when the card is not
+            // in its local cache yet; the result is cached client-side so
+            // later scans work offline too. The NfcClockRequest.Action is
+            // irrelevant for identification and deliberately not set.
+            var clockEvent = await clockService.IdentifyWithNfcCardAsync(
+                new NfcClockRequest(request.CardId, null, request.TerminalId),
+                cancellationToken);
+
+            return clockEvent.Success ? Results.Ok(clockEvent) : Results.BadRequest(clockEvent);
+        });
+
         return app;
     }
 }
