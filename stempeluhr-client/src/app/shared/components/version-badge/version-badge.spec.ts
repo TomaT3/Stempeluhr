@@ -66,4 +66,45 @@ describe('VersionBadge', () => {
     const badge = fixture.nativeElement.querySelector('.version-badge') as HTMLElement;
     expect(badge.classList).not.toContain('version-mismatch');
   });
+
+  it('aktualisiert die Server-Version periodisch (Kiosk läuft tagelang)', () => {
+    vi.useFakeTimers();
+    try {
+      fixture.detectChanges();
+      httpMock
+        .expectOne('/api/health')
+        .flush({ ok: true, version: '0.6.3', configuredEmployees: 0, settingsConfigured: true });
+      fixture.detectChanges();
+      expect(fixture.nativeElement.textContent).toContain('Server v0.6.3');
+
+      // Nächster Poll nach 60 s: Server wurde inzwischen aktualisiert.
+      vi.advanceTimersByTime(60_000);
+      httpMock
+        .expectOne('/api/health')
+        .flush({ ok: true, version: '0.7.0', configuredEmployees: 0, settingsConfigured: true });
+      fixture.detectChanges();
+      expect(fixture.nativeElement.textContent).toContain('Server v0.7.0');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('behält die zuletzt bekannte Server-Version, wenn ein Poll fehlschlägt', () => {
+    vi.useFakeTimers();
+    try {
+      fixture.detectChanges();
+      httpMock
+        .expectOne('/api/health')
+        .flush({ ok: true, version: '0.6.3', configuredEmployees: 0, settingsConfigured: true });
+      fixture.detectChanges();
+      expect(fixture.nativeElement.textContent).toContain('Server v0.6.3');
+
+      vi.advanceTimersByTime(60_000);
+      httpMock.expectOne('/api/health').error(new ErrorEvent('Network error'));
+      fixture.detectChanges();
+      expect(fixture.nativeElement.textContent).toContain('Server v0.6.3');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
