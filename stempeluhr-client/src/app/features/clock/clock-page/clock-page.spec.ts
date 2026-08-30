@@ -443,6 +443,8 @@ describe('ClockPage', () => {
         component.pin.set('1'); // Mitarbeiter tippt gerade
         vi.advanceTimersByTime(3_000);
         expect(reloadSpy).not.toHaveBeenCalled();
+        // Abort entfernt den Hinweis wieder (kein toter Text auf dem Bildschirm)
+        expect(component.message()).toBe('');
       } finally {
         vi.useRealTimers();
       }

@@ -14,6 +14,8 @@ import { KioskApi } from './kiosk-api';
 export class AppVersionService {
   /** Poll-Intervall: Server-Version live halten (Kiosk läuft tagelang). */
   private static readonly RefreshIntervalMs = 60_000;
+  /** Abbruch hängender Health-Requests (Server akzeptiert TCP, antwortet nie). */
+  private static readonly RequestTimeoutMs = 10_000;
 
   private readonly destroyRef = inject(DestroyRef);
   private readonly kioskApi = inject(KioskApi);
@@ -41,7 +43,10 @@ export class AppVersionService {
         // akzeptiert aber nie antwortet, schlägt der Poll nach 10 s
         // deterministisch fehl (letzte bekannte Version bleibt stehen).
         switchMap(() =>
-          this.kioskApi.health().pipe(timeout(10_000), catchError(() => of(null))),
+          this.kioskApi.health().pipe(
+            timeout(AppVersionService.RequestTimeoutMs),
+            catchError(() => of(null)),
+          ),
         ),
         takeUntilDestroyed(this.destroyRef),
       )

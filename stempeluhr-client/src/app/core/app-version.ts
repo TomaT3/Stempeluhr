@@ -9,3 +9,11 @@
  * alte App aus dem Browser-Cache geladen — das Badge markiert den Fall.
  */
 export const APP_VERSION = '0.0.0-local';
+
+/**
+ * Marker für lokale Dev-Builds. Der Auto-Reload (ClockWorkflow) nimmt diesen
+ * Wert aus, um Dev-Builds von echten Release-Builds zu unterscheiden — der
+ * Dockerfile-sed ersetzt NUR die APP_VERSION-Zeile (gezieltes Muster), also
+ * bleibt DEV_VERSION im Container unverändert.
+ */
+export const DEV_VERSION = '0.0.0-local';

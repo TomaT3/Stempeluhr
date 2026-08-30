@@ -2,7 +2,7 @@ import { Directive, OnDestroy, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { Subscription } from 'rxjs';
 
-import { APP_VERSION } from '../../core/app-version';
+import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
 import { Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
@@ -11,8 +11,6 @@ import { KioskApi } from '../../core/services/kiosk-api';
 import { LocalNfcScanService } from '../../core/services/local-nfc-scan.service';
 import { OfflineQueueService } from '../../core/services/offline-queue';
 
-/** Dev-Build-Marker aus app-version.ts — dort wird er im Docker-Build durch den Release-Tag ersetzt. */
-const DEV_VERSION = '0.0.0-local';
 /** Wartezeit zwischen Versions-Hinweis und Auto-Reload (Mitarbeiter kann abbrechen). */
 const VERSION_RELOAD_DELAY_MS = 3000;
 
@@ -170,6 +168,9 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.versionReloadTimer = window.setTimeout(() => {
       this.versionReloadTimer = null;
       if (this.selectedEmployee() || this.isBusy() || this.pin().length > 0) {
+        // Abort: inzwischen ist jemand aktiv geworden — den Hinweis wieder
+        // entfernen, sonst bleibt er (ohne weiteren Poll) dauerhaft stehen.
+        this.message.set('');
         return;
       }
       this.performReload();
