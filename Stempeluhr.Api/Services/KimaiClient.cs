@@ -293,6 +293,34 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         return new KimaiRecentTimesheetDto(activityId, endedAt);
     }
 
+    /// <inheritdoc />
+    public async Task<string?> GetCurrentUserTimezoneAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var user = await SendAsync<JsonElement>(
+                settings.BaseUrl,
+                employee.ApiToken,
+                HttpMethod.Get,
+                "api/users/me",
+                null,
+                cancellationToken);
+
+            return user.TryGetProperty("timezone", out var timezone) && timezone.ValueKind == JsonValueKind.String
+                ? timezone.GetString()
+                : null;
+        }
+        catch (KimaiApiException)
+        {
+            // The hours overview must degrade gracefully if the timezone
+            // lookup fails (e.g. very old Kimai) - the caller falls back.
+            return null;
+        }
+    }
+
     private const int BackdateRetryCount = 3;
 
     private static bool IsTransientBackdateFailure(Exception exception)

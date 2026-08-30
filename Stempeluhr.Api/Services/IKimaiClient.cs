@@ -46,6 +46,16 @@ public interface IKimaiClient
         EmployeeSettings employee,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the IANA timezone of the token owner (Kimai interprets naive
+    /// HTML5 datetimes in this timezone), or null if the lookup fails - the
+    /// caller then falls back to the server's local timezone.
+    /// </summary>
+    Task<string?> GetCurrentUserTimezoneAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyCollection<KimaiUserDto>> GetUsersAsync(
         string baseUrl,
         string apiToken,

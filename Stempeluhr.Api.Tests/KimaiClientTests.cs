@@ -114,6 +114,30 @@ public sealed class KimaiClientTests
     }
 
     [Fact]
+    public async Task GetCurrentUserTimezoneAsync_ParsesTimezone()
+    {
+        var handler = new ScriptedHandler(
+            Resp(HttpStatusCode.OK, """{"id":1,"timezone":"Europe/Berlin"}"""));
+        var client = CreateClient(handler);
+
+        var timezone = await client.GetCurrentUserTimezoneAsync(Settings, Employee);
+
+        Assert.Equal("Europe/Berlin", timezone);
+        Assert.Equal("GET /api/users/me", handler.Requests.Single());
+    }
+
+    [Fact]
+    public async Task GetCurrentUserTimezoneAsync_KimaiError_ReturnsNull()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.InternalServerError));
+        var client = CreateClient(handler);
+
+        var timezone = await client.GetCurrentUserTimezoneAsync(Settings, Employee);
+
+        Assert.Null(timezone);
+    }
+
+    [Fact]
     public async Task GetTimesheetsAsync_BuildsDateRangeQuery_AndParsesEntries()
     {
         var handler = new ScriptedHandler(

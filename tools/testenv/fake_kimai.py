@@ -92,6 +92,11 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path.startswith("/api/users/me"):
+            # Kimai: Zeitraum-Abfragen interpretiert naive Datetimes in der
+            # Zeitzone des Token-Inhabers - die API erfragt sie hier.
+            self._send(200, {"id": 1, "username": "api", "timezone": "Europe/Berlin"})
+            return
         if self.path.startswith("/api/timesheets/active"):
             with LOCK:
                 active = [t for t in TIMESHEETS if t.get("end") is None]

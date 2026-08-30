@@ -30,13 +30,35 @@ public sealed class ClockService(
         }
 
         var now = DateTimeOffset.Now;
-        var localNow = now.ToLocalTime().DateTime;
+        // Kimai interpretiert naive HTML5-Datetimes in der Zeitzone des
+        // Token-Inhabers - nicht in der des Containers (der laeuft UTC).
+        // Sonst verschiebt sich das Abfragefenster und die aktuelle Schicht
+        // fehlt (nachts ganztags). Fallback bei Fehler: Server-Zeitzone.
+        var timeZone = ResolveTimezone(await kimai.GetCurrentUserTimezoneAsync(settings, employee, cancellationToken));
+        var localNow = TimeZoneInfo.ConvertTime(now, timeZone).DateTime;
         var unionStart = HoursOverviewCalculator.GetUnionStart(localNow);
 
         var entries = await kimai.GetTimesheetsAsync(
             settings, employee, unionStart, localNow, cancellationToken);
 
-        return HoursOverviewCalculator.Calculate(entries, settings.PauseActivityId, now);
+        return HoursOverviewCalculator.Calculate(entries, settings.PauseActivityId, now, timeZone);
+    }
+
+    private static TimeZoneInfo ResolveTimezone(string? kimaiTimezone)
+    {
+        if (!string.IsNullOrWhiteSpace(kimaiTimezone))
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(kimaiTimezone);
+            }
+            catch (TimeZoneNotFoundException)
+            {
+                // Unknown IANA id - fall through to the server timezone.
+            }
+        }
+
+        return TimeZoneInfo.Local;
     }
 
     public async Task<ClockStatusDto?> GetStatusAsync(ClockRequest request, CancellationToken cancellationToken = default)

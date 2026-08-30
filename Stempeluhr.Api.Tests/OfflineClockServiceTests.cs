@@ -831,6 +831,12 @@ public sealed class OfflineClockServiceTests
             return Task.FromResult<KimaiRecentTimesheetDto?>(new KimaiRecentTimesheetDto(last.ActivityId, last.EndedAt));
         }
 
+        public Task<string?> GetCurrentUserTimezoneAsync(
+            RuntimeSettings settings,
+            EmployeeSettings employee,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<string?>("Europe/Berlin");
+
         public Task StartAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
