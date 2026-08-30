@@ -112,8 +112,11 @@ jobs:
           merges="$(git log --merges --pretty='- %s' "$range" | sed -E 's/- Merge pull request #([0-9]+) from [^/]+\/[^[:space:]]+/- #\1/')"
 
           notes="$header"
-          for pair in "Breaking Changes ^[a-z]+(\[[^]]*\])?(\([^)]*\))?!" "Features feat" "Bug Fixes (fix|fix\+test)" "Performance perf"; do
-            read -r title pattern <<< "$pair"
+          for pair in "Breaking Changes ^[a-z]+(\[[^]]*\])?(\([^)]*\))!" "Features feat(\([^)]*\))?" "Bug Fixes (fix|fix\+test)(\([^)]*\))?" "Performance perf(\([^)]*\))?"; do
+            # ${pair% *} = alles bis zum letzten Wort (Titel), ${pair##* } = letztes Wort (Regex).
+            # read -r title pattern wuerde bei Titeln mit Leerzeichen ("Bug Fixes") zerbrechen.
+            title="${pair% *}"
+            pattern="${pair##* }"
             body="$(echo "$subjects" | { grep -iE "${pattern}:" || true; } | sed -E 's/^[a-z]+(\+test)?(\([^)]*\))?!?: */- /')"
             if [ -n "$body" ]; then
               notes+=$'\n\n### '"$title"$'\n'"$body"
