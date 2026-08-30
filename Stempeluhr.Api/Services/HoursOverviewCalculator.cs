@@ -7,9 +7,10 @@ public static class HoursOverviewCalculator
     public static HoursOverviewDto Calculate(
         IReadOnlyCollection<KimaiTimesheetEntryDto> entries,
         int? pauseActivityId,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        TimeZoneInfo timeZone)
     {
-        var localNow = now.ToLocalTime().DateTime;
+        var localNow = TimeZoneInfo.ConvertTime(now, timeZone).DateTime;
         var today = localNow.Date;
         var weekStart = StartOfWeek(localNow);
         var monthStart = new DateTime(localNow.Year, localNow.Month, 1);
@@ -26,7 +27,7 @@ public static class HoursOverviewCalculator
                 continue;
             }
 
-            var day = entry.Begin.Value.ToLocalTime().Date;
+            var day = TimeZoneInfo.ConvertTime(entry.Begin.Value, timeZone).Date;
             var isPause = pauseActivityId is not null && entry.ActivityId == pauseActivityId;
             var seconds = entry.DurationSeconds ?? 0;
 
@@ -34,6 +35,11 @@ public static class HoursOverviewCalculator
             {
                 // Laufendes Timesheet: Kimai liefert duration=0 -> Live-Elapsed.
                 seconds = (int)Math.Max(0, (now - entry.Begin.Value).TotalSeconds);
+                // Eine noch laufende Schicht zaehlt zu HEUTE (live), auch wenn
+                // sie gestern begonnen hat (Nachtschicht) - der Mitarbeiter
+                // arbeitet jetzt, "Heute: 0" waere irrefuehrend. Gestoppte
+                // Eintraege behalten die Starttag-Zuordnung (Kimai-Semantik).
+                day = today;
             }
             else if (seconds == 0)
             {

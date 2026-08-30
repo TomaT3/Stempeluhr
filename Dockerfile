@@ -24,6 +24,11 @@ RUN dotnet publish Stempeluhr.Api/Stempeluhr.Api.csproj \
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS final
 WORKDIR /app
+# tzdata: TimeZoneInfo.FindSystemTimeZoneById(Europe/Berlin) braucht die
+# Zonendaten auf Alpine; ENV TZ=Europe/Berlin = Fallback-Zeitzone (Stundenuebersicht
+# fragt die User-Zeitzone primaer via /api/users/me ab).
+RUN apk add --no-cache tzdata
+ENV TZ=Europe/Berlin
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 COPY --from=api-build /app/publish ./

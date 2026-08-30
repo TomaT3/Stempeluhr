@@ -9,6 +9,10 @@ public sealed class HoursOverviewCalculatorTests
 {
     private static readonly DateTimeOffset Now = Parse("2026-08-28T13:30:00+02:00"); // Freitag
 
+    // Explizite Kimai-User-Zeitzone statt TimeZoneInfo.Local: Die Tests sind
+    // damit unabhaengig von der Zeitzone der Testmaschine (CI laeuft UTC).
+    private static TimeZoneInfo BerlinTz => TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin");
+
     [Fact]
     public void Calculate_ExcludesPauseActivity_AndCountsRunningEntryLive()
     {
@@ -22,7 +26,7 @@ public sealed class HoursOverviewCalculatorTests
             Entry(6, "2026-07-31T08:00:00+02:00", "2026-07-31T12:00:00+02:00", 14400, ActivityId: 5),
         };
 
-        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: 99, Now);
+        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: 99, Now, BerlinTz);
 
         Assert.Equal(14400 + 1800, result.TodaySeconds);        // Netto heute: 4h + live 30min
         Assert.Equal(2700, result.TodayPauseSeconds);            // Pause heute: 45min
@@ -35,9 +39,42 @@ public sealed class HoursOverviewCalculatorTests
     {
         var entries = new[] { Entry(1, "2026-08-28T08:00:00+02:00", null, 0, ActivityId: 5) };
 
-        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, Now);
+        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, Now, BerlinTz);
 
         Assert.Equal(5 * 3600 + 30 * 60, result.TodaySeconds);
+    }
+
+    [Fact]
+    public void Calculate_RunningNightShiftStartedYesterday_CountsToToday()
+    {
+        // Nachtschicht 22:00-02:00: laufendes Timesheet begann gestern, wird
+        // aber JETZT gearbeitet - "Heute" darf nicht 0 sein.
+        var now = Parse("2026-08-30T02:00:00+02:00"); // Sonntag 02:00
+        var entries = new[]
+        {
+            Entry(1, "2026-08-29T22:00:00+02:00", null, 0, ActivityId: 5),          // laeuft
+            Entry(2, "2026-08-29T16:00:00+02:00", "2026-08-29T20:00:00+02:00", 14400, ActivityId: 5), // gestoppt gestern
+        };
+
+        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, now, BerlinTz);
+
+        Assert.Equal(4 * 3600, result.TodaySeconds);        // live 22:00-02:00
+        Assert.Equal(4 * 3600 + 14400, result.WeekSeconds); // gestoppt gestern + live
+        Assert.Equal(4 * 3600 + 14400, result.MonthSeconds);
+    }
+
+    [Fact]
+    public void Calculate_UsesKimaiUserTimezone_NotServerLocal()
+    {
+        // Container-UTC-Szenario: 02:00 Berlin = 00:00 UTC. Ohne explizite
+        // User-Zeitzone (ToLocalTime auf UTC-Maschine) wuerde die um 00:30
+        // Berlin begonnene Schicht in "gestern" landen -> heute faelschlich 0.
+        var now = Parse("2026-08-30T00:00:00+00:00");                     // = 02:00 Berlin
+        var entries = new[] { Entry(1, "2026-08-29T22:30:00+00:00", null, 0, ActivityId: 5) }; // = 00:30 Berlin
+
+        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, now, BerlinTz);
+
+        Assert.Equal(90 * 60, result.TodaySeconds);
     }
 
     [Fact]
@@ -49,7 +86,7 @@ public sealed class HoursOverviewCalculatorTests
             Entry(2, "2026-08-28T08:00:00+02:00", "2026-08-28T12:00:00+02:00", 14400, ActivityId: 5),
         };
 
-        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, Now);
+        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, Now, BerlinTz);
 
         Assert.Equal(14400, result.TodaySeconds);
         Assert.Equal(0, result.TodayPauseSeconds);
@@ -62,7 +99,7 @@ public sealed class HoursOverviewCalculatorTests
     {
         var entries = new[] { Entry(1, "2026-08-28T08:00:00+02:00", "2026-08-28T12:00:00+02:00", null, ActivityId: 5) };
 
-        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, Now);
+        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, Now, BerlinTz);
 
         Assert.Equal(4 * 3600, result.TodaySeconds);
     }
@@ -78,7 +115,7 @@ public sealed class HoursOverviewCalculatorTests
             Entry(3, "2026-08-23T08:00:00+02:00", "2026-08-23T12:00:00+02:00", 14400, ActivityId: 5), // So (Vorwoche)
         };
 
-        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, now);
+        var result = HoursOverviewCalculator.Calculate(entries, pauseActivityId: null, now, BerlinTz);
 
         Assert.Equal(28800 + 14400, result.WeekSeconds);  // 23.08. zählt NICHT
         Assert.Equal(28800 + 14400 + 14400, result.MonthSeconds);
