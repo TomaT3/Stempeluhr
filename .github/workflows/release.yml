@@ -147,6 +147,20 @@ jobs:
           NOTES_FILE: ${{ steps.changelog.outputs.file }}
         run: gh release create "$TAG" --target "$GITHUB_SHA" --title "$TITLE" --notes-file "$NOTES_FILE"
 
+      - name: Attach pi-nfc-agent ZIP to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # Zentrales Deploy-Artefakt fuer die Pi-Clients (tools/deploy/pi-deploy.sh):
+          # eine Quelle pro Version, kein manuelles ZIP-Bauen mehr.
+          cd tools/pi-nfc-agent
+          zip -j "pi-nfc-agent-${TAG}.zip" stempeluhr_nfc_agent.py offline_queue.py config.example.json
+          # --clobber: Idempotenz — nach einem fehlgeschlagenen Upload (Release
+          # existiert dann schon) kann der Job re-runt werden, ohne dass
+          # "gh release create" am existierenden Tag scheitert.
+          gh release upload "$TAG" "pi-nfc-agent-${TAG}.zip" --clobber
+
       - name: Summary
         shell: bash
         env:

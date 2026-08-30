@@ -1,0 +1,7 @@
+# Pi-Clients für tools/deploy/pi-deploy.sh
+# Eine Zeile pro Host: <ssh-user>@<tailscale-hostname-oder-ip>
+# Zeilen mit # werden ignoriert.
+#
+# Beispiel:
+# kiosk@stempeluhr-pi-01
+# kiosk@stempeluhr-pi-02
