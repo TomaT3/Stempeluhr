@@ -38,6 +38,7 @@ Stempeluhr.Api/wwwroot/
 **/appsettings.Development.json
 !**/appsettings.Development.example.json
 **/data/
+pis.conf
 
 # Docker / compose local overrides
 docker-compose.override.yml
