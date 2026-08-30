@@ -67,6 +67,7 @@ describe('ClockPage offline behaviour', () => {
               failPolls ? throwError(() => ({ status: 0 })) : of(latestNfcValue),
             ),
             hoursOverview: vi.fn(() => of(null)),
+            health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps } },
