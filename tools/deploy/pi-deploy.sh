@@ -2,7 +2,9 @@
 # Zentrales Deploy für Stempeluhr-Pi-Clients (Agent-Dateien + Kiosk-Cache-Reset).
 #
 # Voraussetzungen auf dem Admin-Rechner:
-#   - gh CLI, authentifiziert (Token mit Repo-Zugriff)
+#   - gh CLI, authentifiziert (Token mit Repo-Zugriff) ODER curl
+#     (Fallback: lädt das Release-Asset direkt - funktioniert, weil das Repo
+#     public ist; in Git Bash unter Windows ist curl immer vorhanden)
 #   - SSH-Zugang zu allen Pis (Tailscale), User mit passwordless sudo
 #   - tools/deploy/pis.conf (Kopie von pis.conf.example) mit einem Host pro Zeile
 #
@@ -120,7 +122,15 @@ deploy_agent() {
   TMP_ZIP_DIR="$(mktemp -d)"
 
   echo "==> Lade pi-nfc-agent-${version}.zip von GitHub (Release-Asset)..."
-  gh release download "$version" --pattern "pi-nfc-agent-*.zip" --dir "$TMP_ZIP_DIR" >/dev/null
+  if command -v gh &>/dev/null; then
+    gh release download "$version" --pattern "pi-nfc-agent-*.zip" --dir "$TMP_ZIP_DIR" >/dev/null
+  else
+    # Fallback ohne gh (z. B. Git Bash unter Windows): das Repo ist public,
+    # das Asset liegt unter der festen Release-Download-URL. gh bleibt
+    # bevorzugt, weil es die Asset-Liste auflöst statt den Namen zu raten.
+    curl -fsSL -o "$TMP_ZIP_DIR/pi-nfc-agent-$version.zip" \
+      "https://github.com/TomaT3/Stempeluhr/releases/download/$version/pi-nfc-agent-$version.zip"
+  fi
   zipfile="$(ls "$TMP_ZIP_DIR"/pi-nfc-agent-*.zip 2>/dev/null | head -1 || true)"
   [ -n "$zipfile" ] || { echo "FEHLER: kein pi-nfc-agent-*.zip in Release $version gefunden." >&2; exit 1; }
 
@@ -148,8 +158,9 @@ reset_kiosk() {
       echo "  ✗ scp fehlgeschlagen" >&2
       continue
     fi
-    # reboot via SSH beendet die Verbindung -> exit != 0 ist erwartet.
-    if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "sudo bash /tmp/kiosk-cache-reset.sh"; then
+    # CRLF-Schutz: auf Windows ausgecheckte .sh-Dateien können CR-Zeilenenden
+    # haben, die Linux-bash als Teil der Befehle sieht (z.B. 'pipefail\r').
+    if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "sed -i 's/\r$//' /tmp/kiosk-cache-reset.sh && sudo bash /tmp/kiosk-cache-reset.sh"; then
       echo "  ✓ Cache-Reset ausgeführt"
     else
       echo "  → Cache-Reset gestartet (Pi bootet neu; SSH-Abbruch ist normal)"
