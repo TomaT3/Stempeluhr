@@ -219,6 +219,9 @@ public sealed class ClockServiceNotificationTests
         Assert.Equal(ClockActionResult.Success, response.Result);
         var message = Assert.Single(logger.Messages);
         Assert.Contains("could not be prepared", message);
+        // Die Exception selbst muss erhalten bleiben (LogWarning mit ex) -
+        // sonst wäre die Verlust-Stelle ohne Stack-Trace-Spur.
+        Assert.IsType<HttpRequestException>(Assert.Single(logger.Exceptions));
     }
 
     private sealed class RecordingNotifier : ITelegramNotifier
@@ -236,6 +239,7 @@ public sealed class ClockServiceNotificationTests
     private sealed class RecordingLogger : ILogger<ClockService>
     {
         public List<string> Messages { get; } = [];
+        public List<Exception> Exceptions { get; } = [];
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -246,8 +250,14 @@ public sealed class ClockServiceNotificationTests
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter) =>
+            Func<TState, Exception?, string> formatter)
+        {
             Messages.Add(formatter(state, exception));
+            if (exception is not null)
+            {
+                Exceptions.Add(exception);
+            }
+        }
     }
 
     private sealed class ScriptedKimaiClient : IKimaiClient
