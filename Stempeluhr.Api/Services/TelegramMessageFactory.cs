@@ -16,8 +16,8 @@ public static class TelegramMessageFactory
         {
             "start" => ("🟢", "eingestempelt"),
             "stop" => ("🔴", "ausgestempelt"),
-            "pauseStart" => ("🟡", "Pause"),
-            "pauseEnd" => ("🟢", "Pause beendet"),
+            "pausestart" => ("🟡", "Pause"),
+            "pauseend" => ("🟢", "Pause beendet"),
             _ => throw new ArgumentException($"Unbekannte Stempelaktion: {action}", nameof(action))
         };
 
