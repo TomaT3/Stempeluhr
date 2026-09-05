@@ -28,6 +28,16 @@ builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(6
 builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 60));
 builder.Services.AddScoped<IClockService, ClockService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
+builder.Services.AddHttpClient<ITelegramNotifier, TelegramNotifier>(client =>
+{
+    client.BaseAddress = new Uri("https://api.telegram.org");
+    // Best effort: kurzer Timeout, damit ein Telegram-Ausfall nie den
+    // Stempelvorgang blockiert (Notifier wirft ohnehin nie).
+    client.Timeout = TimeSpan.FromSeconds(5);
+}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+});
 builder.Services.AddHttpClient<IKimaiClient, KimaiClient>(client =>
 {
     // Every Kimai call runs under the global sync lock: one hung connection
