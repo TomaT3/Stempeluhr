@@ -28,6 +28,21 @@ builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(6
 builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 60));
 builder.Services.AddScoped<IClockService, ClockService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
+// Telegram-Notifier: Singleton + named HttpClient. Die Notify-Task läuft
+// bewusst nach dem Request-Ende (fire-and-forget) - ein scope-gebundener
+// Typed Client würde am Scope-Ende disposed und die Nachricht ginge in
+// einem schmalen Race still verloren (ObjectDisposedException im catch).
+builder.Services.AddHttpClient(TelegramNotifier.ClientName, client =>
+{
+    client.BaseAddress = new Uri("https://api.telegram.org");
+    // Best effort: kurzer Timeout, damit ein Telegram-Ausfall nie den
+    // Stempelvorgang blockiert (Notifier wirft ohnehin nie).
+    client.Timeout = TimeSpan.FromSeconds(5);
+}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+});
+builder.Services.AddSingleton<ITelegramNotifier, TelegramNotifier>();
 builder.Services.AddHttpClient<IKimaiClient, KimaiClient>(client =>
 {
     // Every Kimai call runs under the global sync lock: one hung connection
