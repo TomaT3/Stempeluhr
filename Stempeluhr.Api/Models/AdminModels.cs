@@ -17,6 +17,8 @@ public sealed record AdminSettingsDto(
     int? DefaultProjectId,
     int? DefaultActivityId,
     int? PauseActivityId,
+    bool HasTelegramBotToken,
+    string? TelegramChatId,
     IReadOnlyCollection<AdminEmployeeDto> Employees)
 {
     public static AdminSettingsDto FromSettings(RuntimeSettings settings)
@@ -28,6 +30,8 @@ public sealed record AdminSettingsDto(
             settings.DefaultProjectId,
             settings.DefaultActivityId,
             settings.PauseActivityId,
+            !string.IsNullOrWhiteSpace(settings.TelegramBotToken),
+            settings.TelegramChatId,
             settings.Employees.Select(AdminEmployeeDto.FromSettings).ToArray());
     }
 }
@@ -76,6 +80,8 @@ public sealed record AdminSettingsUpdateDto(
     int? DefaultProjectId,
     int? DefaultActivityId,
     int? PauseActivityId,
+    string? TelegramBotToken,
+    string? TelegramChatId,
     IReadOnlyCollection<AdminEmployeeUpdateDto> Employees)
 {
     public RuntimeSettings ToSettings(RuntimeSettings current)
@@ -89,6 +95,11 @@ public sealed record AdminSettingsUpdateDto(
             DefaultProjectId = DefaultProjectId,
             DefaultActivityId = DefaultActivityId,
             PauseActivityId = PauseActivityId,
+            // Keep-current-when-null/whitespace: alte Admin-Clients kennen die
+            // Telegram-Felder nicht und senden null - ein Save darf die Config
+            // nicht löschen (Löschen geht manuell in settings.json).
+            TelegramBotToken = string.IsNullOrWhiteSpace(TelegramBotToken) ? current.TelegramBotToken : TelegramBotToken.Trim(),
+            TelegramChatId = string.IsNullOrWhiteSpace(TelegramChatId) ? current.TelegramChatId : TelegramChatId.Trim(),
             Employees = employees
         };
     }
