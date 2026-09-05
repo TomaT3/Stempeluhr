@@ -285,15 +285,22 @@ public sealed class ClockService(
     /// </summary>
     private void NotifyTransition(RuntimeSettings settings, EmployeeSettings employee, string action)
     {
-        if (notifier is null)
+        if (notifier is null || !settings.TelegramEnabled)
         {
             return;
         }
 
-        _ = SendNotificationAsync(settings, employee, action);
+        // Synchron direkt am Übergang erfasst (vor jedem await): Das ist die
+        // Stempelzeit - nicht erst nach TZ-Lookup/Telegram-POST.
+        var stampUtc = DateTimeOffset.UtcNow;
+        _ = SendNotificationAsync(settings, employee, action, stampUtc);
     }
 
-    private async Task SendNotificationAsync(RuntimeSettings settings, EmployeeSettings employee, string action)
+    private async Task SendNotificationAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        string action,
+        DateTimeOffset stampUtc)
     {
         try
         {
@@ -303,7 +310,7 @@ public sealed class ClockService(
             // fällt auf die Server-TZ zurück.
             var timeZone = ResolveTimezone(
                 await kimai.GetCurrentUserTimezoneAsync(settings, employee, CancellationToken.None));
-            await notifier!.SendStampNotificationAsync(employee.DisplayName, action, DateTimeOffset.UtcNow, timeZone);
+            await notifier!.SendStampNotificationAsync(employee.DisplayName, action, stampUtc, timeZone);
         }
         catch
         {

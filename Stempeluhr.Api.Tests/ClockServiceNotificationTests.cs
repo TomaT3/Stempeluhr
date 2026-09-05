@@ -17,12 +17,14 @@ public sealed class ClockServiceNotificationTests
     private static readonly ClockStatusDto Paused = new(true, 5, "2026-09-05T06:00:00Z", 600, "paused", "In Pause");
     private static readonly ClockStatusDto ClockedOut = new(false, null, null, 0, "clockedOut", "Nicht eingestempelt");
 
-    private static RuntimeSettings Settings() => new()
+    private static RuntimeSettings Settings(bool telegramEnabled = true) => new()
     {
         BaseUrl = "http://kimai.test",
         DefaultProjectId = 1,
         DefaultActivityId = 2,
         PauseActivityId = 99,
+        TelegramBotToken = telegramEnabled ? "123456:test" : null,
+        TelegramChatId = telegramEnabled ? "-1001" : null,
         Employees =
         {
             new EmployeeSettings { Id = "max", Pin = "1234", ApiToken = "t", DisplayName = "Max Mustermann" }
@@ -31,9 +33,9 @@ public sealed class ClockServiceNotificationTests
 
     private static KioskClockRequest Request(string action) => new("max", "1234", action, null);
 
-    private static (ClockService Service, ScriptedKimaiClient Kimai, RecordingNotifier Notifier) Create()
+    private static (ClockService Service, ScriptedKimaiClient Kimai, RecordingNotifier Notifier) Create(RuntimeSettings? settings = null)
     {
-        var settings = Settings();
+        settings ??= Settings();
         var kimai = new ScriptedKimaiClient();
         var notifier = new RecordingNotifier();
         var service = new ClockService(new StubSettingsStore(settings), new EmployeeService(), kimai, notifier);
@@ -178,6 +180,20 @@ public sealed class ClockServiceNotificationTests
         Assert.Equal("start", call.Action);
     }
 
+    [Fact]
+    public async Task ClockAsync_TelegramDisabled_DoesNotNotifyAndSkipsTimezoneLookup()
+    {
+        var (service, kimai, notifier) = Create(Settings(telegramEnabled: false));
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(Working);
+
+        var response = await service.ClockAsync(Request("start"));
+
+        Assert.Equal(ClockActionResult.Success, response.Result);
+        Assert.Empty(notifier.Calls);
+        Assert.Equal(0, kimai.TimezoneLookupCount);
+    }
+
     private sealed class RecordingNotifier : ITelegramNotifier
     {
         public List<(string DisplayName, string Action)> Calls { get; } = [];
@@ -195,6 +211,7 @@ public sealed class ClockServiceNotificationTests
         private readonly Queue<ClockStatusDto> _statuses = new();
 
         public bool TimezoneReturnsNull { get; set; }
+        public int TimezoneLookupCount { get; private set; }
         public int StartCalls { get; private set; }
         public int StopCalls { get; private set; }
         public int StartPauseCalls { get; private set; }
@@ -204,8 +221,11 @@ public sealed class ClockServiceNotificationTests
         public Task<ClockStatusDto> GetStatusAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) =>
             Task.FromResult(_statuses.Count > 0 ? _statuses.Dequeue() : ClockedOut);
 
-        public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) =>
-            Task.FromResult<string?>(TimezoneReturnsNull ? null : "Europe/Berlin");
+        public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)
+        {
+            TimezoneLookupCount++;
+            return Task.FromResult<string?>(TimezoneReturnsNull ? null : "Europe/Berlin");
+        }
 
         public Task StartAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)
         {

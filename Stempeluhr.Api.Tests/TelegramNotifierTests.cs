@@ -32,8 +32,20 @@ public sealed class TelegramNotifierTests
     private static TelegramNotifier CreateNotifier(
         RuntimeSettings settings, RecordingHandler handler, string? baseUrl = "https://api.telegram.org")
     {
-        var httpClient = new HttpClient(handler) { BaseAddress = new Uri(baseUrl) };
-        return new TelegramNotifier(new StubSettingsStore(settings), httpClient);
+        var factory = new StubHttpClientFactory(handler, baseUrl!);
+        return new TelegramNotifier(new StubSettingsStore(settings), factory);
+    }
+
+    /// <summary>
+    /// Erzeugt Clients über den übergebenen Handler. Die Factory ist bewusst
+    /// kein echter IHttpClientFactory-Pool: Der Notifier disposed seinen
+    /// Client pro Sendung (using) - der Handler wird mit disposed, die
+    /// Aufzeichnung bleibt aber lesbar.
+    /// </summary>
+    private sealed class StubHttpClientFactory(HttpMessageHandler handler, string baseUrl) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) =>
+            new(handler) { BaseAddress = new Uri(baseUrl) };
     }
 
     private sealed class StubSettingsStore(RuntimeSettings settings) : IRuntimeSettingsStore
