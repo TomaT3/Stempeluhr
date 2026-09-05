@@ -6,7 +6,8 @@ public sealed class ClockService(
     IRuntimeSettingsStore settingsStore,
     IEmployeeService employees,
     IKimaiClient kimai,
-    ITelegramNotifier? notifier = null) : IClockService
+    ITelegramNotifier? notifier = null,
+    ILogger<ClockService>? logger = null) : IClockService
 {
     public async Task<KioskEmployeeSessionDto?> LoginWithPinAsync(string? pin, CancellationToken cancellationToken = default)
     {
@@ -312,11 +313,15 @@ public sealed class ClockService(
                 await kimai.GetCurrentUserTimezoneAsync(settings, employee, CancellationToken.None));
             await notifier!.SendStampNotificationAsync(employee.DisplayName, action, stampUtc, timeZone);
         }
-        catch
+        catch (Exception ex)
         {
             // Best effort: nie aus einem fire-and-forget Task werfen
             // (unobserved task exception). Der Notifier schluckt und loggt
-            // seine eigenen Fehler bereits selbst.
+            // seine eigenen Fehler bereits selbst; hier explizit loggen,
+            // weil der TZ-Lookup die letzte Stelle ist, an der eine
+            // Nachricht sonst spurlos verloren ginge (Netzwerkfehler werden
+            // von KimaiClient nicht in null übersetzt).
+            logger?.LogWarning(ex, "Telegram notification could not be prepared (timezone lookup)");
         }
     }
 

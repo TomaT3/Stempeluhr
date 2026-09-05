@@ -239,8 +239,10 @@ nie — die Benachrichtigung ist Best effort (kein Retry, kein Doppelversand).
 ### Einrichten
 
 1. **Bot anlegen:** Bei @BotFather im Telegram `/newbot` ausführen und den
-   Bot-Token kopieren (Secret — nie im Client oder im Admin-UI anzeigen
-   lassen, dort gibt es nur „hinterlegt: ja/nein").
+   Bot-Token kopieren (Secret — wird weder im Client noch über die Admin-API
+   ausgeliefert, dort gibt es nur „hinterlegt: ja/nein". Eine Anzeige/
+   Bearbeitung im Admin-UI ist als Ausblick geplant — aktuell wird die
+   Telegram-Konfiguration ausschließlich in der `settings.json` gesetzt).
 2. **Gruppe:** Eine private Telegram-Gruppe anlegen, den Bot hinzufügen und
    als Administrator einstellen. Weitere Empfänger lassen sich später einfach
    in die Gruppe aufnehmen.
