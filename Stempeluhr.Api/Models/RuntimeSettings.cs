@@ -9,6 +9,15 @@ public sealed class RuntimeSettings
     public int? DefaultActivityId { get; init; }
     public int? PauseActivityId { get; init; }
 
+    /// <summary>Telegram-Bot-Token (Secret, nie im Client/Admin-DTO ausliefern).</summary>
+    public string? TelegramBotToken { get; init; }
+
+    /// <summary>Telegram-Chat-ID (Gruppe) für Stempel-Benachrichtigungen.</summary>
+    public string? TelegramChatId { get; init; }
+
+    public bool TelegramEnabled =>
+        !string.IsNullOrWhiteSpace(TelegramBotToken) && !string.IsNullOrWhiteSpace(TelegramChatId);
+
     /// <summary>
     /// Maximaler Abstand zwischen dem Ende des letzten gestoppten
     /// Pause-Timesheets und dem Zeitstempel eines replayten pauseEnd-Events,
