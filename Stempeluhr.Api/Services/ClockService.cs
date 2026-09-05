@@ -5,7 +5,8 @@ namespace Stempeluhr.Api.Services;
 public sealed class ClockService(
     IRuntimeSettingsStore settingsStore,
     IEmployeeService employees,
-    IKimaiClient kimai) : IClockService
+    IKimaiClient kimai,
+    ITelegramNotifier? notifier = null) : IClockService
 {
     public async Task<KioskEmployeeSessionDto?> LoginWithPinAsync(string? pin, CancellationToken cancellationToken = default)
     {
@@ -195,6 +196,7 @@ public sealed class ClockService(
         }
 
         await kimai.StartAsync(settings, employee, cancellationToken);
+        NotifyTransition(settings, employee, "start");
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
     }
@@ -211,6 +213,7 @@ public sealed class ClockService(
         }
 
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
+        NotifyTransition(settings, employee, "stop");
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Ausgestempelt" };
     }
@@ -238,6 +241,7 @@ public sealed class ClockService(
 
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
         await kimai.StartPauseAsync(settings, employee, cancellationToken);
+        NotifyTransition(settings, employee, "pauseStart");
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "In Pause" };
     }
@@ -266,8 +270,47 @@ public sealed class ClockService(
 
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
         await kimai.StartAsync(settings, employee, cancellationToken);
+        NotifyTransition(settings, employee, "pauseEnd");
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
+    }
+
+    /// <summary>
+    /// Feuert die Telegram-Benachrichtigung für einen ECHTEN Stempel-Übergang.
+    /// Wird nur nach erfolgreicher Kimai-Mutation aufgerufen (nie in den
+    /// No-Op-Früh-Rückgaben) - Doppel-Taps bleiben stumm.
+    /// Fire-and-forget: die Benachrichtigung darf den Stempel weder verzögern
+    /// noch scheitern lassen. Bewusst KEIN Request-CancellationToken - der
+    /// Request ist nach der Response oft schon beendet.
+    /// </summary>
+    private void NotifyTransition(RuntimeSettings settings, EmployeeSettings employee, string action)
+    {
+        if (notifier is null)
+        {
+            return;
+        }
+
+        _ = SendNotificationAsync(settings, employee, action);
+    }
+
+    private async Task SendNotificationAsync(RuntimeSettings settings, EmployeeSettings employee, string action)
+    {
+        try
+        {
+            // Stempelzeit in der Kimai-User-TZ des Mitarbeiters formatieren
+            // (Container läuft UTC - ohne Konvertierung 2h daneben). Lookup
+            // liefert laut IKimaiClient bei Fehlern null -> ResolveTimezone
+            // fällt auf die Server-TZ zurück.
+            var timeZone = ResolveTimezone(
+                await kimai.GetCurrentUserTimezoneAsync(settings, employee, CancellationToken.None));
+            await notifier!.SendStampNotificationAsync(employee.DisplayName, action, DateTimeOffset.UtcNow, timeZone);
+        }
+        catch
+        {
+            // Best effort: nie aus einem fire-and-forget Task werfen
+            // (unobserved task exception). Der Notifier schluckt und loggt
+            // seine eigenen Fehler bereits selbst.
+        }
     }
 
     private static NfcClockEventDto CreateNfcEvent(
