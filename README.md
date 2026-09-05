@@ -212,6 +212,59 @@ LAN-Nutzung). Gegen gezieltes PIN-Raten an einem einzelnen Konto ist ein
 Fehlversuch-Backoff vorgesehen (Issue #8); die sauberste Loesung bleibt die
 Terminal-Token-Auth (Issue #7).
 
+## Telegram-Benachrichtigung bei Stempelungen
+
+Optional kann die API bei jedem **echten** Stempel-Übergang eine
+Telegram-Nachricht an einen Chat (z. B. eine private Gruppe des Kunden)
+senden. Gemeldet werden Kommen, Gehen, Pause-Start und Pause-Ende.
+Bewusst **nicht** gemeldet werden:
+
+- No-op-Stempel („schon eingestempelt", „nicht eingestempelt" usw.) —
+  Doppel-Taps bleiben stumm.
+- Nachgeholte Offline-Stempel (Sync-Replay) — nur Live-Stempelungen lösen
+  eine Nachricht aus.
+
+Nachrichtenformat (erzeugt von `TelegramMessageFactory`):
+
+```text
+🟢 Anna Mustermann · eingestempelt um 08:12
+🔴 Anna Mustermann · ausgestempelt um 17:03
+🟡 Anna Mustermann · Pause um 12:31
+```
+
+Die Uhrzeit wird in der Kimai-User-Zeitzone des Mitarbeiters formatiert.
+Fehler beim Senden (Telegram nicht erreichbar) beeinflussen den Stempelvorgang
+nie — die Benachrichtigung ist Best effort (kein Retry, kein Doppelversand).
+
+### Einrichten
+
+1. **Bot anlegen:** Bei @BotFather im Telegram `/newbot` ausführen und den
+   Bot-Token kopieren (Secret — nie im Client oder im Admin-UI anzeigen
+   lassen, dort gibt es nur „hinterlegt: ja/nein").
+2. **Gruppe:** Eine private Telegram-Gruppe anlegen, den Bot hinzufügen und
+   als Administrator einstellen. Weitere Empfänger lassen sich später einfach
+   in die Gruppe aufnehmen.
+3. **Chat-ID ermitteln:** Eine beliebige Nachricht in die Gruppe schreiben,
+   dann im Browser `https://api.telegram.org/bot<TOKEN>/getUpdates` öffnen —
+   `result[0].message.chat.id` ist die Gruppen-ID (negative Zahl).
+4. **Eintragen:** In `data/settings.json` (dort, wo auch die Kimai-Tokens
+   liegen) ergänzen:
+
+   ```json
+   {
+     "telegramBotToken": "<TOKEN>",
+     "telegramChatId": "-1001234567890"
+   }
+   ```
+
+   Die Einstellungen werden pro Request aus der Datei geladen — die Änderung
+   wirkt sofort, kein Neustart nötig. Fehlen beide Felder (oder ist eines
+   leer), ist die Benachrichtigung deaktiviert. Über Umgebungsvariablen ist
+   die Telegram-Konfiguration bewusst nicht einstellbar.
+
+5. **Testen:** Ein Mitarbeiter stempelt — die Nachricht muss in der Gruppe
+   erscheinen. Alle vier Aktionen einmal durchspielen.
+
 ## Semantische Versionierung
 
 Versionen folgen SemVer: `MAJOR.MINOR.PATCH`. Die Release-Version ist der Git-Tag, zum Beispiel `v0.1.3`.
