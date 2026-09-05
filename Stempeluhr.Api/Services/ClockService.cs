@@ -306,9 +306,11 @@ public sealed class ClockService(
         try
         {
             // Stempelzeit in der Kimai-User-TZ des Mitarbeiters formatieren
-            // (Container läuft UTC - ohne Konvertierung 2h daneben). Lookup
-            // liefert laut IKimaiClient bei Fehlern null -> ResolveTimezone
-            // fällt auf die Server-TZ zurück.
+            // (Container läuft UTC - ohne Konvertierung 2h daneben).
+            // Kontrakt: Kimai-API-Fehler liefert GetCurrentUserTimezoneAsync
+            // laut IKimaiClient als null -> ResolveTimezone fällt auf die
+            // Server-TZ zurück. Transportfehler (Timeout/Netzwerk) werfen
+            // stattdessen und landen im catch darunter.
             var timeZone = ResolveTimezone(
                 await kimai.GetCurrentUserTimezoneAsync(settings, employee, CancellationToken.None));
             await notifier!.SendStampNotificationAsync(employee.DisplayName, action, stampUtc, timeZone);

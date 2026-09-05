@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Stempeluhr.Api.Models;
 using Stempeluhr.Api.Services;
 using Xunit;
@@ -194,6 +195,32 @@ public sealed class ClockServiceNotificationTests
         Assert.Equal(0, kimai.TimezoneLookupCount);
     }
 
+    [Fact]
+    public async Task ClockAsync_TimezoneLookupThrows_StampStillSucceedsAndLossIsLogged()
+    {
+        // Transportfehler (Timeout/Netzwerk) werden von KimaiClient nicht in
+        // null übersetzt - sie propagieren in den Catch und die Nachricht
+        // entfällt. Der Stempel selbst muss erfolgreich bleiben und der
+        // Verlust darf nicht spurlos sein (LogWarning).
+        var settings = Settings();
+        var kimai = new ScriptedKimaiClient { TimezoneThrows = true };
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(Working);
+        var logger = new RecordingLogger();
+        var service = new ClockService(
+            new StubSettingsStore(settings),
+            new EmployeeService(),
+            kimai,
+            new RecordingNotifier(),
+            logger);
+
+        var response = await service.ClockAsync(Request("start"));
+
+        Assert.Equal(ClockActionResult.Success, response.Result);
+        var message = Assert.Single(logger.Messages);
+        Assert.Contains("could not be prepared", message);
+    }
+
     private sealed class RecordingNotifier : ITelegramNotifier
     {
         public List<(string DisplayName, string Action)> Calls { get; } = [];
@@ -206,11 +233,29 @@ public sealed class ClockServiceNotificationTests
         }
     }
 
+    private sealed class RecordingLogger : ILogger<ClockService>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
+    }
+
     private sealed class ScriptedKimaiClient : IKimaiClient
     {
         private readonly Queue<ClockStatusDto> _statuses = new();
 
         public bool TimezoneReturnsNull { get; set; }
+        public bool TimezoneThrows { get; set; }
         public int TimezoneLookupCount { get; private set; }
         public int StartCalls { get; private set; }
         public int StopCalls { get; private set; }
@@ -224,6 +269,12 @@ public sealed class ClockServiceNotificationTests
         public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)
         {
             TimezoneLookupCount++;
+            if (TimezoneThrows)
+            {
+                // Transportfehler-Verhalten von KimaiClient: wirft statt null.
+                return Task.FromException<string?>(new HttpRequestException("connection timeout"));
+            }
+
             return Task.FromResult<string?>(TimezoneReturnsNull ? null : "Europe/Berlin");
         }
 
