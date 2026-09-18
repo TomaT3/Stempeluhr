@@ -115,17 +115,18 @@
         </button>
       }
     } @else {
-      <!-- Offline per Karte angemeldet: der echte Status ist nicht bekannt -
-           "Nicht eingestempelt" zu zeigen waere irrefuehrend. -->
+      <!-- Ohne Status (offline per Karte angemeldet oder die Serverantwort
+           steht noch aus): "Nicht eingestempelt" zu zeigen waere irrefuehrend.
+           Das Offline-Wort nur, wenn der Kiosk wirklich offline ist. -->
       <app-status-badge
-        text="Status unbekannt (offline)"
+        [text]="isOffline() ? 'Status unbekannt (offline)' : 'Status unbekannt'"
         [running]="false"
         [paused]="false" />
 
       <dl class="time-info single" aria-label="Zeitinformationen">
         <div>
           <dt>Status</dt>
-          <dd>Offline – kein Status bekannt</dd>
+          <dd>{{ isOffline() ? 'Offline – kein Status bekannt' : 'Kein Status bekannt' }}</dd>
         </div>
       </dl>
 

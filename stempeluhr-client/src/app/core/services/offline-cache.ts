@@ -199,20 +199,23 @@ export async function rememberEmployeePin(pin: string, employee: Employee): Prom
     return;
   }
 
-  // Never store a PIN that already identifies somebody else: offline the kiosk
-  // would then unlock the wrong name (see resolveEmployeeByPin).
-  const known = await resolveEmployeeByPin(pin);
-  if (known && known.id !== employee.id) {
-    return;
-  }
-
   const salt = createSalt();
   const verifier = await computeVerifier(pin, salt);
   if (verifier === null) {
     return;
   }
 
-  // One entry per employee (a new PIN replaces the old one), newest last.
+  // A successful ONLINE login is authoritative: the server resolves a PIN to
+  // exactly one employee (an ambiguous PIN is rejected with 401), so every
+  // cached entry carrying THIS PIN belongs to a former owner - the PIN was
+  // handed to somebody else, or an older build left duplicates behind.
+  // Refusing to store would leave the stale entry in place and the kiosk
+  // would keep unlocking the wrong name; dropping it makes the last
+  // server-confirmed owner win and heals those states.
+  await forgetEmployeePin(pin);
+
+  // The employee may also have an entry for a PREVIOUS pin - that one can
+  // only be stale too (the server just accepted this one), so it goes as well.
   const entries = readPinCache().filter(entry => entry.employee.id !== employee.id);
   entries.push({ salt, verifier, employee });
   writeJson(PIN_CACHE_KEY, entries.slice(-MAX_PIN_ENTRIES));
@@ -269,13 +272,13 @@ function rememberStatus(employeeId: string, status: ClockStatus, origin: Offline
   }
 
   const cache = readStatusCache();
-  // Re-insert instead of overwriting: only a DELETE moves an existing key to
-  // the end of the iteration order, and the trimming below drops from the
-  // front - otherwise the entry that was just refreshed would be evicted
-  // first while entries nobody looked at for months survive.
-  delete cache[employeeId];
   cache[employeeId] = { status, observedAt: new Date().toISOString(), origin };
-  const trimmed = Object.entries(cache).slice(-MAX_STATUS_ENTRIES);
+  // Trim by AGE, not by key order: JS objects iterate integer-like keys first,
+  // so neither the insertion order nor a delete/re-set trick decides which
+  // entry is oldest once employee ids look like numbers.
+  const trimmed = Object.entries(cache)
+    .sort(([, left], [, right]) => left.observedAt.localeCompare(right.observedAt))
+    .slice(-MAX_STATUS_ENTRIES);
   writeJson(STATUS_CACHE_KEY, Object.fromEntries(trimmed));
 }
 

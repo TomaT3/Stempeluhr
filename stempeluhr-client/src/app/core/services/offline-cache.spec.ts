@@ -129,20 +129,41 @@ describe('offline-cache', () => {
       await expect(resolveEmployeeByPin('1234')).resolves.toBeNull();
     });
 
-    it('does not store a PIN that already identifies somebody else', async () => {
-      await rememberEmployeePin('1234', employee);
+    it('lets the last server-confirmed owner win when a PIN changes hands', async () => {
+      // 1234 was Anna's PIN, then the admin gave it to Max - and Max logged in
+      // ONLINE with it. The stale entry has to go: otherwise the kiosk unlocks
+      // Anna offline and her queued stamps are rejected during replay.
       await rememberEmployeePin('1234', otherEmployee);
+      await rememberEmployeePin('1234', employee);
 
       expect(JSON.parse(window.localStorage.getItem(PIN_CACHE_KEY) ?? '[]')).toHaveLength(1);
       await expect(resolveEmployeeByPin('1234')).resolves.toEqual(employee);
     });
 
-    it('treats a PIN that two employees share as ambiguous, like the server', async () => {
-      // Legacy/hand-edited cache: two verifiers for the same PIN (the guard in
-      // rememberEmployeePin keeps the kiosk from creating that state itself).
+    it('heals a cache that holds two entries for one PIN', async () => {
       window.localStorage.setItem(PIN_CACHE_KEY, JSON.stringify([
         await pinEntryFor('1234', 'aabbccddeeff00112233445566778899', employee),
         await pinEntryFor('1234', '99887766554433221100ffeeddccbbaa', otherEmployee),
+      ]));
+
+      // The legitimate owner logs in online - his entry has to win instead of
+      // locking the kiosk out of offline logins forever.
+      await rememberEmployeePin('1234', employee);
+
+      await expect(resolveEmployeeByPin('1234')).resolves.toEqual(employee);
+      expect(JSON.parse(window.localStorage.getItem(PIN_CACHE_KEY) ?? '[]')).toHaveLength(1);
+    });
+
+    it('treats a PIN that two employees share as ambiguous, like the server', async () => {
+      const anna = await pinEntryFor('1234', '99887766554433221100ffeeddccbbaa', otherEmployee);
+      window.localStorage.setItem(PIN_CACHE_KEY, JSON.stringify([anna]));
+      // Control: on its own this entry resolves, so the null below really
+      // comes from the ambiguity - and not from a cache that matches nothing.
+      await expect(resolveEmployeeByPin('1234')).resolves.toEqual(otherEmployee);
+
+      window.localStorage.setItem(PIN_CACHE_KEY, JSON.stringify([
+        await pinEntryFor('1234', 'aabbccddeeff00112233445566778899', employee),
+        anna,
       ]));
 
       // EmployeeService.FindEmployeeByPin resolves such a PIN to nobody; the
@@ -196,17 +217,48 @@ describe('offline-cache', () => {
     });
 
     it('keeps the entry that was refreshed most recently when trimming', () => {
-      for (let index = 0; index < 100; index += 1) {
-        rememberObservedStatus(`emp-${index}`, idleStatus);
-      }
-      // Refresh the oldest entry, then push one past the capacity: FIFO on the
-      // FIRST insertion would now evict exactly the entry just refreshed.
-      rememberObservedStatus('emp-0', idleStatus);
-      rememberObservedStatus('emp-100', idleStatus);
+      // Fake timers: "most recent" is the AGE of the entry, which is what the
+      // trimming rule promises - without them every entry shares one
+      // millisecond and the check would depend on key order again.
+      vi.useFakeTimers();
+      try {
+        for (let index = 0; index < 100; index += 1) {
+          vi.setSystemTime(new Date(2026, 8, 18, 8, 0, index));
+          rememberObservedStatus(`emp-${index}`, idleStatus);
+        }
+        vi.setSystemTime(new Date(2026, 8, 18, 9, 0, 0));
+        rememberObservedStatus('emp-0', idleStatus);
+        vi.setSystemTime(new Date(2026, 8, 18, 9, 0, 1));
+        rememberObservedStatus('emp-100', idleStatus);
 
-      expect(lastKnownStatus('emp-0')).not.toBeNull();
-      expect(lastKnownStatus('emp-1')).toBeNull();
-      expect(lastKnownStatus('emp-100')).not.toBeNull();
+        expect(lastKnownStatus('emp-0')).not.toBeNull();
+        expect(lastKnownStatus('emp-1')).toBeNull();
+        expect(lastKnownStatus('emp-100')).not.toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('trims by age even when the employee ids look like numbers', () => {
+      // Integer-like keys are iterated first, in numeric order - an insertion
+      // order rule would evict the wrong entry here.
+      vi.useFakeTimers();
+      try {
+        for (let index = 100; index < 200; index += 1) {
+          vi.setSystemTime(new Date(2026, 8, 18, 8, 0, index - 100));
+          rememberObservedStatus(`${index}`, idleStatus);
+        }
+        vi.setSystemTime(new Date(2026, 8, 18, 9, 0, 0));
+        rememberObservedStatus('100', idleStatus);
+        vi.setSystemTime(new Date(2026, 8, 18, 9, 0, 1));
+        rememberObservedStatus('200', idleStatus);
+
+        expect(lastKnownStatus('100')).not.toBeNull();
+        expect(lastKnownStatus('101')).toBeNull();
+        expect(lastKnownStatus('200')).not.toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

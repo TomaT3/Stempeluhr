@@ -243,7 +243,7 @@ wie eine Buchung aussieht:
   behaupten; welcher Stempel richtig war, entscheidet der Nachtrag. Solange die
   API antwortet, steht dort nur `Status unbekannt` (die Serverantwort ist noch
   unterwegs), und ein zwischengespeicherter Stand wird **nicht** angezeigt —
-  das Offline-Label gibt es nur, wenn wirklich offline gestempelt wird.
+  das Offline-Label gibt es nur, wenn der Kiosk wirklich offline ist.
 
 Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff
 ohnehin durchprobierbar — der Verifier verhindert nur, dass PINs im Klartext

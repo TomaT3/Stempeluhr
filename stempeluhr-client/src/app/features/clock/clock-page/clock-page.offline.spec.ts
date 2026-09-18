@@ -624,6 +624,26 @@ describe('ClockPage offline behaviour', () => {
     expect(fixture.nativeElement.querySelector('.stamp-button.stop')).not.toBeNull();
   });
 
+  it('does not claim "offline" while the backend is answering', () => {
+    // ONLINE cache hit: the employee is unlocked before the server's status
+    // answer arrives - "unbekannt" is fine then, "offline" is not.
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+    const fixture = createComponent();
+
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.isOffline()).toBe(false);
+    expect(fixture.componentInstance.clockState.status()).toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('Status unbekannt');
+    expect(fixture.nativeElement.textContent).not.toContain('(offline)');
+    expect(fixture.nativeElement.textContent).not.toContain('Offline – kein Status bekannt');
+  });
+
   it('signs in OFFLINE with a PIN remembered from an earlier ONLINE login', async () => {
     // A successful online login is what fills the verifier cache.
     await rememberEmployeePin('1234', session.employee);
