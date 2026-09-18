@@ -6,6 +6,7 @@ import { ClockStatus, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
+import { lastKnownStatus, rememberEmployeePin, rememberObservedStatus, resolveEmployeeByPin } from '../../../core/services/offline-cache';
 import { OfflineQueueService } from '../../../core/services/offline-queue';
 import { ClockPage } from './clock-page';
 
@@ -149,7 +150,7 @@ describe('ClockPage offline behaviour', () => {
     expect(component.selectedEmployee()).toBeNull();
   });
 
-  it('reports an unreachable backend instead of a wrong PIN when the login fails offline', () => {
+  it('reports an unreachable backend instead of a wrong PIN when the login fails offline', async () => {
     const fixture = createComponent();
     const component = fixture.componentInstance;
     failPolls = true;
@@ -159,8 +160,12 @@ describe('ClockPage offline behaviour', () => {
     component.pressDigit('4');
     pinLoginResult.error({ status: 0 });
 
+    // Nothing was ever cached for this PIN: the kiosk may only admit that it
+    // cannot check the PIN. The fallback hashes the entered PIN against the
+    // cached verifiers before it answers - hence the await.
+    await vi.waitFor(() => expect(component.message()).toContain('Offline'));
     expect(component.message()).not.toContain('PIN nicht gefunden');
-    expect(component.message()).toContain('Offline');
+    expect(component.isUnlocked()).toBe(false);
     expect(playBeeps).toHaveBeenCalledWith(2);
   });
 
@@ -227,12 +232,20 @@ describe('ClockPage offline behaviour', () => {
       state: 'working',
       stateText: 'Eingestempelt',
     });
+
+    // Go offline: the banner appears, the running-state actions stay usable.
+    failPolls = true;
+    vi.advanceTimersByTime(1_000);
     fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.offline-banner')).not.toBeNull();
+
+    const pauseButton = fixture.nativeElement.querySelector('.stamp-button.pause') as HTMLButtonElement;
+    expect(pauseButton).not.toBeNull();
+    expect(pauseButton.disabled).toBe(false);
 
     // Offline transition via an ALLOWED action: stop()'s request hangs and
     // its failure arrives much later - the queued stamp must still carry
     // the ACTION's timestamp, not the late error time.
-    failPolls = true;
     const stampIso = new Date().toISOString();
     component.stop();
     await vi.advanceTimersByTimeAsync(30_000);
@@ -246,10 +259,11 @@ describe('ClockPage offline behaviour', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.offline-banner')).not.toBeNull();
 
-    // The pause button must remain visible AND usable while offline.
-    const pauseButton = fixture.nativeElement.querySelector('.stamp-button.pause') as HTMLButtonElement;
-    expect(pauseButton).not.toBeNull();
-    expect(pauseButton.disabled).toBe(false);
+    // The queued Ausstempeln is reflected locally: the kiosk stops offering
+    // Pause/Ausstempeln for a state it just queued away and offers the way
+    // back in instead.
+    expect(fixture.nativeElement.querySelector('.stamp-button.pause')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.stamp-button.start')?.textContent).toContain('Einstempeln');
 
     // Paused state: 'Pause beenden' must stay usable offline as well - an
     // employee in a break must be able to end it (Issue #11 browser queue).
@@ -608,5 +622,114 @@ describe('ClockPage offline behaviour', () => {
     // The stamp buttons must stay available despite the unknown status.
     expect(fixture.nativeElement.querySelector('.stamp-button.start')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.stamp-button.stop')).not.toBeNull();
+  });
+
+  it('signs in OFFLINE with a PIN remembered from an earlier ONLINE login', async () => {
+    // A successful online login is what fills the verifier cache.
+    await rememberEmployeePin('1234', session.employee);
+
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    failPolls = true;
+    pinLoginResult.error({ status: 0 });
+
+    await vi.waitFor(() => expect(component.isUnlocked()).toBe(true));
+    expect(component.selectedEmployee()?.id).toBe('max');
+    // The PIN stays in the session so the queued stamp can be re-validated.
+    expect(component.pin()).toBe('1234');
+    expect(component.message()).toContain('Offline');
+    expect(playBeeps).toHaveBeenCalledWith(1);
+
+    component.start();
+    clockResult.error({ status: 0 });
+    expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    expect(enqueueKiosk.mock.calls[0][0].pin).toBe('1234');
+  });
+
+  it('refuses an OFFLINE login for a PIN that was never used online', async () => {
+    await rememberEmployeePin('9999', session.employee);
+
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    pinLoginResult.error({ status: 0 });
+
+    await vi.waitFor(() => expect(component.message()).toContain('Offline'));
+    expect(component.isUnlocked()).toBe(false);
+    expect(component.selectedEmployee()).toBeNull();
+  });
+
+  it('drops a remembered PIN the SERVER rejects (rotated PIN)', async () => {
+    await rememberEmployeePin('1234', session.employee);
+
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    pinLoginResult.error({ status: 401 });
+
+    expect(component.message()).toBe('PIN nicht gefunden');
+    // Without this the rotated PIN would keep unlocking the kiosk offline
+    // while every queued stamp is rejected during replay.
+    await vi.waitFor(async () => expect(await resolveEmployeeByPin('1234')).toBeNull());
+  });
+
+  it('offers the action matching the last known status after an OFFLINE card login', () => {
+    failPolls = true;
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+    const fixture = createComponent();
+
+    // Status this kiosk saw while it was still ONLINE: the employee is at work.
+    rememberObservedStatus('max', {
+      isRunning: true,
+      activeTimesheetId: 7,
+      startedAt: '2026-09-18T06:00:00Z',
+      durationSeconds: 0,
+      state: 'working',
+      stateText: 'Eingestempelt',
+    });
+
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.clockState.isWorking()).toBe(true);
+    expect(fixture.componentInstance.clockState.status()?.stateText).toContain('offline');
+    // Already clocked in: the way OUT must be offered, never "Einstempeln" again.
+    expect(fixture.nativeElement.querySelector('.stamp-button.pause')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.stamp-button.stop')).not.toBeNull();
+  });
+
+  it('projects a queued OFFLINE action into the status the kiosk shows', () => {
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    pinLoginResult.next(session);
+    expect(component.clockState.isWorking()).toBe(false);
+
+    component.start();
+    clockResult.error({ status: 0 });
+
+    // Without the projection the kiosk would keep offering "Einstempeln" and
+    // the employee would queue the same start over and over.
+    expect(component.clockState.isWorking()).toBe(true);
+    expect(component.clockState.status()?.stateText).toContain('offline vorgemerkt');
+    // A kiosk reload during the outage must not lose that state either.
+    expect(lastKnownStatus('max')?.origin).toBe('projected');
   });
 });

@@ -44,9 +44,9 @@
 
       @if (!isUnlocked()) {
         <p class="message">Bitte erneut mit PIN anmelden.</p>
-      } @else {
+      } @else if (clockState.status(); as status) {
         <div class="status-line">
-          <strong>{{ clockState.status()?.stateText ?? '' }}</strong>
+          <strong>{{ status.stateText }}</strong>
           @if (clockState.isWorking()) {
             <span>{{ clockState.elapsed() | duration }}</span>
           } @else if (clockState.isPaused()) {
@@ -54,6 +54,14 @@
           } @else {
             <span>Nicht eingestempelt</span>
           }
+        </div>
+      } @else {
+        <!-- Ohne Server (und ohne je gesehenen Status) ist der echte Zustand
+             unbekannt: "Nicht eingestempelt" waere geraten und wuerde den
+             Ausstempeln-Knopf verschwinden lassen. -->
+        <div class="status-line">
+          <strong>Status unbekannt (offline)</strong>
+          <span>Bitte Aktion waehlen</span>
         </div>
       }
 
@@ -80,10 +88,21 @@
             <span class="icon square"></span>
             <span>Ausstempeln</span>
           </button>
-        } @else {
+        } @else if (clockState.status()) {
           <button class="action-button start single" type="button" (click)="start()" [disabled]="isBusy()">
             <span class="icon play"></span>
             <span>Einstempeln</span>
+          </button>
+        } @else {
+          <!-- Status unbekannt: beide Richtungen anbieten. Der Nachtrag prueft
+               serverseitig und verwirft einen Stempel, der nicht passt. -->
+          <button class="action-button start" type="button" (click)="start()" [disabled]="isBusy()">
+            <span class="icon play"></span>
+            <span>Einstempeln</span>
+          </button>
+          <button class="action-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+            <span class="icon square"></span>
+            <span>Ausstempeln</span>
           </button>
         }
       </section>
