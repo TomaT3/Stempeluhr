@@ -260,8 +260,11 @@ Idle-Screen an: Zeitpunkt, Name, Aktion und die Begruendung des Servers, dazu
 einen Knopf `Alle erledigt`, mit dem der Nachtrag nach der Korrektur in Kimai
 quittiert wird. Quittierte Faelle verschwinden nur aus dem Hinweis, sie bleiben
 im Speicher erhalten — der Datensatz ist die letzte Spur, solange die Zeit in
-Kimai fehlt. Die Details stehen bewusst nur am Kiosk; die Mitarbeiter-Seite
-`/clock` (auch auf persoenlichen Handys) zeigt nur die Anzahl.
+Kimai fehlt (bis die Liste mit 20 Eintraegen voll ist; quittierte zaehlen dabei
+mit). Diese Datensaetze sind nur im Geraetespeicher nachschlagbar: es gibt
+bewusst keinen Bildschirm und keine Route dafuer. Die Details stehen bewusst
+nur am Kiosk; die Mitarbeiter-Seite `/clock` (auch auf persoenlichen Handys)
+zeigt nur die Anzahl.
 
 Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff
 ohnehin durchprobierbar — der Verifier verhindert nur, dass PINs im Klartext

@@ -312,6 +312,16 @@ describe('OfflineQueueService sync batching', () => {
           action: 'start',
         },
         { nicht: 'brauchbar' },
+        {
+          eventId: 'quittiert',
+          employeeId: 'erika',
+          employeeName: 'Erika Musterfrau',
+          performedAt: '2026-09-17T06:10:00Z',
+          rejectedAt: '2026-09-17T09:00:00Z',
+          message: 'Karte ist keinem Mitarbeiter zugeordnet.',
+          action: 'stop',
+          acknowledgedAt: '2026-09-17T09:05:00Z',
+        },
       ]));
 
       // A fresh injector: the kiosk was reloaded, only localStorage survived.
@@ -321,6 +331,9 @@ describe('OfflineQueueService sync batching', () => {
 
       expect(fresh.rejected()).toHaveLength(1);
       expect(fresh.rejected()[0].employeeName).toBe('Max Mustermann');
+      // A quittierter Eintrag bleibt nach dem Reload quittiert - sonst kaeme der
+      // Hinweis bei jedem Kiosk-Neustart wieder hoch.
+      expect(fresh.rejected().some(entry => entry.eventId === 'quittiert')).toBe(false);
     });
   });
 

@@ -676,6 +676,10 @@ describe('ClockPage offline behaviour', () => {
     expect(text).not.toContain('Max Mustermann');
 
     (fixture.nativeElement.querySelector('p[role="alert"] button') as HTMLButtonElement).click();
+    // Auch hier muss die Beschriftung die Wirkung nennen (ein Druck quittiert alle).
+    expect(
+      (fixture.nativeElement.querySelector('p[role="alert"] button') as HTMLButtonElement).textContent?.trim(),
+    ).toBe('Alle erledigt');
     expect(acknowledgeRejected).toHaveBeenCalledTimes(1);
   });
 

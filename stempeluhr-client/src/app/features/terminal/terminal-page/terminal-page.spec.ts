@@ -245,6 +245,15 @@ describe('TerminalPage', () => {
     expect(notice.textContent).toContain('Max Mustermann');
     expect(notice.textContent).toContain('Einstempeln');
     expect(notice.textContent).toContain('Mitarbeiter nicht gefunden oder PIN falsch.');
+
+    // Die Klammer auf zwei Zeilen ist im jsdom nicht MESSBAR (kein Layout),
+    // aber ihre Deklaration ist pinbar: ohne sie waechst die Leiste bei langen
+    // Server-Meldungen (KimaiApiException traegt den ganzen Antwortrumpf mit)
+    // auf 93 px und ueberdeckt die Loeschtaste des Tastenfelds.
+    const style = getComputedStyle(notice.querySelector('.rejected-text') as HTMLElement);
+    expect(style.display).toBe('-webkit-box');
+    expect(style.webkitLineClamp).toBe('2');
+    expect(style.overflow).toBe('hidden');
   });
 
   it('keeps quiet while no stamp was refused', () => {
