@@ -214,6 +214,11 @@ describe('TerminalPage', () => {
     pendingQueue.set([{}, {}]);
     fixture.detectChanges();
     expect(banner.textContent).toContain('2 Stempel warten auf Übertragung');
+
+    // Einzahl klingt auch richtig - "1 Stempel warten" war ein Review-Hinweis.
+    pendingQueue.set([{}]);
+    fixture.detectChanges();
+    expect(banner.textContent).toContain('1 Stempel wartet auf Übertragung');
   });
 
   it('offers Ausstempeln right after an OFFLINE Einstempeln', () => {

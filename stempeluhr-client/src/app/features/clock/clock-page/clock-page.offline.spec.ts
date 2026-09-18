@@ -25,6 +25,7 @@ describe('ClockPage offline behaviour', () => {
   let syncNow: ReturnType<typeof vi.fn>;
   let pendingQueue: ReturnType<typeof signal<unknown[]>>;
   let healthResult: Observable<unknown>;
+  let healthApi: ReturnType<typeof vi.fn>;
   let playBeeps: ReturnType<typeof vi.fn>;
   let localAck: ReturnType<typeof vi.fn>;
   let localScanValue: LocalNfcScan | null;
@@ -66,6 +67,7 @@ describe('ClockPage offline behaviour', () => {
     syncNow = vi.fn(() => of([]));
     pendingQueue = signal<unknown[]>([]);
     healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true });
+    healthApi = vi.fn(() => healthResult);
     playBeeps = vi.fn();
     localAck = vi.fn(() => of(null));
     localScanValue = null;
@@ -86,7 +88,7 @@ describe('ClockPage offline behaviour', () => {
             ),
             hoursOverview: vi.fn(() => of(null)),
             identify: vi.fn(() => identifyValue),
-            health: vi.fn(() => healthResult),
+            health: healthApi,
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps } },
@@ -201,8 +203,8 @@ describe('ClockPage offline behaviour', () => {
   });
 
   it('releases the terminal via the offline queue recovery signal even without NFC polling', () => {
-    // /clock default route: no terminalId -> no NFC poll, so the queue's own
-    // recovered signal is the only connectivity indicator.
+    // /clock default route: no terminalId -> no NFC poll; connectivity comes
+    // from the health poll and from the queue's own recovered signal.
     terminalIdValue = null;
     const fixture = createComponent();
     const component = fixture.componentInstance;
@@ -718,9 +720,71 @@ describe('ClockPage offline behaviour', () => {
     vi.advanceTimersByTime(15_000);
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('.offline-banner')).toBeNull();
-    // Zurueck im Netz: der wartende Nachtrag wird sofort angestossen.
+    // Zurueck im Netz: der wartende Nachtrag wird sofort angestossen ...
     expect(syncNow).toHaveBeenCalled();
+    // ... der Hinweis bleibt aber stehen, solange die Queue nicht leer ist.
+    expect(fixture.nativeElement.querySelector('.offline-banner')?.textContent).toContain(
+      '1 Stempel wartet auf Übertragung',
+    );
+
+    pendingQueue.set([]);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.offline-banner')).toBeNull();
+  });
+
+  it('keeps the waiting notice while the API answers but the replay stays queued (W1)', () => {
+    // API erreichbar, Kimai nimmt die Nachträge aber nicht an: die Events
+    // bleiben in der Queue. Der Hinweis samt Zähler darf NICHT verschwinden -
+    // vorher hing er allein an isOffline und wäre hier ausgeblendet worden.
+    healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true });
+    pendingQueue.set([{}, {}]);
+    terminalIdValue = null;
+
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+
+    const banner = fixture.nativeElement.querySelector('.offline-banner') as HTMLElement;
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('2 Stempel warten auf Übertragung');
+    // Kein "Offline" behaupten, wenn der Server antwortet.
+    expect(banner.textContent).not.toContain('Offline');
+  });
+
+  it('treats a hanging health request as offline after the timeout (W2)', () => {
+    healthResult = new Subject<unknown>().asObservable();
+    pendingQueue.set([{}]);
+    terminalIdValue = null;
+
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+    // Vor dem Timeout ist nichts entschieden: der Hinweis nennt nur den
+    // wartenden Stempel, ohne "Offline" zu behaupten.
+    const before = (fixture.nativeElement.querySelector('.offline-banner') as HTMLElement | null)?.textContent ?? '';
+    expect(before).not.toContain('Offline');
+
+    vi.advanceTimersByTime(10_000);
+    fixture.detectChanges();
+
+    // Nach dem Timeout gilt der Server als nicht handlungsfähig.
+    expect(fixture.nativeElement.querySelector('.offline-banner')?.textContent).toContain(
+      'Offline – 1 Stempel wartet auf Übertragung',
+    );
+  });
+
+  it('stops the health poll when the page is destroyed', () => {
+    terminalIdValue = null;
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+
+    const component = fixture.componentInstance as unknown as { healthPollTimer: number | null };
+    const timerId = component.healthPollTimer;
+    expect(timerId).not.toBeNull();
+
+    const clearSpy = vi.spyOn(window, 'clearInterval');
+    fixture.destroy();
+
+    expect(clearSpy).toHaveBeenCalledWith(timerId);
+    clearSpy.mockRestore();
   });
 
   it('signs in OFFLINE with a PIN remembered from an earlier ONLINE login', async () => {

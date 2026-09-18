@@ -1,8 +1,8 @@
 <section class="terminal" [class.session]="selectedEmployee()" aria-label="Stempeluhr Terminal">
-  @if (isOffline()) {
+  @if (isOffline() || waitingNotice()) {
     <div class="offline-banner" role="status" aria-live="polite">
-      @if (pendingStamps() > 0) {
-        Offline – {{ pendingStamps() }} Stempel warten auf Übertragung
+      @if (waitingNotice(); as notice) {
+        {{ notice }}
       } @else {
         Offline – Stempel werden gespeichert und später automatisch übertragen
       }

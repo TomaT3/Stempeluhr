@@ -1,7 +1,7 @@
-@if (isOffline()) {
+@if (isOffline() || waitingNotice()) {
   <div class="offline-banner" role="status" aria-live="polite">
-    @if (pendingStamps() > 0) {
-      Offline – {{ pendingStamps() }} Stempel warten auf Übertragung
+    @if (waitingNotice(); as notice) {
+      {{ notice }}
     } @else {
       Offline – Stempel werden zwischengespeichert und automatisch nachgetragen.
       NFC-Scan meldet Sie an – stempeln Sie dann per Button.
