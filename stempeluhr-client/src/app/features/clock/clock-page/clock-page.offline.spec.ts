@@ -732,4 +732,87 @@ describe('ClockPage offline behaviour', () => {
     // A kiosk reload during the outage must not lose that state either.
     expect(lastKnownStatus('max')?.origin).toBe('projected');
   });
+
+  it('does not show the cached offline estimate while the backend answers', () => {
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+    rememberObservedStatus('max', {
+      isRunning: true,
+      activeTimesheetId: 7,
+      startedAt: '2026-09-18T06:00:00Z',
+      durationSeconds: 0,
+      state: 'working',
+      stateText: 'Eingestempelt',
+    });
+    const fixture = createComponent();
+    // Backend reachable (polls keep succeeding): the server's own answer is
+    // still in flight, so the kiosk must wait instead of printing the local
+    // estimate - and especially not label it "offline".
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    expect(fixture.componentInstance.isOffline()).toBe(false);
+    expect(fixture.componentInstance.clockState.status()).toBeNull();
+  });
+
+  it('remembers PIN and status of a successful ONLINE login for the next outage', async () => {
+    // This is the ONE production place that fills the two caches the offline
+    // login depends on - without these writes the kiosk cannot sign anybody in
+    // while the backend is down.
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    pinLoginResult.next(session);
+
+    await vi.waitFor(async () => expect(await resolveEmployeeByPin('1234')).toEqual(session.employee));
+    expect(lastKnownStatus('max')?.origin).toBe('observed');
+    expect(lastKnownStatus('max')?.status).toEqual(session.status);
+  });
+
+  it('does not unlock when the OFFLINE login is abandoned while it is verified', async () => {
+    await rememberEmployeePin('1234', session.employee);
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    pinLoginResult.error({ status: 0 }); // starts the asynchronous verifier lookup
+    component.clearPin(); // employee cancels / the next person types a PIN
+
+    await vi.waitFor(() => expect(component.isBusy()).toBe(false));
+    expect(component.isUnlocked()).toBe(false);
+    expect(component.selectedEmployee()).toBeNull();
+  });
+
+  it('drops a stale status when an OFFLINE card login knows nothing about the employee', () => {
+    failPolls = true;
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    // Whatever was on screen before: this kiosk may not attribute it to the
+    // employee who just scanned - the status is simply unknown.
+    component.clockState.setStatus({
+      isRunning: true,
+      activeTimesheetId: 7,
+      startedAt: '2026-09-18T06:00:00Z',
+      durationSeconds: 0,
+      state: 'working',
+      stateText: 'Eingestempelt',
+    });
+
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+
+    expect(component.isUnlocked()).toBe(true);
+    expect(component.clockState.status()).toBeNull();
+  });
 });

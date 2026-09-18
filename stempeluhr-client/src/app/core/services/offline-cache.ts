@@ -164,25 +164,45 @@ function readPinCache(): PinCacheEntry[] {
   );
 }
 
-/** Resolves a PIN entered while OFFLINE against the locally cached verifiers. */
+/**
+ * Resolves a PIN entered while OFFLINE against the locally cached verifiers.
+ *
+ * Mirrors `EmployeeService.FindEmployeeByPin`: a PIN that matches TWO
+ * employees is ambiguous and resolves to nobody. Returning the first match
+ * would unlock a foreign name whose queued stamps the replay rejects.
+ */
 export async function resolveEmployeeByPin(pin: string): Promise<Employee | null> {
   if (!pin) {
     return null;
   }
 
+  let match: Employee | null = null;
   for (const entry of readPinCache()) {
     const verifier = await computeVerifier(pin, entry.salt);
-    if (verifier !== null && verifier === entry.verifier) {
-      return entry.employee;
+    if (verifier === null || verifier !== entry.verifier) {
+      continue;
     }
+
+    if (match && match.id !== entry.employee.id) {
+      return null; // ambiguous PIN - the server rejects this too
+    }
+
+    match = entry.employee;
   }
 
-  return null;
+  return match;
 }
 
 /** Caches the verifier of a PIN that logged in ONLINE successfully. */
 export async function rememberEmployeePin(pin: string, employee: Employee): Promise<void> {
   if (!pin) {
+    return;
+  }
+
+  // Never store a PIN that already identifies somebody else: offline the kiosk
+  // would then unlock the wrong name (see resolveEmployeeByPin).
+  const known = await resolveEmployeeByPin(pin);
+  if (known && known.id !== employee.id) {
     return;
   }
 
@@ -192,11 +212,8 @@ export async function rememberEmployeePin(pin: string, employee: Employee): Prom
     return;
   }
 
-  // One entry per employee (a new PIN replaces the old one) and never two
-  // entries for the same PIN.
-  const entries = readPinCache().filter(entry =>
-    entry.employee.id !== employee.id && entry.verifier !== verifier,
-  );
+  // One entry per employee (a new PIN replaces the old one), newest last.
+  const entries = readPinCache().filter(entry => entry.employee.id !== employee.id);
   entries.push({ salt, verifier, employee });
   writeJson(PIN_CACHE_KEY, entries.slice(-MAX_PIN_ENTRIES));
 }
@@ -252,6 +269,11 @@ function rememberStatus(employeeId: string, status: ClockStatus, origin: Offline
   }
 
   const cache = readStatusCache();
+  // Re-insert instead of overwriting: only a DELETE moves an existing key to
+  // the end of the iteration order, and the trimming below drops from the
+  // front - otherwise the entry that was just refreshed would be evicted
+  // first while entries nobody looked at for months survive.
+  delete cache[employeeId];
   cache[employeeId] = { status, observedAt: new Date().toISOString(), origin };
   const trimmed = Object.entries(cache).slice(-MAX_STATUS_ENTRIES);
   writeJson(STATUS_CACHE_KEY, Object.fromEntries(trimmed));

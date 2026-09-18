@@ -37,6 +37,16 @@ const idleStatus: ClockStatus = {
   stateText: 'Nicht eingestempelt',
 };
 
+/**
+ * Builds a cache entry the way the module does (SHA-256 over `salt:pin`), so a
+ * test can plant cache states the production code deliberately never creates.
+ */
+async function pinEntryFor(pin: string, salt: string, owner: Employee) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${pin}`));
+  const verifier = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return { salt, verifier, employee: owner };
+}
+
 describe('offline-cache', () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -118,6 +128,27 @@ describe('offline-cache', () => {
       window.localStorage.setItem(PIN_CACHE_KEY, '{"not":"an array"}');
       await expect(resolveEmployeeByPin('1234')).resolves.toBeNull();
     });
+
+    it('does not store a PIN that already identifies somebody else', async () => {
+      await rememberEmployeePin('1234', employee);
+      await rememberEmployeePin('1234', otherEmployee);
+
+      expect(JSON.parse(window.localStorage.getItem(PIN_CACHE_KEY) ?? '[]')).toHaveLength(1);
+      await expect(resolveEmployeeByPin('1234')).resolves.toEqual(employee);
+    });
+
+    it('treats a PIN that two employees share as ambiguous, like the server', async () => {
+      // Legacy/hand-edited cache: two verifiers for the same PIN (the guard in
+      // rememberEmployeePin keeps the kiosk from creating that state itself).
+      window.localStorage.setItem(PIN_CACHE_KEY, JSON.stringify([
+        await pinEntryFor('1234', 'aabbccddeeff00112233445566778899', employee),
+        await pinEntryFor('1234', '99887766554433221100ffeeddccbbaa', otherEmployee),
+      ]));
+
+      // EmployeeService.FindEmployeeByPin resolves such a PIN to nobody; the
+      // kiosk may not unlock a foreign name whose stamps the replay rejects.
+      await expect(resolveEmployeeByPin('1234')).resolves.toBeNull();
+    });
   });
 
   describe('status cache', () => {
@@ -162,6 +193,20 @@ describe('offline-cache', () => {
 
     it('renders an unparsable timestamp instead of NaN', () => {
       expect(formatShortTime('kaputt')).toBe('--:--');
+    });
+
+    it('keeps the entry that was refreshed most recently when trimming', () => {
+      for (let index = 0; index < 100; index += 1) {
+        rememberObservedStatus(`emp-${index}`, idleStatus);
+      }
+      // Refresh the oldest entry, then push one past the capacity: FIFO on the
+      // FIRST insertion would now evict exactly the entry just refreshed.
+      rememberObservedStatus('emp-0', idleStatus);
+      rememberObservedStatus('emp-100', idleStatus);
+
+      expect(lastKnownStatus('emp-0')).not.toBeNull();
+      expect(lastKnownStatus('emp-1')).toBeNull();
+      expect(lastKnownStatus('emp-100')).not.toBeNull();
     });
   });
 });

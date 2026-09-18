@@ -206,4 +206,24 @@ describe('TerminalPage', () => {
     expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.action-button.pause')).not.toBeNull();
   });
+
+  it('does not claim "offline" while the backend is answering', () => {
+    // ONLINE cache hit: the employee is unlocked before the server's status
+    // answer arrives - the kiosk may say "unbekannt", but not "offline".
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+
+    const fixture = TestBed.createComponent(TerminalPage);
+    vi.advanceTimersByTime(1_000);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.isOffline()).toBe(false);
+    expect(fixture.componentInstance.isUnlocked()).toBe(true);
+    expect(fixture.componentInstance.clockState.status()).toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('Status unbekannt');
+    expect(fixture.nativeElement.textContent).not.toContain('(offline)');
+  });
 });

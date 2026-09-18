@@ -240,7 +240,10 @@ wie eine Buchung aussieht:
   einem Offline-Einstempeln wird also Ausstempeln/Pause angeboten.
 - `Status unbekannt (offline)` — es ist nichts bekannt. Dann werden **beide**
   Richtungen (Ein- und Ausstempeln) angeboten, statt „Nicht eingestempelt" zu
-  behaupten; welcher Stempel richtig war, entscheidet der Nachtrag.
+  behaupten; welcher Stempel richtig war, entscheidet der Nachtrag. Solange die
+  API antwortet, steht dort nur `Status unbekannt` (die Serverantwort ist noch
+  unterwegs), und ein zwischengespeicherter Stand wird **nicht** angezeigt —
+  das Offline-Label gibt es nur, wenn wirklich offline gestempelt wird.
 
 Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff
 ohnehin durchprobierbar — der Verifier verhindert nur, dass PINs im Klartext

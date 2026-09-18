@@ -529,7 +529,11 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (status) {
       this.applyObservedStatus(employee.id, status);
     } else {
-      const cached = lastKnownStatus(employee.id);
+      // The local estimate is only shown - and only labelled - while the
+      // kiosk really is offline. Online the server answers on its own
+      // (pin-login / identify), and a status labelled "offline" with the
+      // banner off would be a lie.
+      const cached = this.isOffline() ? lastKnownStatus(employee.id) : null;
       if (cached) {
         this.clockState.setStatus(toOfflineStatus(cached));
       } else {
