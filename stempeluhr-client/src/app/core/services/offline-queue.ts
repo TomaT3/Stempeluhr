@@ -1,5 +1,5 @@
 import { HttpClient } from '@angular/common/http';
-import { inject, Injectable, signal } from '@angular/core';
+import { inject, Injectable, computed, signal } from '@angular/core';
 import { defer, finalize, firstValueFrom, Observable, of, Subject, timeout } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 
@@ -72,9 +72,11 @@ export class OfflineQueueService {
   /**
    * Stamps the server refused during replay. They are NOT in the queue any
    * more - the time is missing until somebody repairs it in Kimai, so the
-   * kiosk has to say so (issue #34).
+   * kiosk has to say so (issue #34). Acknowledged entries stay in storage
+   * (only hidden): pressing the button must not destroy the ONLY trace of a
+   * stamp that has not been repaired yet.
    */
-  readonly rejected = this.rejectedStamps.asReadonly();
+  readonly rejected = computed(() => this.rejectedStamps().filter(entry => !entry.acknowledgedAt));
 
   private readonly recoveredSubject = new Subject<void>();
   /**
@@ -290,10 +292,17 @@ export class OfflineQueueService {
     this.writeRejectedStorage(this.rejectedStamps());
   }
 
-  /** Marks the refused stamps as dealt with (the time was repaired in Kimai). */
-  clearRejected(): void {
-    this.rejectedStamps.set([]);
-    this.writeRejectedStorage([]);
+  /**
+   * Marks the refused stamps as dealt with (the time was repaired in Kimai).
+   * The records stay in storage - only their notice disappears: pressing the
+   * button by mistake must not destroy the last trace of a missing booking.
+   */
+  acknowledgeRejected(): void {
+    const acknowledgedAt = new Date().toISOString();
+    this.rejectedStamps.update(entries =>
+      entries.map(entry => (entry.acknowledgedAt ? entry : { ...entry, acknowledgedAt })),
+    );
+    this.writeRejectedStorage(this.rejectedStamps());
   }
 
   private scheduleRetry(delayMs: number = SYNC_RETRY_MS): void {

@@ -61,4 +61,10 @@ export interface RejectedOfflineStamp {
   message: string;
   /** Only kiosk events carry an action; reader-token events do not. */
   action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd' | null;
+  /**
+   * Set when somebody pressed "Alle erledigt". Acknowledged records are only
+   * hidden from the kiosk notice - they stay in storage, because the time may
+   * still be missing in Kimai and this record is the only trace left.
+   */
+  acknowledgedAt?: string | null;
 }

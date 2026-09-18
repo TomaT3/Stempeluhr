@@ -344,6 +344,13 @@ p {
 }
 
 .rejected-text {
+  /* Auf zwei Zeilen begrenzt: eine lange Server-Meldung (KimaiApiException
+     traegt den ganzen Antwortrumpf mit) hat die Leiste sonst so weit nach oben
+     wachsen lassen, dass sie die Loeschtaste des Tastenfelds ueberdeckte. */
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow-wrap: anywhere;
 }
 

@@ -265,17 +265,39 @@ describe('OfflineQueueService sync batching', () => {
       expect(rejected.at(-1)?.eventId).toBe('r24');
     });
 
-    it('clears the records once somebody dealt with them', async () => {
+    it('hides the records once somebody dealt with them - without destroying them', async () => {
       const event = kioskEvent('k1');
       service.enqueueKiosk(event);
       flushRejected([event]);
       await drainMicrotasks();
       expect(service.rejected()).toHaveLength(1);
 
-      service.clearRejected();
+      service.acknowledgeRejected();
 
       expect(service.rejected()).toHaveLength(0);
-      expect(window.localStorage.getItem(rejectedStorageKey) ?? '[]').toBe('[]');
+      // The record survives: the time may still be missing in Kimai, and this
+      // is the only trace left after the queue dropped the stamp.
+      const stored = JSON.parse(window.localStorage.getItem(rejectedStorageKey) ?? '[]');
+      expect(stored).toHaveLength(1);
+      expect(stored[0].acknowledgedAt).toBeTruthy();
+    });
+
+    it('shows the next refused stamp again after the previous ones were dealt with', async () => {
+      const first = kioskEvent('k1');
+      service.enqueueKiosk(first);
+      flushRejected([first]);
+      await drainMicrotasks();
+      service.acknowledgeRejected();
+      expect(service.rejected()).toHaveLength(0);
+
+      const second = kioskEvent('k2');
+      service.enqueueKiosk(second);
+      flushRejected([second]);
+      await drainMicrotasks();
+
+      expect(service.rejected()).toHaveLength(1);
+      expect(service.rejected()[0].eventId).toBe('k2');
+      expect(service.rejected()[0].acknowledgedAt).toBeUndefined();
     });
 
     it('reads back records left over from an earlier kiosk session', () => {

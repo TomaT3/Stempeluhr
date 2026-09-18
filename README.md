@@ -257,8 +257,10 @@ geaendert, Karte neu zugeordnet, Mitarbeiter geloescht), ist die Zeit **nicht**
 gebucht — bisher verschwand sie stillschweigend. Der Kiosk merkt sich solche
 Faelle (`stempeluhr.offline-rejected.v1`, die letzten 20) und zeigt sie auf dem
 Idle-Screen an: Zeitpunkt, Name, Aktion und die Begruendung des Servers, dazu
-einen Knopf `Erledigt`, mit dem der Nachtrag nach der Korrektur in Kimai
-quittiert wird. Die Details stehen bewusst nur am Kiosk; die Mitarbeiter-Seite
+einen Knopf `Alle erledigt`, mit dem der Nachtrag nach der Korrektur in Kimai
+quittiert wird. Quittierte Faelle verschwinden nur aus dem Hinweis, sie bleiben
+im Speicher erhalten — der Datensatz ist die letzte Spur, solange die Zeit in
+Kimai fehlt. Die Details stehen bewusst nur am Kiosk; die Mitarbeiter-Seite
 `/clock` (auch auf persoenlichen Handys) zeigt nur die Anzahl.
 
 Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff

@@ -19,7 +19,7 @@ describe('TerminalPage', () => {
   let failPolls: boolean;
   let localScanValue: LocalNfcScan | null;
   let enqueueKiosk: ReturnType<typeof vi.fn>;
-  let clearRejected: ReturnType<typeof vi.fn>;
+  let acknowledgeRejected: ReturnType<typeof vi.fn>;
   let rejectedStamps: ReturnType<typeof signal<RejectedOfflineStamp[]>>;
   let recovered$: Subject<void>;
 
@@ -60,7 +60,7 @@ describe('TerminalPage', () => {
     failPolls = false;
     localScanValue = null;
     enqueueKiosk = vi.fn();
-    clearRejected = vi.fn();
+    acknowledgeRejected = vi.fn();
     rejectedStamps = signal<RejectedOfflineStamp[]>([]);
     recovered$ = new Subject<void>();
 
@@ -95,7 +95,7 @@ describe('TerminalPage', () => {
             syncNow: vi.fn(() => of([])),
             recovered: recovered$.asObservable(),
             rejected: rejectedStamps.asReadonly(),
-            clearRejected,
+            acknowledgeRejected,
           },
         },
         {
@@ -212,6 +212,11 @@ describe('TerminalPage', () => {
     fixture.detectChanges();
 
     expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    // The queue event has to carry the display name: without it the refused-
+    // stamp notice on the idle screen could only say "unbekannt".
+    expect(enqueueKiosk).toHaveBeenCalledWith(
+      expect.objectContaining({ employeeName: 'Max Mustermann', action: 'start' }),
+    );
     // The queued start is shown as the current state - otherwise the employee
     // would only ever be offered "Einstempeln" again.
     expect(fixture.componentInstance.clockState.isWorking()).toBe(true);
@@ -264,7 +269,63 @@ describe('TerminalPage', () => {
 
     (fixture.nativeElement.querySelector('.rejected-dismiss') as HTMLButtonElement).click();
 
-    expect(clearRejected).toHaveBeenCalledTimes(1);
+    expect(acknowledgeRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the effect of the button: it clears ALL refused stamps at once', () => {
+    rejectedStamps.set([
+      {
+        eventId: 'r1',
+        employeeId: 'max',
+        employeeName: 'Max Mustermann',
+        performedAt: '2026-09-18T05:55:00Z',
+        rejectedAt: '2026-09-18T09:00:00Z',
+        message: 'Mitarbeiter nicht gefunden oder PIN falsch.',
+        action: 'start',
+      },
+      {
+        eventId: 'r2',
+        employeeId: 'erika',
+        employeeName: 'Erika Musterfrau',
+        performedAt: '2026-09-18T06:10:00Z',
+        rejectedAt: '2026-09-18T09:00:00Z',
+        message: 'Karte ist keinem Mitarbeiter zugeordnet.',
+        action: 'stop',
+      },
+    ]);
+    const fixture = TestBed.createComponent(TerminalPage);
+    fixture.detectChanges();
+
+    const notice = fixture.nativeElement.querySelector('.rejected-notice') as HTMLElement;
+    expect(notice.textContent).toContain('2 Offline-Stempel nicht nachgetragen');
+    const button = notice.querySelector('.rejected-dismiss') as HTMLButtonElement;
+    // One detail line is shown, but the click discards every entry - the label
+    // has to say so, otherwise two unread cases disappear with one press.
+    expect(button.textContent?.trim()).toBe('Alle erledigt');
+  });
+
+  it('hides the refused-stamp notice while a session is open - and shows it again after back()', () => {
+    rejectedStamps.set([{
+      eventId: 'r1',
+      employeeId: 'max',
+      employeeName: 'Max Mustermann',
+      performedAt: '2026-09-18T05:55:00Z',
+      rejectedAt: '2026-09-18T09:00:00Z',
+      message: 'Mitarbeiter nicht gefunden oder PIN falsch.',
+      action: 'start',
+    }]);
+    const fixture = TestBed.createComponent(TerminalPage);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.rejected-notice')).not.toBeNull();
+
+    // During a session the bar would cover the hours card, so it stays hidden.
+    unlock(fixture);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.rejected-notice')).toBeNull();
+
+    fixture.componentInstance.back();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.rejected-notice')).not.toBeNull();
   });
 
   it('does not claim "offline" while the backend is answering', () => {

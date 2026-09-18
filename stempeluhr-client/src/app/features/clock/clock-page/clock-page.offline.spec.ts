@@ -20,7 +20,7 @@ describe('ClockPage offline behaviour', () => {
   let recovered$: Subject<void>;
   let terminalIdValue: string | null;
   let enqueueKiosk: ReturnType<typeof vi.fn>;
-  let clearRejected: ReturnType<typeof vi.fn>;
+  let acknowledgeRejected: ReturnType<typeof vi.fn>;
   let rejectedStamps: ReturnType<typeof signal<RejectedOfflineStamp[]>>;
   let playBeeps: ReturnType<typeof vi.fn>;
   let localAck: ReturnType<typeof vi.fn>;
@@ -58,7 +58,7 @@ describe('ClockPage offline behaviour', () => {
     recovered$ = new Subject<void>();
     terminalIdValue = 'term-1';
     enqueueKiosk = vi.fn();
-    clearRejected = vi.fn();
+    acknowledgeRejected = vi.fn();
     rejectedStamps = signal<RejectedOfflineStamp[]>([]);
     playBeeps = vi.fn();
     localAck = vi.fn(() => of(null));
@@ -98,7 +98,7 @@ describe('ClockPage offline behaviour', () => {
             syncNow: vi.fn(() => of([])),
             recovered: recovered$.asObservable(),
             rejected: rejectedStamps.asReadonly(),
-            clearRejected,
+            acknowledgeRejected,
           },
         },
         {
@@ -672,11 +672,11 @@ describe('ClockPage offline behaviour', () => {
     fixture.detectChanges();
 
     const text = fixture.nativeElement.textContent as string;
-    expect(text).toContain('1 Offline-Stempel wurde nicht nachgetragen');
+    expect(text).toContain('1 Offline-Stempel nicht nachgetragen');
     expect(text).not.toContain('Max Mustermann');
 
     (fixture.nativeElement.querySelector('p[role="alert"] button') as HTMLButtonElement).click();
-    expect(clearRejected).toHaveBeenCalledTimes(1);
+    expect(acknowledgeRejected).toHaveBeenCalledTimes(1);
   });
 
   it('signs in OFFLINE with a PIN remembered from an earlier ONLINE login', async () => {

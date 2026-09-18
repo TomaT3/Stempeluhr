@@ -130,7 +130,7 @@
         {{ stamp.performedAt | date: 'dd.MM. HH:mm' }} · {{ stamp.employeeName || 'unbekannt' }} ·
         {{ rejectedActionLabel(stamp.action) }} · {{ stamp.message }}
       </span>
-      <button type="button" class="rejected-dismiss" (click)="dismissRejectedStamps()">Erledigt</button>
+      <button type="button" class="rejected-dismiss" (click)="dismissRejectedStamps()">Alle erledigt</button>
     </div>
   }
 }

@@ -346,7 +346,7 @@ export abstract class ClockWorkflow implements OnDestroy {
    * in Kimai presses this - without it the notice would nag forever.
    */
   dismissRejectedStamps(): void {
-    this.offlineQueue.clearRejected();
+    this.offlineQueue.acknowledgeRejected();
   }
 
   /** Action wording for the notice about refused stamps. */
