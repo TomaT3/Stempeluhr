@@ -28,6 +28,15 @@
     @if (message()) {
       <p class="message">{{ message() }}</p>
     }
+
+    <!-- Vom Server abgelehnte Offline-Stempel (Issue #34). Hier bewusst OHNE
+         Namen/Details: /clock laeuft auch auf persoenlichen Handys. -->
+    @if (rejectedStamps().length > 0) {
+      <p class="message" role="alert">
+        {{ rejectedStamps().length }} Offline-Stempel nicht nachgetragen – bitte Admin informieren.
+        <button type="button" (click)="dismissRejectedStamps()">Alle erledigt</button>
+      </p>
+    }
   </section>
 } @else {
   <section class="station">

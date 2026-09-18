@@ -1,8 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
+import { signal } from '@angular/core';
 import { of, Subject, throwError } from 'rxjs';
 
 import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../../../core/models/kiosk.models';
+import { RejectedOfflineStamp } from '../../../core/models/offline.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
@@ -17,6 +19,8 @@ describe('TerminalPage', () => {
   let failPolls: boolean;
   let localScanValue: LocalNfcScan | null;
   let enqueueKiosk: ReturnType<typeof vi.fn>;
+  let acknowledgeRejected: ReturnType<typeof vi.fn>;
+  let rejectedStamps: ReturnType<typeof signal<RejectedOfflineStamp[]>>;
   let recovered$: Subject<void>;
 
   const status: ClockStatus = {
@@ -56,6 +60,8 @@ describe('TerminalPage', () => {
     failPolls = false;
     localScanValue = null;
     enqueueKiosk = vi.fn();
+    acknowledgeRejected = vi.fn();
+    rejectedStamps = signal<RejectedOfflineStamp[]>([]);
     recovered$ = new Subject<void>();
 
     await TestBed.configureTestingModule({
@@ -84,7 +90,13 @@ describe('TerminalPage', () => {
         },
         {
           provide: OfflineQueueService,
-          useValue: { enqueueKiosk, syncNow: vi.fn(() => of([])), recovered: recovered$.asObservable() },
+          useValue: {
+            enqueueKiosk,
+            syncNow: vi.fn(() => of([])),
+            recovered: recovered$.asObservable(),
+            rejected: rejectedStamps.asReadonly(),
+            acknowledgeRejected,
+          },
         },
         {
           provide: ActivatedRoute,
@@ -200,11 +212,129 @@ describe('TerminalPage', () => {
     fixture.detectChanges();
 
     expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    // The queue event has to carry the display name: without it the refused-
+    // stamp notice on the idle screen could only say "unbekannt".
+    expect(enqueueKiosk).toHaveBeenCalledWith(
+      expect.objectContaining({ employeeName: 'Max Mustermann', action: 'start' }),
+    );
     // The queued start is shown as the current state - otherwise the employee
     // would only ever be offered "Einstempeln" again.
     expect(fixture.componentInstance.clockState.isWorking()).toBe(true);
     expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.action-button.pause')).not.toBeNull();
+  });
+
+  it('shows which offline stamp the server refused - with name, time and reason', () => {
+    rejectedStamps.set([{
+      eventId: 'r1',
+      employeeId: 'max',
+      employeeName: 'Max Mustermann',
+      performedAt: '2026-09-18T05:55:00Z',
+      rejectedAt: '2026-09-18T09:00:00Z',
+      message: 'Mitarbeiter nicht gefunden oder PIN falsch.',
+      action: 'start',
+    }]);
+
+    const fixture = TestBed.createComponent(TerminalPage);
+    fixture.detectChanges();
+
+    // Visible on the idle screen, so the NEXT person (or the admin) sees it.
+    const notice = fixture.nativeElement.querySelector('.rejected-notice') as HTMLElement;
+    expect(notice).not.toBeNull();
+    expect(notice.textContent).toContain('1 Offline-Stempel nicht nachgetragen');
+    expect(notice.textContent).toContain('Max Mustermann');
+    expect(notice.textContent).toContain('Einstempeln');
+    expect(notice.textContent).toContain('Mitarbeiter nicht gefunden oder PIN falsch.');
+
+    // Die Klammer auf zwei Zeilen ist im jsdom nicht MESSBAR (kein Layout),
+    // aber ihre Deklaration ist pinbar: ohne sie waechst die Leiste bei langen
+    // Server-Meldungen (KimaiApiException traegt den ganzen Antwortrumpf mit)
+    // auf 93 px und ueberdeckt die Loeschtaste des Tastenfelds.
+    const style = getComputedStyle(notice.querySelector('.rejected-text') as HTMLElement);
+    expect(style.display).toBe('-webkit-box');
+    expect(style.webkitLineClamp).toBe('2');
+    expect(style.overflow).toBe('hidden');
+  });
+
+  it('keeps quiet while no stamp was refused', () => {
+    const fixture = TestBed.createComponent(TerminalPage);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.rejected-notice')).toBeNull();
+  });
+
+  it('clears the refused-stamp notice once somebody repaired the time', () => {
+    rejectedStamps.set([{
+      eventId: 'r1',
+      employeeId: 'max',
+      employeeName: 'Max Mustermann',
+      performedAt: '2026-09-18T05:55:00Z',
+      rejectedAt: '2026-09-18T09:00:00Z',
+      message: 'Mitarbeiter nicht gefunden oder PIN falsch.',
+      action: 'start',
+    }]);
+    const fixture = TestBed.createComponent(TerminalPage);
+    fixture.detectChanges();
+
+    (fixture.nativeElement.querySelector('.rejected-dismiss') as HTMLButtonElement).click();
+
+    expect(acknowledgeRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the effect of the button: it clears ALL refused stamps at once', () => {
+    rejectedStamps.set([
+      {
+        eventId: 'r1',
+        employeeId: 'max',
+        employeeName: 'Max Mustermann',
+        performedAt: '2026-09-18T05:55:00Z',
+        rejectedAt: '2026-09-18T09:00:00Z',
+        message: 'Mitarbeiter nicht gefunden oder PIN falsch.',
+        action: 'start',
+      },
+      {
+        eventId: 'r2',
+        employeeId: 'erika',
+        employeeName: 'Erika Musterfrau',
+        performedAt: '2026-09-18T06:10:00Z',
+        rejectedAt: '2026-09-18T09:00:00Z',
+        message: 'Karte ist keinem Mitarbeiter zugeordnet.',
+        action: 'stop',
+      },
+    ]);
+    const fixture = TestBed.createComponent(TerminalPage);
+    fixture.detectChanges();
+
+    const notice = fixture.nativeElement.querySelector('.rejected-notice') as HTMLElement;
+    expect(notice.textContent).toContain('2 Offline-Stempel nicht nachgetragen');
+    const button = notice.querySelector('.rejected-dismiss') as HTMLButtonElement;
+    // One detail line is shown, but the click discards every entry - the label
+    // has to say so, otherwise two unread cases disappear with one press.
+    expect(button.textContent?.trim()).toBe('Alle erledigt');
+  });
+
+  it('hides the refused-stamp notice while a session is open - and shows it again after back()', () => {
+    rejectedStamps.set([{
+      eventId: 'r1',
+      employeeId: 'max',
+      employeeName: 'Max Mustermann',
+      performedAt: '2026-09-18T05:55:00Z',
+      rejectedAt: '2026-09-18T09:00:00Z',
+      message: 'Mitarbeiter nicht gefunden oder PIN falsch.',
+      action: 'start',
+    }]);
+    const fixture = TestBed.createComponent(TerminalPage);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.rejected-notice')).not.toBeNull();
+
+    // During a session the bar would cover the hours card, so it stays hidden.
+    unlock(fixture);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.rejected-notice')).toBeNull();
+
+    fixture.componentInstance.back();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.rejected-notice')).not.toBeNull();
   });
 
   it('does not claim "offline" while the backend is answering', () => {

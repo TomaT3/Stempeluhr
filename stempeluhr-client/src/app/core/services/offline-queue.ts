@@ -1,15 +1,25 @@
 import { HttpClient } from '@angular/common/http';
-import { inject, Injectable, signal } from '@angular/core';
+import { inject, Injectable, computed, signal } from '@angular/core';
 import { defer, finalize, firstValueFrom, Observable, of, Subject, timeout } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 
 import {
   OfflineKioskClockEvent,
   OfflineNfcClockEvent,
+  OfflineSyncEventResult,
   OfflineSyncResult,
+  RejectedOfflineStamp,
 } from '../models/offline.models';
 
 const QUEUE_STORAGE_KEY = 'stempeluhr.offline-queue.v1';
+/**
+ * Stamps the server REFUSED during replay (wrong PIN, unknown employee,
+ * revoked card). They are dropped from the queue - and without this record
+ * nobody would ever learn that the time is missing. Kept separately from the
+ * queue so it survives the drop and a kiosk reload.
+ */
+const REJECTED_STORAGE_KEY = 'stempeluhr.offline-rejected.v1';
+const MAX_REJECTED_ENTRIES = 20;
 const SYNC_RETRY_MS = 15_000;
 // Slower cadence for events the server already accepted into its own outbox
 // ("buffered"): they only need re-sending as a safety net against an API
@@ -57,6 +67,16 @@ export class OfflineQueueService {
   private readonly http = inject(HttpClient);
   private readonly queued = signal<StoredOfflineEvent[]>(this.readStorage());
   readonly pendingCount = this.queued.asReadonly();
+
+  private readonly rejectedStamps = signal<RejectedOfflineStamp[]>(this.readRejectedStorage());
+  /**
+   * Stamps the server refused during replay. They are NOT in the queue any
+   * more - the time is missing until somebody repairs it in Kimai, so the
+   * kiosk has to say so (issue #34). Acknowledged entries stay in storage
+   * (only hidden): pressing the button must not destroy the ONLY trace of a
+   * stamp that has not been repaired yet.
+   */
+  readonly rejected = computed(() => this.rejectedStamps().filter(entry => !entry.acknowledgedAt));
 
   private readonly recoveredSubject = new Subject<void>();
   /**
@@ -176,6 +196,7 @@ export class OfflineQueueService {
           );
           results.push(result);
 
+          const chunkById = new Map(chunk.map(event => [event.eventId, event]));
           let chunkFullyBuffered = (result.results?.length ?? 0) > 0;
           for (const detail of result.results ?? []) {
             if (!detail.eventId) {
@@ -188,6 +209,10 @@ export class OfflineQueueService {
             } else {
               chunkFullyBuffered = false;
               anyProcessed = true;
+            }
+
+            if (detail.status === 'rejected') {
+              this.recordRejected(detail, chunkById.get(detail.eventId));
             }
           }
           bufferingEverything = chunkFullyBuffered;
@@ -243,6 +268,43 @@ export class OfflineQueueService {
     this.scheduleRetry();
   }
 
+  /**
+   * Keeps the record of a refused stamp so somebody can repair it in Kimai.
+   * Best effort by design: the sync response is the only moment the server
+   * tells us, and losing the record would only restore the silent loss.
+   */
+  private recordRejected(
+    detail: OfflineSyncEventResult,
+    event: OfflineNfcClockEvent | OfflineKioskClockEvent | undefined,
+  ): void {
+    const kiosk = event as OfflineKioskClockEvent | undefined;
+    const record: RejectedOfflineStamp = {
+      eventId: detail.eventId,
+      employeeId: kiosk?.employeeId ?? '',
+      employeeName: kiosk?.employeeName ?? '',
+      performedAt: kiosk?.performedAt ?? '',
+      rejectedAt: new Date().toISOString(),
+      message: detail.message ?? '',
+      action: kiosk?.action ?? null,
+    };
+
+    this.rejectedStamps.update(entries => [...entries, record].slice(-MAX_REJECTED_ENTRIES));
+    this.writeRejectedStorage(this.rejectedStamps());
+  }
+
+  /**
+   * Marks the refused stamps as dealt with (the time was repaired in Kimai).
+   * The records stay in storage - only their notice disappears: pressing the
+   * button by mistake must not destroy the last trace of a missing booking.
+   */
+  acknowledgeRejected(): void {
+    const acknowledgedAt = new Date().toISOString();
+    this.rejectedStamps.update(entries =>
+      entries.map(entry => (entry.acknowledgedAt ? entry : { ...entry, acknowledgedAt })),
+    );
+    this.writeRejectedStorage(this.rejectedStamps());
+  }
+
   private scheduleRetry(delayMs: number = SYNC_RETRY_MS): void {
     if (this.syncTimer !== null) {
       return;
@@ -277,6 +339,25 @@ export class OfflineQueueService {
     } catch {
       // Storage full/blocked: keep the in-memory queue so nothing is lost
       // during this browser session.
+    }
+  }
+
+  private readRejectedStorage(): RejectedOfflineStamp[] {
+    try {
+      const raw = window.localStorage.getItem(REJECTED_STORAGE_KEY);
+      const parsed = raw ? (JSON.parse(raw) as RejectedOfflineStamp[]) : [];
+      return Array.isArray(parsed) ? parsed.filter(entry => typeof entry?.eventId === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private writeRejectedStorage(entries: RejectedOfflineStamp[]): void {
+    try {
+      window.localStorage.setItem(REJECTED_STORAGE_KEY, JSON.stringify(entries));
+    } catch {
+      // Storage full/blocked: the in-memory record still shows the notice
+      // until the kiosk is reloaded.
     }
   }
 }

@@ -250,6 +250,22 @@ unterwegs ist — oder bei haengender Verbindung nie ankommt. Der Mitarbeiter
 steht damit nie vor einem schlechteren Stand als vor dem Ausfall; die
 Button-Auswahl folgt dem gemerkten Zustand.
 
+### Abgelehnte Offline-Stempel (Nachtrag abgelehnt)
+
+Lehnt der Server einen nachgetragenen Stempel ab (PIN zwischenzeitlich
+geaendert, Karte neu zugeordnet, Mitarbeiter geloescht), ist die Zeit **nicht**
+gebucht — bisher verschwand sie stillschweigend. Der Kiosk merkt sich solche
+Faelle (`stempeluhr.offline-rejected.v1`, die letzten 20) und zeigt sie auf dem
+Idle-Screen an: Zeitpunkt, Name, Aktion und die Begruendung des Servers, dazu
+einen Knopf `Alle erledigt`, mit dem der Nachtrag nach der Korrektur in Kimai
+quittiert wird. Quittierte Faelle verschwinden nur aus dem Hinweis, sie bleiben
+im Speicher erhalten — der Datensatz ist die letzte Spur, solange die Zeit in
+Kimai fehlt (bis die Liste mit 20 Eintraegen voll ist; quittierte zaehlen dabei
+mit). Diese Datensaetze sind nur im Geraetespeicher nachschlagbar: es gibt
+bewusst keinen Bildschirm und keine Route dafuer. Die Details stehen bewusst
+nur am Kiosk; die Mitarbeiter-Seite `/clock` (auch auf persoenlichen Handys)
+zeigt nur die Anzahl.
+
 Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff
 ohnehin durchprobierbar — der Verifier verhindert nur, dass PINs im Klartext
 im Browser liegen (der gequeute Stempel traegt die PIN weiterhin mit, siehe
