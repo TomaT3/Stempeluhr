@@ -20,6 +20,7 @@ describe('TerminalPage', () => {
   let localScanValue: LocalNfcScan | null;
   let enqueueKiosk: ReturnType<typeof vi.fn>;
   let acknowledgeRejected: ReturnType<typeof vi.fn>;
+  let pendingQueue: ReturnType<typeof signal<unknown[]>>;
   let rejectedStamps: ReturnType<typeof signal<RejectedOfflineStamp[]>>;
   let recovered$: Subject<void>;
 
@@ -61,6 +62,7 @@ describe('TerminalPage', () => {
     localScanValue = null;
     enqueueKiosk = vi.fn();
     acknowledgeRejected = vi.fn();
+    pendingQueue = signal<unknown[]>([]);
     rejectedStamps = signal<RejectedOfflineStamp[]>([]);
     recovered$ = new Subject<void>();
 
@@ -96,6 +98,7 @@ describe('TerminalPage', () => {
             recovered: recovered$.asObservable(),
             rejected: rejectedStamps.asReadonly(),
             acknowledgeRejected,
+            pendingCount: pendingQueue.asReadonly(),
           },
         },
         {
@@ -194,6 +197,23 @@ describe('TerminalPage', () => {
     // Both ways out are on screen: the replay validates which one was right.
     expect(fixture.nativeElement.querySelector('.action-button.start')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
+  });
+
+  it('counts the waiting stamps in the kiosk offline banner - and stays quiet without any', () => {
+    failPolls = true;
+    const fixture = TestBed.createComponent(TerminalPage);
+    vi.advanceTimersByTime(1_000);
+    fixture.detectChanges();
+
+    const banner = fixture.nativeElement.querySelector('.offline-banner') as HTMLElement;
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('Offline –');
+    // Ohne wartende Stempel bleibt der allgemeine Text stehen (kein "0 Stempel").
+    expect(banner.textContent).not.toContain('warten auf Übertragung');
+
+    pendingQueue.set([{}, {}]);
+    fixture.detectChanges();
+    expect(banner.textContent).toContain('2 Stempel warten auf Übertragung');
   });
 
   it('offers Ausstempeln right after an OFFLINE Einstempeln', () => {

@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { signal } from '@angular/core';
-import { Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 
 import { ClockStatus, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../../core/models/offline.models';
@@ -22,6 +22,9 @@ describe('ClockPage offline behaviour', () => {
   let enqueueKiosk: ReturnType<typeof vi.fn>;
   let acknowledgeRejected: ReturnType<typeof vi.fn>;
   let rejectedStamps: ReturnType<typeof signal<RejectedOfflineStamp[]>>;
+  let syncNow: ReturnType<typeof vi.fn>;
+  let pendingQueue: ReturnType<typeof signal<unknown[]>>;
+  let healthResult: Observable<unknown>;
   let playBeeps: ReturnType<typeof vi.fn>;
   let localAck: ReturnType<typeof vi.fn>;
   let localScanValue: LocalNfcScan | null;
@@ -60,6 +63,9 @@ describe('ClockPage offline behaviour', () => {
     enqueueKiosk = vi.fn();
     acknowledgeRejected = vi.fn();
     rejectedStamps = signal<RejectedOfflineStamp[]>([]);
+    syncNow = vi.fn(() => of([]));
+    pendingQueue = signal<unknown[]>([]);
+    healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true });
     playBeeps = vi.fn();
     localAck = vi.fn(() => of(null));
     localScanValue = null;
@@ -80,7 +86,7 @@ describe('ClockPage offline behaviour', () => {
             ),
             hoursOverview: vi.fn(() => of(null)),
             identify: vi.fn(() => identifyValue),
-            health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
+            health: vi.fn(() => healthResult),
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps } },
@@ -95,10 +101,11 @@ describe('ClockPage offline behaviour', () => {
           provide: OfflineQueueService,
           useValue: {
             enqueueKiosk,
-            syncNow: vi.fn(() => of([])),
+            syncNow,
             recovered: recovered$.asObservable(),
             rejected: rejectedStamps.asReadonly(),
             acknowledgeRejected,
+            pendingCount: pendingQueue.asReadonly(),
           },
         },
         {
@@ -681,6 +688,39 @@ describe('ClockPage offline behaviour', () => {
       (fixture.nativeElement.querySelector('p[role="alert"] button') as HTMLButtonElement).textContent?.trim(),
     ).toBe('Alle erledigt');
     expect(acknowledgeRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows waiting stamps in the offline banner right after loading (no terminalId)', () => {
+    // Ohne NFC-Poll war der Ausfall bisher nur an einer fehlgeschlagenen
+    // Aktion zu erkennen - der wartende Stempel blieb nach einem Reload
+    // unsichtbar (Issue #6).
+    healthResult = throwError(() => ({ status: 0 }));
+    pendingQueue.set([{}, {}]);
+    terminalIdValue = null;
+
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+
+    const banner = fixture.nativeElement.querySelector('.offline-banner') as HTMLElement;
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('2 Stempel warten auf Übertragung');
+  });
+
+  it('drops the banner and flushes the waiting stamps once the health poll answers again', () => {
+    healthResult = throwError(() => ({ status: 0 }));
+    pendingQueue.set([{}]);
+    terminalIdValue = null;
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.offline-banner')).not.toBeNull();
+
+    healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true });
+    vi.advanceTimersByTime(15_000);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.offline-banner')).toBeNull();
+    // Zurueck im Netz: der wartende Nachtrag wird sofort angestossen.
+    expect(syncNow).toHaveBeenCalled();
   });
 
   it('signs in OFFLINE with a PIN remembered from an earlier ONLINE login', async () => {

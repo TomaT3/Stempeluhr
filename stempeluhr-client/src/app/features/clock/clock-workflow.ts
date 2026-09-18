@@ -29,6 +29,8 @@ import { OfflineQueueService } from '../../core/services/offline-queue';
 const VERSION_RELOAD_DELAY_MS = 3000;
 
 const PIN_LENGTH = 4;
+/** Abstand des Erreichbarkeits-Polls auf Hosts ohne NFC-Poll (§ /clock). */
+const HEALTH_POLL_MS = 15_000;
 
 @Directive()
 export abstract class ClockWorkflow implements OnDestroy {
@@ -48,6 +50,9 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** True while the backend cannot be reached; drives the offline banner. */
   readonly isOffline = signal(false);
+
+  /** Wartende Stempel - der Offline-Banner zeigt sie als Zähler (Issue #6). */
+  readonly pendingStamps = computed(() => this.offlineQueue.pendingCount().length);
 
   /**
    * Stamps the server REFUSED during replay (wrong PIN, unknown employee, ...).
@@ -83,6 +88,11 @@ export abstract class ClockWorkflow implements OnDestroy {
   private nfcCardId: string | null = null;
   /** Unsubscribes the offline-queue recovery listener (see constructor). */
   private recoveryUnsubscribe: (() => void) | null = null;
+  /**
+   * Leichter Erreichbarkeits-Poll für Hosts OHNE terminalId (§ /clock, Issue
+   * #6): dort gibt es keinen NFC-Poll, der das Offline-Banner pflegt.
+   */
+  private healthPollTimer: number | null = null;
   /**
    * Set when an offline-stamped action deliberately skipped the reset to
    * the idle screen (unlocking again needs a PIN login, which is impossible
@@ -136,6 +146,13 @@ export abstract class ClockWorkflow implements OnDestroy {
     });
 
     if (!this.terminalId) {
+      // Ohne NFC-Poll (§ /clock) merkt die Seite einen Ausfall nur an einer
+      // fehlgeschlagenen Aktion - und nach einem Reload bliebe der wartende
+      // Stempel unsichtbar. Deshalb ein leichter Health-Poll (Issue #6): er
+      // setzt das Banner schon beim Laden und stoesst beim Zurueckkommen den
+      // Nachtrag an.
+      this.checkHealth();
+      this.healthPollTimer = window.setInterval(() => this.checkHealth(), HEALTH_POLL_MS);
       return;
     }
 
@@ -365,7 +382,29 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
   }
 
+  /**
+   * Fragt nur die Erreichbarkeit ab (/api/health) und pflegt daraus das
+   * Offline-Banner samt Wartezähler (Issue #6, nur auf Hosts ohne
+   * terminalId - der Kiosk hat dafür seinen NFC-Poll). Beim Zurückkommen
+   * wird der wartende Nachtrag sofort angestoßen.
+   */
+  private checkHealth(): void {
+    this.kioskApi.health().subscribe({
+      next: () => {
+        const wasOffline = this.isOffline();
+        this.isOffline.set(false);
+        if (wasOffline) {
+          this.offlineQueue.syncNow().subscribe();
+        }
+      },
+      error: () => this.isOffline.set(true),
+    });
+  }
+
   ngOnDestroy(): void {
+    if (this.healthPollTimer !== null) {
+      window.clearInterval(this.healthPollTimer);
+    }
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
     }

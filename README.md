@@ -266,6 +266,20 @@ bewusst keinen Bildschirm und keine Route dafuer. Die Details stehen bewusst
 nur am Kiosk; die Mitarbeiter-Seite `/clock` (auch auf persoenlichen Handys)
 zeigt nur die Anzahl.
 
+### Offline-Banner mit Wartezähler (Issue #6)
+
+Solange die API nicht erreichbar ist, nennt der Banner am Kiosk **und** auf
+`/clock`, wie viele Stempel auf die Übertragung warten
+(`Offline – 2 Stempel warten auf Übertragung`); ohne wartende Stempel bleibt der
+allgemeine Text stehen (kein „0 Stempel"). Damit sieht ein Mitarbeiter auch nach
+dem kurzen Bestätigungstext noch, dass sein Stempel nur vorgemerkt ist.
+
+Hosts **ohne** `terminalId` (`/clock`) haben keinen NFC-Poll, an dem sie den
+Ausfall merken — dort fragt ein leichter Health-Poll (`/api/health`, alle 15 s)
+die Erreichbarkeit ab. Er setzt den Banner schon beim Laden (also auch für
+Stempel aus einer früheren Sitzung), löst beim Zurückkommen sofort den Nachtrag
+aus und verschwindet bei der ersten erfolgreichen Antwort wieder.
+
 Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff
 ohnehin durchprobierbar — der Verifier verhindert nur, dass PINs im Klartext
 im Browser liegen (der gequeute Stempel traegt die PIN weiterhin mit, siehe
