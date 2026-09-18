@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { signal } from '@angular/core';
-import { Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 
 import { ClockStatus, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../../core/models/offline.models';
@@ -22,6 +22,12 @@ describe('ClockPage offline behaviour', () => {
   let enqueueKiosk: ReturnType<typeof vi.fn>;
   let acknowledgeRejected: ReturnType<typeof vi.fn>;
   let rejectedStamps: ReturnType<typeof signal<RejectedOfflineStamp[]>>;
+  let syncNow: ReturnType<typeof vi.fn>;
+  let pendingQueue: ReturnType<typeof signal<unknown[]>>;
+  let healthResult: Observable<unknown>;
+  let healthApi: ReturnType<typeof vi.fn>;
+  /** Wenn gesetzt: jede Health-Anfrage bekommt ein eigenes Subject (Reihenfolge = Aufrufreihenfolge). */
+  let healthSubjects: Subject<unknown>[] | null;
   let playBeeps: ReturnType<typeof vi.fn>;
   let localAck: ReturnType<typeof vi.fn>;
   let localScanValue: LocalNfcScan | null;
@@ -60,6 +66,20 @@ describe('ClockPage offline behaviour', () => {
     enqueueKiosk = vi.fn();
     acknowledgeRejected = vi.fn();
     rejectedStamps = signal<RejectedOfflineStamp[]>([]);
+    syncNow = vi.fn(() => of([]));
+    pendingQueue = signal<unknown[]>([]);
+    healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true });
+    // Der Health-Endpunkt wird auch vom Versions-Badge abgefragt; Tests, die
+    // genau die Anfrage des Workflows brauchen, setzen healthSubjects = [].
+    healthSubjects = null;
+    healthApi = vi.fn(() => {
+      if (healthSubjects) {
+        const subject = new Subject<unknown>();
+        healthSubjects.push(subject);
+        return subject.asObservable();
+      }
+      return healthResult;
+    });
     playBeeps = vi.fn();
     localAck = vi.fn(() => of(null));
     localScanValue = null;
@@ -80,7 +100,7 @@ describe('ClockPage offline behaviour', () => {
             ),
             hoursOverview: vi.fn(() => of(null)),
             identify: vi.fn(() => identifyValue),
-            health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
+            health: healthApi,
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps } },
@@ -95,10 +115,11 @@ describe('ClockPage offline behaviour', () => {
           provide: OfflineQueueService,
           useValue: {
             enqueueKiosk,
-            syncNow: vi.fn(() => of([])),
+            syncNow,
             recovered: recovered$.asObservable(),
             rejected: rejectedStamps.asReadonly(),
             acknowledgeRejected,
+            pendingCount: pendingQueue.asReadonly(),
           },
         },
         {
@@ -194,8 +215,8 @@ describe('ClockPage offline behaviour', () => {
   });
 
   it('releases the terminal via the offline queue recovery signal even without NFC polling', () => {
-    // /clock default route: no terminalId -> no NFC poll, so the queue's own
-    // recovered signal is the only connectivity indicator.
+    // /clock default route: no terminalId -> no NFC poll; connectivity comes
+    // from the health poll and from the queue's own recovered signal.
     terminalIdValue = null;
     const fixture = createComponent();
     const component = fixture.componentInstance;
@@ -681,6 +702,113 @@ describe('ClockPage offline behaviour', () => {
       (fixture.nativeElement.querySelector('p[role="alert"] button') as HTMLButtonElement).textContent?.trim(),
     ).toBe('Alle erledigt');
     expect(acknowledgeRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows waiting stamps in the offline banner right after loading (no terminalId)', () => {
+    // Ohne NFC-Poll war der Ausfall bisher nur an einer fehlgeschlagenen
+    // Aktion zu erkennen - der wartende Stempel blieb nach einem Reload
+    // unsichtbar (Issue #6).
+    healthResult = throwError(() => ({ status: 0 }));
+    pendingQueue.set([{}, {}]);
+    terminalIdValue = null;
+
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+
+    const banner = fixture.nativeElement.querySelector('.offline-banner') as HTMLElement;
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('2 Stempel warten auf Übertragung');
+  });
+
+  it('drops the banner and flushes the waiting stamps once the health poll answers again', () => {
+    healthResult = throwError(() => ({ status: 0 }));
+    pendingQueue.set([{}]);
+    terminalIdValue = null;
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.offline-banner')).not.toBeNull();
+
+    healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true });
+    vi.advanceTimersByTime(15_000);
+    fixture.detectChanges();
+
+    // Zurueck im Netz: der wartende Nachtrag wird sofort angestossen ...
+    expect(syncNow).toHaveBeenCalled();
+    // ... der Hinweis bleibt aber stehen, solange die Queue nicht leer ist.
+    expect(fixture.nativeElement.querySelector('.offline-banner')?.textContent).toContain(
+      '1 Stempel wartet auf Übertragung',
+    );
+
+    pendingQueue.set([]);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.offline-banner')).toBeNull();
+  });
+
+  it('keeps the waiting notice while the API answers but the replay stays queued (W1)', () => {
+    // API erreichbar, Kimai nimmt die Nachträge aber nicht an: die Events
+    // bleiben in der Queue. Der Hinweis samt Zähler darf NICHT verschwinden -
+    // vorher hing er allein an isOffline und wäre hier ausgeblendet worden.
+    healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true });
+    pendingQueue.set([{}, {}]);
+    terminalIdValue = null;
+
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+
+    const banner = fixture.nativeElement.querySelector('.offline-banner') as HTMLElement;
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('2 Stempel warten auf Übertragung');
+    // Kein "Offline" behaupten, wenn der Server antwortet.
+    expect(banner.textContent).not.toContain('Offline');
+  });
+
+  it('treats a hanging health request as offline after the timeout (W2)', () => {
+    healthResult = new Subject<unknown>().asObservable();
+    pendingQueue.set([{}]);
+    terminalIdValue = null;
+
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+    // Vor dem Timeout ist nichts entschieden: der Hinweis nennt nur den
+    // wartenden Stempel, ohne "Offline" zu behaupten.
+    const before = (fixture.nativeElement.querySelector('.offline-banner') as HTMLElement | null)?.textContent ?? '';
+    expect(before).not.toContain('Offline');
+
+    vi.advanceTimersByTime(10_000);
+    fixture.detectChanges();
+
+    // Nach dem Timeout gilt der Server als nicht handlungsfähig.
+    expect(fixture.nativeElement.querySelector('.offline-banner')?.textContent).toContain(
+      'Offline – 1 Stempel wartet auf Übertragung',
+    );
+  });
+
+  it('stops the health poll and the running request when the page is destroyed', () => {
+    terminalIdValue = null;
+    // Jede Anfrage bekommt ein eigenes Subject, damit sich die des Workflows
+    // von der des Versions-Badges unterscheiden laesst.
+    healthSubjects = [];
+
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+
+    const pending = healthSubjects;
+    expect(pending.every((s) => s.observed)).toBe(true);
+
+    const component = fixture.componentInstance as unknown as { healthPollTimer: number | null };
+    const timerId = component.healthPollTimer;
+    expect(timerId).not.toBeNull();
+
+    const clearSpy = vi.spyOn(window, 'clearInterval');
+    fixture.destroy();
+
+    // Der Takt endet ...
+    expect(clearSpy).toHaveBeenCalledWith(timerId);
+    clearSpy.mockRestore();
+    // ... und die noch laufende Anfrage wird abgebrochen (Review-Befund Runde 2).
+    // Genau eine Abmeldung: das Versions-Badge haengt am Root-Injector und
+    // laeuft weiter, die Anfrage des Workflows darf es nicht.
+    expect(pending.filter((s) => !s.observed)).toHaveLength(1);
   });
 
   it('signs in OFFLINE with a PIN remembered from an earlier ONLINE login', async () => {

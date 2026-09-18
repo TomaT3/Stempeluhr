@@ -1,6 +1,6 @@
 import { Directive, OnDestroy, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
-import { Subscription } from 'rxjs';
+import { Subscription, timeout } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
 import { ClockStatus, Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
@@ -29,6 +29,13 @@ import { OfflineQueueService } from '../../core/services/offline-queue';
 const VERSION_RELOAD_DELAY_MS = 3000;
 
 const PIN_LENGTH = 4;
+/** Abstand des Erreichbarkeits-Polls auf Hosts ohne NFC-Poll (§ /clock). */
+const HEALTH_POLL_MS = 15_000;
+/**
+ * Obergrenze für einen Health-Versuch: ohne Timeout stapeln sich Anfragen,
+ * wenn der Server TCP annimmt, aber nie antwortet (Review-Befund W2).
+ */
+const HEALTH_TIMEOUT_MS = 10_000;
 
 @Directive()
 export abstract class ClockWorkflow implements OnDestroy {
@@ -48,6 +55,26 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** True while the backend cannot be reached; drives the offline banner. */
   readonly isOffline = signal(false);
+
+  /** Wartende Stempel - der Offline-Banner zeigt sie als Zähler (Issue #6). */
+  readonly pendingStamps = computed(() => this.offlineQueue.pendingCount().length);
+
+  /**
+   * Bannerzeile, solange Stempel auf die Übertragung warten. Der Banner hängt
+   * bewusst NICHT allein an `isOffline`: nimmt Kimai die Nachträge nicht an
+   * (die API puffert sie, die Events bleiben in der Queue), muss der Hinweis
+   * samt Zähler stehen bleiben, auch wenn die API selbst antwortet
+   * (Review-Befund W1). „Offline" steht nur davor, wenn es auch stimmt.
+   */
+  readonly waitingNotice = computed(() => {
+    const pending = this.pendingStamps();
+    if (pending === 0) {
+      return null;
+    }
+
+    const waiting = pending === 1 ? '1 Stempel wartet' : `${pending} Stempel warten`;
+    return this.isOffline() ? `Offline – ${waiting} auf Übertragung` : `${waiting} auf Übertragung`;
+  });
 
   /**
    * Stamps the server REFUSED during replay (wrong PIN, unknown employee, ...).
@@ -83,6 +110,13 @@ export abstract class ClockWorkflow implements OnDestroy {
   private nfcCardId: string | null = null;
   /** Unsubscribes the offline-queue recovery listener (see constructor). */
   private recoveryUnsubscribe: (() => void) | null = null;
+  /**
+   * Leichter Erreichbarkeits-Poll für Hosts OHNE terminalId (§ /clock, Issue
+   * #6): dort gibt es keinen NFC-Poll, der das Offline-Banner pflegt.
+   */
+  private healthPollTimer: number | null = null;
+  /** Laufende Health-Anfrage - wird beim Seitenende abgebrochen (Befund R2). */
+  private healthCheck: Subscription | null = null;
   /**
    * Set when an offline-stamped action deliberately skipped the reset to
    * the idle screen (unlocking again needs a PIN login, which is impossible
@@ -136,6 +170,13 @@ export abstract class ClockWorkflow implements OnDestroy {
     });
 
     if (!this.terminalId) {
+      // Ohne NFC-Poll (§ /clock) merkt die Seite einen Ausfall nur an einer
+      // fehlgeschlagenen Aktion - und nach einem Reload bliebe der wartende
+      // Stempel unsichtbar. Deshalb ein leichter Health-Poll (Issue #6): er
+      // setzt das Banner schon beim Laden und stoesst beim Zurueckkommen den
+      // Nachtrag an.
+      this.checkHealth();
+      this.healthPollTimer = window.setInterval(() => this.checkHealth(), HEALTH_POLL_MS);
       return;
     }
 
@@ -365,7 +406,38 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
   }
 
+  /**
+   * Fragt nur die Erreichbarkeit ab (/api/health) und pflegt daraus das
+   * Offline-Banner samt Wartezähler (Issue #6, nur auf Hosts ohne
+   * terminalId - der Kiosk hat dafür seinen NFC-Poll). Beim Zurückkommen
+   * wird der wartende Nachtrag sofort angestoßen.
+   */
+  private checkHealth(): void {
+    // Der Timeout (10 s) ist kuerzer als der Takt (15 s): mehr als eine
+    // gleichzeitige Anfrage kann dadurch nicht entstehen, ein eigener
+    // In-Flight-Guard waere toter Code (Review-Befund Runde 2).
+    this.healthCheck = this.kioskApi
+      .health()
+      .pipe(timeout(HEALTH_TIMEOUT_MS))
+      .subscribe({
+        next: () => {
+          const wasOffline = this.isOffline();
+          this.isOffline.set(false);
+          if (wasOffline) {
+            this.offlineQueue.syncNow().subscribe();
+          }
+        },
+        // Auch ein Timeout heißt: der Server ist gerade nicht handlungsfähig.
+        // Der Banner samt Wartezähler bleibt dann stehen.
+        error: () => this.isOffline.set(true),
+      });
+  }
+
   ngOnDestroy(): void {
+    if (this.healthPollTimer !== null) {
+      window.clearInterval(this.healthPollTimer);
+    }
+    this.healthCheck?.unsubscribe();
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
     }

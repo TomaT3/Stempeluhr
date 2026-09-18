@@ -266,6 +266,30 @@ bewusst keinen Bildschirm und keine Route dafuer. Die Details stehen bewusst
 nur am Kiosk; die Mitarbeiter-Seite `/clock` (auch auf persoenlichen Handys)
 zeigt nur die Anzahl.
 
+### Offline-Banner mit Wartezähler (Issue #6)
+
+Der Banner am Kiosk **und** auf `/clock` nennt die Stempel, die auf die
+Übertragung warten (`Offline – 2 Stempel warten auf Übertragung`, Einzahl:
+`1 Stempel wartet …`). Er hängt **nicht** allein an der Erreichbarkeit, sondern
+steht, solange etwas in der Queue liegt — nimmt Kimai die Nachträge nicht an
+(die API puffert sie), bliebe sonst genau der Hinweis weg, um den es geht.
+`Offline` steht davor, solange der Client den Server für nicht erreichbar hält —
+das setzt nicht nur der Health-Poll, sondern auch eine fehlgeschlagene Aktion
+(etwa die Offline-Anmeldung). Wartet etwas, während der Client den Server für
+erreichbar hält, lautet die Zeile `2 Stempel warten auf Übertragung`.
+Ohne wartende Stempel zeigt der Banner online gar nichts und offline den
+allgemeinen Text (kein „0 Stempel").
+
+Hosts **ohne** `terminalId` (`/clock`) haben keinen NFC-Poll, an dem sie den
+Ausfall merken — dort fragt ein leichter Health-Poll (`/api/health`, alle 15 s,
+Timeout 10 s) die Erreichbarkeit ab; der Timeout ist kürzer als der Takt, es
+läuft also nie mehr als eine Anfrage. Er setzt den Banner schon beim Laden
+(also auch für Stempel aus einer früheren
+Sitzung), löst beim Zurückkommen sofort den Nachtrag aus und verschwindet, sobald
+die Queue leer ist; beim Verlassen der Seite enden Takt und laufende Anfrage.
+Ein Timeout zählt als offline — ein Server, der TCP annimmt
+und nie antwortet, darf den Hinweis nicht verschlucken.
+
 Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff
 ohnehin durchprobierbar — der Verifier verhindert nur, dass PINs im Klartext
 im Browser liegen (der gequeute Stempel traegt die PIN weiterhin mit, siehe
