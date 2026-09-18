@@ -275,8 +275,8 @@ steht, solange etwas in der Queue liegt — nimmt Kimai die Nachträge nicht an
 (die API puffert sie), bliebe sonst genau der Hinweis weg, um den es geht.
 `Offline` steht davor, solange der Client den Server für nicht erreichbar hält —
 das setzt nicht nur der Health-Poll, sondern auch eine fehlgeschlagene Aktion
-(etwa die Offline-Anmeldung). Wartet etwas bei erreichbarer API, lautet die
-Zeile `2 Stempel warten auf Übertragung`.
+(etwa die Offline-Anmeldung). Wartet etwas, während der Client den Server für
+erreichbar hält, lautet die Zeile `2 Stempel warten auf Übertragung`.
 Ohne wartende Stempel zeigt der Banner online gar nichts und offline den
 allgemeinen Text (kein „0 Stempel").
 
