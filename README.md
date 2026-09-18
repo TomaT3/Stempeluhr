@@ -232,9 +232,10 @@ landet in der Offline-Queue und wird beim Nachtrag serverseitig geprueft
 (PIN bzw. Karten-ID muessen zum Mitarbeiter passen).
 
 Der angezeigte Status traegt seine Herkunft mit, damit ein Schaetzwert nicht
-wie eine Buchung aussieht:
+wie eine Buchung aussieht. Die Labels beschreiben die **Herkunft des Wertes**,
+nicht den Verbindungszustand — den meldet der Offline-Banner:
 
-- `Eingestempelt (offline, Stand 07:55)` — letzter ONLINE gesehener Status.
+- `Eingestempelt (zuletzt gesehen 07:55)` — letzter vom Server gemeldeter Stand.
 - `Eingestempelt (offline vorgemerkt)` — aus einem lokal vorgemerkten
   Offline-Stempel abgeleitet; die Stempel-Buttons folgen diesem Zustand, nach
   einem Offline-Einstempeln wird also Ausstempeln/Pause angeboten.
@@ -242,8 +243,12 @@ wie eine Buchung aussieht:
   Richtungen (Ein- und Ausstempeln) angeboten, statt „Nicht eingestempelt" zu
   behaupten; welcher Stempel richtig war, entscheidet der Nachtrag. Solange die
   API antwortet, steht dort nur `Status unbekannt` (die Serverantwort ist noch
-  unterwegs), und ein zwischengespeicherter Stand wird **nicht** angezeigt —
-  das Offline-Label gibt es nur, wenn der Kiosk wirklich offline ist.
+  unterwegs).
+
+Ein gemerkter Stand wird auch dann gezeigt, wenn die Serverantwort noch
+unterwegs ist — oder bei haengender Verbindung nie ankommt. Der Mitarbeiter
+steht damit nie vor einem schlechteren Stand als vor dem Ausfall; die
+Button-Auswahl folgt dem gemerkten Zustand.
 
 Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff
 ohnehin durchprobierbar — der Verifier verhindert nur, dass PINs im Klartext

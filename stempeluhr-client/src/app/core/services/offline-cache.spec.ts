@@ -181,8 +181,9 @@ describe('offline-cache', () => {
       const labelled = toOfflineStatus(entry!);
       expect(labelled.state).toBe('working');
       expect(labelled.stateText).toContain('Eingestempelt');
-      expect(labelled.stateText).toContain('offline');
-      expect(labelled.stateText).toContain(`Stand ${formatShortTime(entry!.observedAt)}`);
+      expect(labelled.stateText).toContain(`zuletzt gesehen ${formatShortTime(entry!.observedAt)}`);
+      // Herkunft, keine Verbindungsaussage: "offline" waere hier geraten.
+      expect(labelled.stateText).not.toContain('offline');
       expect(formatShortTime(new Date(2026, 8, 18, 7, 5).toISOString())).toBe('07:05');
     });
 

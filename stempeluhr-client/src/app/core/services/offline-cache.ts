@@ -298,7 +298,13 @@ export function formatShortTime(isoTimestamp: string): string {
 
 /**
  * Adds the label that says where a locally known status came from, so nobody
- * mistakes an estimate or a queued action for a completed booking.
+ * mistakes an estimate or a queued action for a confirmed booking.
+ *
+ * The label describes the ORIGIN of the value, never the connection state:
+ * whether the kiosk is online is the banner's business. A status the kiosk
+ * only remembers may be shown while the server's own answer is still on its
+ * way (or never arrives on a hung connection), and "offline" would then be a
+ * claim about the network that nobody verified.
  */
 export function withOfflineLabel(
   status: ClockStatus,
@@ -307,7 +313,7 @@ export function withOfflineLabel(
 ): ClockStatus {
   const label = origin === 'projected'
     ? 'offline vorgemerkt'
-    : `offline, Stand ${formatShortTime(observedAt)}`;
+    : `zuletzt gesehen ${formatShortTime(observedAt)}`;
 
   return { ...status, stateText: `${status.stateText} (${label})` };
 }

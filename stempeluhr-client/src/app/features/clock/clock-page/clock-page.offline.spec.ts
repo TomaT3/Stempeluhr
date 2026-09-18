@@ -726,7 +726,7 @@ describe('ClockPage offline behaviour', () => {
     fixture.detectChanges();
 
     expect(fixture.componentInstance.clockState.isWorking()).toBe(true);
-    expect(fixture.componentInstance.clockState.status()?.stateText).toContain('offline');
+    expect(fixture.componentInstance.clockState.status()?.stateText).toContain('zuletzt gesehen');
     // Already clocked in: the way OUT must be offered, never "Einstempeln" again.
     expect(fixture.nativeElement.querySelector('.stamp-button.pause')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.stamp-button.stop')).not.toBeNull();
@@ -753,7 +753,11 @@ describe('ClockPage offline behaviour', () => {
     expect(lastKnownStatus('max')?.origin).toBe('projected');
   });
 
-  it('does not show the cached offline estimate while the backend answers', () => {
+  it('shows the remembered status with a neutral label while the server answer is pending', () => {
+    // ONLINE cache hit: the employee is unlocked before the server's status
+    // answer arrives - and a hung connection may never deliver it. The kiosk
+    // then shows what it remembers, labelled as remembered rather than as
+    // "offline" (the banner owns that claim) or as confirmed.
     window.localStorage.setItem(
       'stempeluhr.employee-card-cache.v1',
       JSON.stringify({ '04ABCD': session.employee }),
@@ -767,14 +771,18 @@ describe('ClockPage offline behaviour', () => {
       stateText: 'Eingestempelt',
     });
     const fixture = createComponent();
-    // Backend reachable (polls keep succeeding): the server's own answer is
-    // still in flight, so the kiosk must wait instead of printing the local
-    // estimate - and especially not label it "offline".
+
     localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
     vi.advanceTimersByTime(1_000);
+    fixture.detectChanges();
 
     expect(fixture.componentInstance.isOffline()).toBe(false);
-    expect(fixture.componentInstance.clockState.status()).toBeNull();
+    expect(fixture.componentInstance.clockState.isWorking()).toBe(true);
+    const stateText = fixture.componentInstance.clockState.status()?.stateText ?? '';
+    expect(stateText).toContain('zuletzt gesehen');
+    expect(stateText).not.toContain('offline');
+    // Someone who is already clocked in gets the way out, not "Einstempeln".
+    expect(fixture.nativeElement.querySelector('.stamp-button.stop')).not.toBeNull();
   });
 
   it('remembers PIN and status of a successful ONLINE login for the next outage', async () => {

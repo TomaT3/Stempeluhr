@@ -529,11 +529,11 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (status) {
       this.applyObservedStatus(employee.id, status);
     } else {
-      // The local estimate is only shown - and only labelled - while the
-      // kiosk really is offline. Online the server answers on its own
-      // (pin-login / identify), and a status labelled "offline" with the
-      // banner off would be a lie.
-      const cached = this.isOffline() ? lastKnownStatus(employee.id) : null;
+      // The remembered status is shown while the server's own answer is still
+      // on its way - including the case where a hung connection never answers
+      // it. The label ("zuletzt gesehen …" / "offline vorgemerkt") keeps the
+      // origin visible, so nobody mistakes it for a confirmed booking.
+      const cached = lastKnownStatus(employee.id);
       if (cached) {
         this.clockState.setStatus(toOfflineStatus(cached));
       } else {
