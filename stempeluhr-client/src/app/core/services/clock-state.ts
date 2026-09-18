@@ -1,6 +1,48 @@
 import { computed, Injectable, signal } from '@angular/core';
 
-import { ClockStatus } from '../models/kiosk.models';
+import { ClockAction, ClockStatus } from '../models/kiosk.models';
+
+/**
+ * State a locally queued OFFLINE action leads to. The wording mirrors the
+ * server's own stateText values (ClockService) so the kiosk does not switch
+ * vocabulary between online and offline.
+ */
+export function projectClockStatus(
+  current: ClockStatus | null,
+  action: ClockAction,
+  performedAt: string,
+): ClockStatus {
+  switch (action) {
+    case 'start':
+    case 'pauseEnd':
+      return {
+        isRunning: true,
+        activeTimesheetId: current?.activeTimesheetId ?? null,
+        startedAt: performedAt,
+        durationSeconds: 0,
+        state: 'working',
+        stateText: 'Eingestempelt',
+      };
+    case 'pauseStart':
+      return {
+        isRunning: true,
+        activeTimesheetId: current?.activeTimesheetId ?? null,
+        startedAt: performedAt,
+        durationSeconds: 0,
+        state: 'paused',
+        stateText: 'In Pause',
+      };
+    case 'stop':
+      return {
+        isRunning: false,
+        activeTimesheetId: null,
+        startedAt: null,
+        durationSeconds: 0,
+        state: 'clockedOut',
+        stateText: 'Ausgestempelt',
+      };
+  }
+}
 
 @Injectable({
   providedIn: 'root',

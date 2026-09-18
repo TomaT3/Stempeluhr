@@ -212,6 +212,51 @@ LAN-Nutzung). Gegen gezieltes PIN-Raten an einem einzelnen Konto ist ein
 Fehlversuch-Backoff vorgesehen (Issue #8); die sauberste Loesung bleibt die
 Terminal-Token-Auth (Issue #7).
 
+### Offline am Kiosk: Anmeldung und Statusanzeige
+
+Ist die API (oder Kimai) nicht erreichbar, arbeitet der Kiosk aus drei lokalen
+Zwischenspeichern im Browser (`localStorage`) weiter:
+
+- **Karten-Katalog** (`stempeluhr.employee-card-cache.v1`): Karten-ID →
+  Mitarbeiter, gefuellt aus frueheren Online-Scans. Ein Scan am Pi meldet den
+  Mitarbeiter damit auch offline an.
+- **PIN-Verifier** (`stempeluhr.employee-pin-cache.v1`): Von jeder PIN, die
+  sich ONLINE erfolgreich angemeldet hat, merkt sich der Kiosk einen
+  gesalzenen SHA-256-Wert. Offline prueft er die eingegebene PIN dagegen und
+  meldet den Mitarbeiter an.
+- **Status** (`stempeluhr.employee-status-cache.v1`): der zuletzt bekannte
+  Stempel-Status je Mitarbeiter.
+
+Der Offline-Pfad **meldet nur an**, er stempelt nicht selbst: Jeder Stempel
+landet in der Offline-Queue und wird beim Nachtrag serverseitig geprueft
+(PIN bzw. Karten-ID muessen zum Mitarbeiter passen).
+
+Der angezeigte Status traegt seine Herkunft mit, damit ein Schaetzwert nicht
+wie eine Buchung aussieht. Die Labels beschreiben die **Herkunft des Wertes**,
+nicht den Verbindungszustand — den meldet der Offline-Banner:
+
+- `Eingestempelt (zuletzt gesehen 07:55)` — letzter vom Server gemeldeter Stand.
+- `Eingestempelt (offline vorgemerkt)` — aus einem lokal vorgemerkten
+  Offline-Stempel abgeleitet; die Stempel-Buttons folgen diesem Zustand, nach
+  einem Offline-Einstempeln wird also Ausstempeln/Pause angeboten.
+- `Status unbekannt (offline)` — es ist nichts bekannt. Dann werden **beide**
+  Richtungen (Ein- und Ausstempeln) angeboten, statt „Nicht eingestempelt" zu
+  behaupten; welcher Stempel richtig war, entscheidet der Nachtrag. Solange die
+  API antwortet, steht dort nur `Status unbekannt` (die Serverantwort ist noch
+  unterwegs).
+
+Ein gemerkter Stand wird auch dann gezeigt, wenn die Serverantwort noch
+unterwegs ist — oder bei haengender Verbindung nie ankommt. Der Mitarbeiter
+steht damit nie vor einem schlechteren Stand als vor dem Ausfall; die
+Button-Auswahl folgt dem gemerkten Zustand.
+
+Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff
+ohnehin durchprobierbar — der Verifier verhindert nur, dass PINs im Klartext
+im Browser liegen (der gequeute Stempel traegt die PIN weiterhin mit, siehe
+Sicherheitshinweis oben). Lehnt der Server eine PIN ab, loescht der Kiosk den
+gespeicherten Verifier sofort; eine OFFLINE gedrehte PIN kann den Kiosk also
+weiterhin entsperren, die Stempel werden beim Nachtrag dann abgelehnt.
+
 ## Telegram-Benachrichtigung bei Stempelungen
 
 Optional kann die API bei jedem **echten** Stempel-Übergang eine

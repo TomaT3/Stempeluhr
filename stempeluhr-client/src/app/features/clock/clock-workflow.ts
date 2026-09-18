@@ -6,42 +6,28 @@ import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
 import { ClockStatus, Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
-import { ClockState } from '../../core/services/clock-state';
+import { ClockState, projectClockStatus } from '../../core/services/clock-state';
 import { KioskApi } from '../../core/services/kiosk-api';
 import { LocalNfcScanService } from '../../core/services/local-nfc-scan.service';
+import {
+  forgetEmployeePin,
+  lastKnownStatus,
+  normalizeCardId,
+  rememberEmployeeCard,
+  rememberEmployeePin,
+  rememberObservedStatus,
+  rememberProjectedStatus,
+  resolveEmployeeByCard,
+  resolveEmployeeByPin,
+  toOfflineStatus,
+  withOfflineLabel,
+} from '../../core/services/offline-cache';
 import { OfflineQueueService } from '../../core/services/offline-queue';
 
 /** Wartezeit zwischen Versions-Hinweis und Auto-Reload (Mitarbeiter kann abbrechen). */
 const VERSION_RELOAD_DELAY_MS = 3000;
 
 const PIN_LENGTH = 4;
-/**
- * localStorage key for the last known cardId -> employee mapping.
- *
- * Known limitation: entries are ONLY overwritten by NEW online NFC events
- * (`cacheEmployeeCard`). Revoking a card assignment on the server does NOT
- * proactively invalidate the cached entry, so a revoked card may still
- * unlock its former employee while offline. Risk is bounded: the offline
- * path only IDENTIFIES the employee (no stamping), and every queued event
- * is re-validated server-side during replay - the server then rejects
- * events for the revoked card/employee.
- */
-const EMPLOYEE_CARD_CACHE_KEY = 'stempeluhr.employee-card-cache.v1';
-
-/** Normalizes card ids the same way the admin page does (hex, uppercase). */
-function normalizeCardId(cardId: string | null | undefined): string | null {
-  const normalized = cardId?.replace(/[^0-9a-f]/gi, '').toUpperCase() ?? '';
-  return normalized.length > 0 ? normalized : null;
-}
-
-function readEmployeeCardCache(): Record<string, Employee> {
-  try {
-    const raw = window.localStorage.getItem(EMPLOYEE_CARD_CACHE_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, Employee>) : {};
-  } catch {
-    return {};
-  }
-}
 
 @Directive()
 export abstract class ClockWorkflow implements OnDestroy {
@@ -233,12 +219,13 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
 
+    const pin = this.pin();
     this.isBusy.set(true);
     this.message.set('');
     // Neuer Login: nie kurz die Stunden des Vorgängers stehen lassen
     // (in-flight Responses werden zusätzlich per PIN-Guard verworfen).
     this.hoursOverview.set(null);
-    this.kioskApi.pinLogin(this.pin()).subscribe({
+    this.kioskApi.pinLogin(pin).subscribe({
       next: session => {
         this.selectedEmployee.set(session.employee);
         this.clockState.setStatus(session.status);
@@ -247,22 +234,65 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.nfcCardId = null;
         this.message.set('');
         this.isBusy.set(false);
-        this.loadHoursOverview(this.pin());
+        // PIN und Status für den nächsten Ausfall merken: der Kiosk kann sich
+        // dann offline anmelden und den plausiblen Stempel-Button anbieten.
+        rememberObservedStatus(session.employee.id, session.status);
+        void rememberEmployeePin(pin, session.employee);
+        this.loadHoursOverview(pin);
       },
       error: (err) => {
         const status = err?.status ?? 0;
-        // Network/server errors mean the PIN could NOT be checked -
-        // claiming "PIN nicht gefunden" would be wrong and would lock
-        // colleagues out of the terminal for the rest of an outage.
-        this.message.set(status === 0 || status >= 500
-          ? 'Offline - PIN kann derzeit nicht geprueft werden.'
-          : 'PIN nicht gefunden');
+        // Network/server errors mean the PIN could NOT be checked - claiming
+        // "PIN nicht gefunden" would be wrong and would lock colleagues out
+        // of the terminal for the rest of an outage. Fall back to the locally
+        // cached verifier instead of refusing the login outright.
+        if (status === 0 || status >= 500) {
+          void this.confirmPinOffline(pin);
+          return;
+        }
+
+        // The server rejected this PIN: any cached verifier for it is stale
+        // (PIN rotated) and would keep unlocking the kiosk offline while every
+        // queued stamp is rejected during replay.
+        void forgetEmployeePin(pin);
+        this.message.set('PIN nicht gefunden');
         this.pin.set('');
         this.isUnlocked.set(false);
         this.isBusy.set(false);
         this.audioFeedback.playBeeps(2);
       },
     });
+  }
+
+  /**
+   * Second half of an offline PIN login: the backend could not check the PIN,
+   * so resolve it against the verifier cache built from earlier ONLINE logins.
+   * The offline path only UNLOCKS - the PIN itself travels with every queued
+   * stamp and is validated server-side during replay.
+   */
+  private async confirmPinOffline(pin: string): Promise<void> {
+    const employee = await resolveEmployeeByPin(pin);
+    // Der Mitarbeiter kann während des Hashings abgebrochen haben oder eine
+    // andere PIN eingegeben haben - dann gehört ihm das Ergebnis nicht.
+    if (this.pin() !== pin) {
+      this.isBusy.set(false);
+      return;
+    }
+
+    if (!employee) {
+      this.message.set('Offline - PIN kann derzeit nicht geprueft werden.');
+      this.pin.set('');
+      this.isUnlocked.set(false);
+      this.isBusy.set(false);
+      this.audioFeedback.playBeeps(2);
+      return;
+    }
+
+    this.isOffline.set(true);
+    this.applyOfflineIdentity(employee, null, pin);
+    this.message.set('Offline - mit gemerkter PIN angemeldet.');
+    this.isBusy.set(false);
+    this.audioFeedback.playBeeps(1);
   }
 
   start(): void {
@@ -422,22 +452,24 @@ export abstract class ClockWorkflow implements OnDestroy {
     // to the unnormalized raw value (which would bypass the hex/uppercase
     // convention shared with the admin page and the cached keys).
     const normalized = normalizeCardId(cardId);
-    const employee = normalized ? readEmployeeCardCache()[normalized] ?? null : null;
+    const employee = resolveEmployeeByCard(cardId);
     // Consume the scan in every case so the agent does not re-report it.
     this.localNfcScan.ack().subscribe();
 
-    if (employee && normalized) {
-      this.applyLocalEmployee(employee, normalized);
+    if (employee) {
+      this.applyOfflineIdentity(employee, normalized ?? cardId, null);
+      this.message.set(`${employee.displayName} - bitte Aktion waehlen.`);
+      this.audioFeedback.playBeeps(1);
       // Seit der Local-Poll IMMER läuft, trifft der Cache-Pfad auch online
       // zu - dort ist die API erreichbar, also den frischen Status still
-      // nachladen (der Cache kennt keinen). Fehler (429, Netz) ignorieren:
-      // der Employee ist bereits freigeschaltet, der Status kommt mit der
-      // ersten Aktion.
+      // nachladen (der Cache kennt nur den letzten Stand). Fehler (429, Netz)
+      // ignorieren: der Employee ist bereits freigeschaltet, der Status kommt
+      // mit der ersten Aktion.
       if (!this.isOffline()) {
-        this.kioskApi.identify(normalized, this.terminalId ?? 'default').subscribe({
+        this.kioskApi.identify(normalized ?? cardId, this.terminalId ?? 'default').subscribe({
           next: event => {
             if (event.success && event.status) {
-              this.clockState.setStatus(event.status);
+              this.applyObservedStatus(event.employee?.id ?? employee.id, event.status);
             }
           },
           error: () => {},
@@ -461,8 +493,10 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.kioskApi.identify(identifyCardId, this.terminalId ?? 'default').subscribe({
       next: event => {
         if (event.success && event.employee) {
-          this.cacheEmployeeCard(event.cardId, event.employee);
-          this.applyLocalEmployee(event.employee, event.cardId ?? identifyCardId, event.status);
+          rememberEmployeeCard(event.cardId ?? identifyCardId, event.employee);
+          this.applyOfflineIdentity(event.employee, event.cardId ?? identifyCardId, null, event.status);
+          this.message.set(`${event.employee.displayName} - bitte Aktion waehlen.`);
+          this.audioFeedback.playBeeps(1);
         } else {
           this.message.set(event.message || 'Unbekannte Karte');
           this.audioFeedback.playBeeps(2);
@@ -476,49 +510,54 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   /**
-   * Unlocks the kiosk for an employee identified by a LOCAL scan. Offline the
-   * current clock status is unknown - do not fake one; the status shown
-   * updates as soon as the first queued action is stamped and later
-   * synced/replayed. Online (API identify) the fresh status is applied.
+   * Unlocks the kiosk for an employee identified WITHOUT the backend (local
+   * agent scan or cached PIN).
+   *
+   * `status` is the server's answer when this runs ONLINE; without it the
+   * kiosk falls back to the last status it ever saw for this employee, marked
+   * as an offline estimate. Knowing nothing at all is a valid outcome (the UI
+   * then offers BOTH directions) - never fake "Nicht eingestempelt".
    */
-  private applyLocalEmployee(employee: Employee, cardId: string, status?: ClockStatus | null): void {
+  private applyOfflineIdentity(
+    employee: Employee,
+    cardId: string | null,
+    pin: string | null,
+    status?: ClockStatus | null,
+  ): void {
     this.selectedEmployee.set(employee);
     this.clockState.setEmployeeMode(true);
     if (status) {
-      this.clockState.setStatus(status);
+      this.applyObservedStatus(employee.id, status);
+    } else {
+      // The remembered status is shown while the server's own answer is still
+      // on its way - including the case where a hung connection never answers
+      // it. The label ("zuletzt gesehen …" / "offline vorgemerkt") keeps the
+      // origin visible, so nobody mistakes it for a confirmed booking.
+      const cached = lastKnownStatus(employee.id);
+      if (cached) {
+        this.clockState.setStatus(toOfflineStatus(cached));
+      } else {
+        // Unknown status: drop the previous employee's state instead of
+        // showing a foreign (or invented) one.
+        this.clockState.clear();
+      }
     }
+
     this.isUnlocked.set(true);
-    this.pin.set('');
+    // Card sessions stay pin-less (the replay resolves them via the card),
+    // a cached-PIN session keeps its PIN so the queued event can be
+    // re-validated server-side.
+    this.pin.set(pin ?? '');
+    this.nfcCardId = cardId;
     // Card login is also an identity switch: never keep the hours of a
     // previous employee (privacy) - and without a pin no reload happens.
     this.hoursOverview.set(null);
-    this.nfcCardId = cardId;
-    this.message.set(`${employee.displayName} - bitte Aktion waehlen.`);
-    this.audioFeedback.playBeeps(1);
   }
 
-  /** Remembers a card -> employee pair seen while ONLINE for later offline use. */
-  private cacheEmployeeCard(cardId: string | null, employee: Employee): void {
-    const normalized = normalizeCardId(cardId);
-    if (!normalized) {
-      return;
-    }
-
-    try {
-      const cache = readEmployeeCardCache();
-      const existing = cache[normalized];
-      if (existing?.id === employee.id
-        && existing.displayName === employee.displayName
-        && existing.initials === employee.initials) {
-        return;
-      }
-
-      cache[normalized] = employee;
-      window.localStorage.setItem(EMPLOYEE_CARD_CACHE_KEY, JSON.stringify(cache));
-    } catch {
-      // Storage full/unavailable: offline identification then simply stays
-      // limited to what is still readable from the cache.
-    }
+  /** Applies a status the SERVER reported and remembers it for the next outage. */
+  private applyObservedStatus(employeeId: string, status: ClockStatus): void {
+    this.clockState.setStatus(status);
+    rememberObservedStatus(employeeId, status);
   }
 
   private handleLatestNfcEvent(event: NfcClockEvent | null): void {
@@ -537,9 +576,9 @@ export abstract class ClockWorkflow implements OnDestroy {
       // Remember the card -> employee pair so a later OFFLINE scan of the
       // same card can still be identified (the backend does that mapping
       // online, but is unreachable then).
-      this.cacheEmployeeCard(event.cardId, event.employee);
+      rememberEmployeeCard(event.cardId, event.employee);
       this.selectedEmployee.set(event.employee);
-      this.clockState.setStatus(event.status);
+      this.applyObservedStatus(event.employee.id, event.status);
       this.clockState.setEmployeeMode(true);
       this.isUnlocked.set(true);
       this.pin.set('');
@@ -580,6 +619,9 @@ export abstract class ClockWorkflow implements OnDestroy {
       next: status => {
         this.isOffline.set(false);
         this.clockState.setStatus(status);
+        if (employeeId) {
+          rememberObservedStatus(employeeId, status);
+        }
         this.message.set(status.stateText);
         this.isBusy.set(false);
         this.audioFeedback.playBeeps(1);
@@ -605,6 +647,15 @@ export abstract class ClockWorkflow implements OnDestroy {
             nfcCardId,
           });
           this.isOffline.set(true);
+          // Show where this action leaves the employee instead of keeping the
+          // pre-action status on screen: after an offline Einstempeln the
+          // kiosk then offers Pause/Ausstempeln instead of another
+          // Einstempeln (which would queue a second, redundant start).
+          const projected = projectClockStatus(this.clockState.status(), action, performedAt);
+          this.clockState.setStatus(withOfflineLabel(projected, 'projected', performedAt));
+          if (employeeId) {
+            rememberProjectedStatus(employeeId, projected);
+          }
           // Let the next successful NFC poll catch the queue up immediately.
           this.pendingRecoveryFlush = true;
           this.message.set(
