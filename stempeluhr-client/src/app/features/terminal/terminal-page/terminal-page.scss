@@ -318,6 +318,47 @@ p {
   text-align: center;
 }
 
+/* Abgelehnte Offline-Stempel (Issue #34): absolut positioniert, damit auf
+   800x480 nichts verdrängt wird (der Kiosk darf nicht scrollen). Unten links,
+   rechts bleibt Platz für das Versions-Badge. */
+.rejected-notice {
+  position: fixed;
+  bottom: 4px;
+  left: 8px;
+  /* Unten rechts sitzt das Versions-Badge: nicht überlappen, sondern vorher
+     umbrechen (2 Zeilen passen zwischen Tastenfeld und Bildschirmrand). */
+  max-width: 60%;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 4px 10px;
+  border: 1px solid #d8b4a6;
+  border-radius: var(--radius);
+  background: #fdf3ef;
+  box-shadow: 0 6px 16px rgba(24, 39, 75, 0.18);
+  color: #8a3a2f;
+  font-size: clamp(0.72rem, 1.5vw, 0.85rem);
+  line-height: 1.15;
+}
+
+.rejected-text {
+  overflow-wrap: anywhere;
+}
+
+.rejected-dismiss {
+  flex: none;
+  padding: 2px 10px;
+  border: 1px solid #8a3a2f;
+  border-radius: 999px;
+  background: transparent;
+  color: #8a3a2f;
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+}
+
 /* Stundenübersicht als Band unter den drei Spalten: die Stempel-Buttons
    (rechte Spalte) bleiben dadurch auf ihrer Position sichtbar. */
 app-hours-overview-card {

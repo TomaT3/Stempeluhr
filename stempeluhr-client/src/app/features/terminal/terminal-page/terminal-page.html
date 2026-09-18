@@ -117,4 +117,22 @@
   }
 </section>
 
+<!-- Vom Server abgelehnte Offline-Stempel (Issue #34): die Zeit fehlt in Kimai,
+     bis sie jemand nachtraegt. Absolut positioniert, damit sie auf dem 800x480er
+     Kiosk nichts verdrängt; bewusst auf dem Idle-Screen, damit es der naechste
+     Mitarbeiter bzw. der Admin sieht (waehrend einer Sitzung wuerde sie die
+     Stundenkarte überdecken). -->
+@if (!selectedEmployee()) {
+  @if (latestRejectedStamp(); as stamp) {
+    <div class="rejected-notice" role="alert">
+      <span class="rejected-text">
+        {{ rejectedStamps().length }} Offline-Stempel nicht nachgetragen –
+        {{ stamp.performedAt | date: 'dd.MM. HH:mm' }} · {{ stamp.employeeName || 'unbekannt' }} ·
+        {{ rejectedActionLabel(stamp.action) }} · {{ stamp.message }}
+      </span>
+      <button type="button" class="rejected-dismiss" (click)="dismissRejectedStamps()">Erledigt</button>
+    </div>
+  }
+}
+
 <app-version-badge />

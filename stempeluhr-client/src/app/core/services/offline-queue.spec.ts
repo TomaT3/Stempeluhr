@@ -191,6 +191,117 @@ describe('OfflineQueueService sync batching', () => {
     expect(service.pendingCount().length).toBe(0);
   });
 
+  describe('refused stamps (issue #34)', () => {
+    const rejectedStorageKey = 'stempeluhr.offline-rejected.v1';
+
+    function flushRejected(events: OfflineKioskClockEvent[], message = 'Mitarbeiter nicht gefunden oder PIN falsch.') {
+      service.syncNow().subscribe();
+      httpMock.expectOne(kioskEndpoint).flush({
+        accepted: 0,
+        duplicates: 0,
+        buffered: 0,
+        results: events.map(event => ({ eventId: event.eventId, status: 'rejected', message })),
+      });
+    }
+
+    it('records a refused stamp with the name, time and reason to repair it', async () => {
+      const event: OfflineKioskClockEvent = {
+        ...kioskEvent('k1'),
+        performedAt: '2026-09-18T05:55:00Z',
+        employeeName: 'Max Mustermann',
+      };
+      service.enqueueKiosk(event);
+
+      flushRejected([event]);
+      await drainMicrotasks();
+
+      expect(service.rejected()).toHaveLength(1);
+      expect(service.rejected()[0]).toMatchObject({
+        eventId: 'k1',
+        employeeId: 'max',
+        employeeName: 'Max Mustermann',
+        performedAt: '2026-09-18T05:55:00Z',
+        action: 'start',
+        message: 'Mitarbeiter nicht gefunden oder PIN falsch.',
+      });
+      // Survives a kiosk reload: that record is the only trace left.
+      expect(JSON.parse(window.localStorage.getItem(rejectedStorageKey) ?? '[]')).toHaveLength(1);
+      // The stamp itself is gone from the queue, exactly as before.
+      expect(service.pendingCount().length).toBe(0);
+    });
+
+    it('records nothing for applied, duplicate and buffered stamps', async () => {
+      const events = [kioskEvent('ok1'), kioskEvent('ok2'), kioskEvent('ok3')];
+      events.forEach(event => service.enqueueKiosk(event));
+
+      service.syncNow().subscribe();
+      httpMock.expectOne(kioskEndpoint).flush({
+        accepted: 1,
+        duplicates: 1,
+        buffered: 1,
+        results: [
+          { eventId: 'ok1', status: 'applied' },
+          { eventId: 'ok2', status: 'duplicate' },
+          { eventId: 'ok3', status: 'buffered' },
+        ],
+      });
+      await drainMicrotasks();
+
+      expect(service.rejected()).toHaveLength(0);
+      expect(window.localStorage.getItem(rejectedStorageKey) ?? '[]').toBe('[]');
+    });
+
+    it('keeps only the newest records when many stamps are refused', async () => {
+      const events = Array.from({ length: 25 }, (_, index) => kioskEvent(`r${index}`));
+      events.forEach(event => service.enqueueKiosk(event));
+
+      flushRejected(events);
+      await drainMicrotasks();
+
+      const rejected = service.rejected();
+      expect(rejected).toHaveLength(20);
+      // The oldest five fell out, the newest one is there.
+      expect(rejected[0].eventId).toBe('r5');
+      expect(rejected.at(-1)?.eventId).toBe('r24');
+    });
+
+    it('clears the records once somebody dealt with them', async () => {
+      const event = kioskEvent('k1');
+      service.enqueueKiosk(event);
+      flushRejected([event]);
+      await drainMicrotasks();
+      expect(service.rejected()).toHaveLength(1);
+
+      service.clearRejected();
+
+      expect(service.rejected()).toHaveLength(0);
+      expect(window.localStorage.getItem(rejectedStorageKey) ?? '[]').toBe('[]');
+    });
+
+    it('reads back records left over from an earlier kiosk session', () => {
+      window.localStorage.setItem(rejectedStorageKey, JSON.stringify([
+        {
+          eventId: 'alt',
+          employeeId: 'max',
+          employeeName: 'Max Mustermann',
+          performedAt: '2026-09-17T05:55:00Z',
+          rejectedAt: '2026-09-17T09:00:00Z',
+          message: 'Mitarbeiter nicht gefunden oder PIN falsch.',
+          action: 'start',
+        },
+        { nicht: 'brauchbar' },
+      ]));
+
+      // A fresh injector: the kiosk was reloaded, only localStorage survived.
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+      const fresh = TestBed.inject(OfflineQueueService);
+
+      expect(fresh.rejected()).toHaveLength(1);
+      expect(fresh.rejected()[0].employeeName).toBe('Max Mustermann');
+    });
+  });
+
   it('skips a second syncNow() while a flush is in flight (in-flight guard)', async () => {
     service.enqueueKiosk(kioskEvent('g1'));
     service.enqueueKiosk(kioskEvent('g2'));

@@ -1,8 +1,10 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
+import { signal } from '@angular/core';
 import { Subject, of, throwError } from 'rxjs';
 
 import { ClockStatus, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../../../core/models/kiosk.models';
+import { RejectedOfflineStamp } from '../../../core/models/offline.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
@@ -18,6 +20,8 @@ describe('ClockPage offline behaviour', () => {
   let recovered$: Subject<void>;
   let terminalIdValue: string | null;
   let enqueueKiosk: ReturnType<typeof vi.fn>;
+  let clearRejected: ReturnType<typeof vi.fn>;
+  let rejectedStamps: ReturnType<typeof signal<RejectedOfflineStamp[]>>;
   let playBeeps: ReturnType<typeof vi.fn>;
   let localAck: ReturnType<typeof vi.fn>;
   let localScanValue: LocalNfcScan | null;
@@ -54,6 +58,8 @@ describe('ClockPage offline behaviour', () => {
     recovered$ = new Subject<void>();
     terminalIdValue = 'term-1';
     enqueueKiosk = vi.fn();
+    clearRejected = vi.fn();
+    rejectedStamps = signal<RejectedOfflineStamp[]>([]);
     playBeeps = vi.fn();
     localAck = vi.fn(() => of(null));
     localScanValue = null;
@@ -87,7 +93,13 @@ describe('ClockPage offline behaviour', () => {
         },
         {
           provide: OfflineQueueService,
-          useValue: { enqueueKiosk, syncNow: vi.fn(() => of([])), recovered: recovered$.asObservable() },
+          useValue: {
+            enqueueKiosk,
+            syncNow: vi.fn(() => of([])),
+            recovered: recovered$.asObservable(),
+            rejected: rejectedStamps.asReadonly(),
+            clearRejected,
+          },
         },
         {
           provide: ActivatedRoute,
@@ -642,6 +654,29 @@ describe('ClockPage offline behaviour', () => {
     expect(fixture.nativeElement.textContent).toContain('Status unbekannt');
     expect(fixture.nativeElement.textContent).not.toContain('(offline)');
     expect(fixture.nativeElement.textContent).not.toContain('Offline – kein Status bekannt');
+  });
+
+  it('warns about refused offline stamps on the clock page WITHOUT naming colleagues', () => {
+    // /clock also runs on personal phones: the notice says that something is
+    // wrong, but not whose stamp it was (that stays on the kiosk, issue #34).
+    rejectedStamps.set([{
+      eventId: 'r1',
+      employeeId: 'max',
+      employeeName: 'Max Mustermann',
+      performedAt: '2026-09-18T05:55:00Z',
+      rejectedAt: '2026-09-18T09:00:00Z',
+      message: 'Mitarbeiter nicht gefunden oder PIN falsch.',
+      action: 'start',
+    }]);
+    const fixture = createComponent();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('1 Offline-Stempel wurde nicht nachgetragen');
+    expect(text).not.toContain('Max Mustermann');
+
+    (fixture.nativeElement.querySelector('p[role="alert"] button') as HTMLButtonElement).click();
+    expect(clearRejected).toHaveBeenCalledTimes(1);
   });
 
   it('signs in OFFLINE with a PIN remembered from an earlier ONLINE login', async () => {

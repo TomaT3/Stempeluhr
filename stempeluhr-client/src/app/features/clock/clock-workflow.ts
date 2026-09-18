@@ -1,9 +1,10 @@
-import { Directive, OnDestroy, inject, signal } from '@angular/core';
+import { Directive, OnDestroy, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { Subscription } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
 import { ClockStatus, Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
+import { RejectedOfflineStamp } from '../../core/models/offline.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState, projectClockStatus } from '../../core/services/clock-state';
@@ -47,6 +48,17 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** True while the backend cannot be reached; drives the offline banner. */
   readonly isOffline = signal(false);
+
+  /**
+   * Stamps the server REFUSED during replay (wrong PIN, unknown employee, ...).
+   * They are gone from the queue: the time is missing until somebody repairs it
+   * in Kimai, so the kiosk has to say so instead of losing it silently
+   * (issue #34).
+   */
+  readonly rejectedStamps = this.offlineQueue.rejected;
+
+  /** Neuester abgelehnter Stempel - das ist der, den der Hinweis zeigt. */
+  readonly latestRejectedStamp = computed(() => this.rejectedStamps().at(-1) ?? null);
 
   /** Stundenübersicht des angemeldeten Mitarbeiters (Heute/Woche/Monat, Netto). */
   readonly hoursOverview = signal<HoursOverview | null>(null);
@@ -327,6 +339,30 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.isBusy.set(false);
     this.hoursOverview.set(null);
     this.pendingResetOnRecovery = false;
+  }
+
+  /**
+   * Marks the refused stamps as dealt with. Whoever repaired the missing time
+   * in Kimai presses this - without it the notice would nag forever.
+   */
+  dismissRejectedStamps(): void {
+    this.offlineQueue.clearRejected();
+  }
+
+  /** Action wording for the notice about refused stamps. */
+  protected rejectedActionLabel(action: RejectedOfflineStamp['action']): string {
+    switch (action) {
+      case 'start':
+        return 'Einstempeln';
+      case 'stop':
+        return 'Ausstempeln';
+      case 'pauseStart':
+        return 'Pausenbeginn';
+      case 'pauseEnd':
+        return 'Pausenende';
+      default:
+        return 'Stempel';
+    }
   }
 
   ngOnDestroy(): void {
@@ -613,6 +649,9 @@ export abstract class ClockWorkflow implements OnDestroy {
     // acted WHEN, so freeze both at press time.
     const performedAt = new Date().toISOString();
     const employeeId = this.selectedEmployee()?.id ?? '';
+    // Only for the notice about refused stamps (issue #34): the person has to
+    // be named so somebody can repair the missing time in Kimai.
+    const employeeName = this.selectedEmployee()?.displayName ?? '';
     const pin = this.pin();
     const nfcCardId = this.nfcCardId;
     this.kioskApi.clock(employeeId, pin, action, nfcCardId).subscribe({
@@ -645,6 +684,7 @@ export abstract class ClockWorkflow implements OnDestroy {
             // Live-path parity: a session unlocked by NFC touch has NO pin -
             // the replay resolves the employee via the card instead.
             nfcCardId,
+            employeeName,
           });
           this.isOffline.set(true);
           // Show where this action leaves the employee instead of keeping the
