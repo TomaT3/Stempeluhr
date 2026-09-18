@@ -221,6 +221,22 @@ describe('TerminalPage', () => {
     expect(banner.textContent).toContain('1 Stempel wartet auf Übertragung');
   });
 
+  it('shows waiting stamps on an ONLINE kiosk too (live stamp ok, buffered event left)', () => {
+    // Der Kiosk ist erreichbar, in der Queue liegt aber noch etwas - genau der
+    // Fall, in dem isOffline schon false ist und der Hinweis sonst verschwaende
+    // (Review-Befund Runde 2).
+    pendingQueue.set([{}]);
+    const fixture = TestBed.createComponent(TerminalPage);
+    vi.advanceTimersByTime(1_000);
+    fixture.detectChanges();
+
+    const banner = fixture.nativeElement.querySelector('.offline-banner') as HTMLElement;
+    expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('1 Stempel wartet auf Übertragung');
+    // Online ist "Offline" die falsche Beschriftung.
+    expect(banner.textContent).not.toContain('Offline');
+  });
+
   it('offers Ausstempeln right after an OFFLINE Einstempeln', () => {
     window.localStorage.setItem(
       'stempeluhr.employee-card-cache.v1',

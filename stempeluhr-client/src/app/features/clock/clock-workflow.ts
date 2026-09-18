@@ -1,6 +1,6 @@
 import { Directive, OnDestroy, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
-import { Subscription, finalize, timeout } from 'rxjs';
+import { Subscription, timeout } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
 import { ClockStatus, Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
@@ -115,8 +115,8 @@ export abstract class ClockWorkflow implements OnDestroy {
    * #6): dort gibt es keinen NFC-Poll, der das Offline-Banner pflegt.
    */
   private healthPollTimer: number | null = null;
-  /** True, solange ein Health-Versuch laeuft (verhindert Anfragen-Stapel). */
-  private healthCheckInFlight = false;
+  /** Laufende Health-Anfrage - wird beim Seitenende abgebrochen (Befund R2). */
+  private healthCheck: Subscription | null = null;
   /**
    * Set when an offline-stamped action deliberately skipped the reset to
    * the idle screen (unlocking again needs a PIN login, which is impossible
@@ -413,21 +413,12 @@ export abstract class ClockWorkflow implements OnDestroy {
    * wird der wartende Nachtrag sofort angestoßen.
    */
   private checkHealth(): void {
-    // Kein zweiter Versuch, solange einer laeuft: sonst stapeln sich Anfragen,
-    // wenn der Server TCP annimmt, aber nie antwortet (Review-Befund W2).
-    if (this.healthCheckInFlight) {
-      return;
-    }
-    this.healthCheckInFlight = true;
-
-    this.kioskApi
+    // Der Timeout (10 s) ist kuerzer als der Takt (15 s): mehr als eine
+    // gleichzeitige Anfrage kann dadurch nicht entstehen, ein eigener
+    // In-Flight-Guard waere toter Code (Review-Befund Runde 2).
+    this.healthCheck = this.kioskApi
       .health()
-      .pipe(
-        timeout(HEALTH_TIMEOUT_MS),
-        finalize(() => {
-          this.healthCheckInFlight = false;
-        }),
-      )
+      .pipe(timeout(HEALTH_TIMEOUT_MS))
       .subscribe({
         next: () => {
           const wasOffline = this.isOffline();
@@ -446,6 +437,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (this.healthPollTimer !== null) {
       window.clearInterval(this.healthPollTimer);
     }
+    this.healthCheck?.unsubscribe();
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
     }

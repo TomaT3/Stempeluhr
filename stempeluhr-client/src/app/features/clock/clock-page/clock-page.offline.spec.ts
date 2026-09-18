@@ -26,6 +26,8 @@ describe('ClockPage offline behaviour', () => {
   let pendingQueue: ReturnType<typeof signal<unknown[]>>;
   let healthResult: Observable<unknown>;
   let healthApi: ReturnType<typeof vi.fn>;
+  /** Wenn gesetzt: jede Health-Anfrage bekommt ein eigenes Subject (Reihenfolge = Aufrufreihenfolge). */
+  let healthSubjects: Subject<unknown>[] | null;
   let playBeeps: ReturnType<typeof vi.fn>;
   let localAck: ReturnType<typeof vi.fn>;
   let localScanValue: LocalNfcScan | null;
@@ -67,7 +69,17 @@ describe('ClockPage offline behaviour', () => {
     syncNow = vi.fn(() => of([]));
     pendingQueue = signal<unknown[]>([]);
     healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true });
-    healthApi = vi.fn(() => healthResult);
+    // Der Health-Endpunkt wird auch vom Versions-Badge abgefragt; Tests, die
+    // genau die Anfrage des Workflows brauchen, setzen healthSubjects = [].
+    healthSubjects = null;
+    healthApi = vi.fn(() => {
+      if (healthSubjects) {
+        const subject = new Subject<unknown>();
+        healthSubjects.push(subject);
+        return subject.asObservable();
+      }
+      return healthResult;
+    });
     playBeeps = vi.fn();
     localAck = vi.fn(() => of(null));
     localScanValue = null;
@@ -771,10 +783,17 @@ describe('ClockPage offline behaviour', () => {
     );
   });
 
-  it('stops the health poll when the page is destroyed', () => {
+  it('stops the health poll and the running request when the page is destroyed', () => {
     terminalIdValue = null;
+    // Jede Anfrage bekommt ein eigenes Subject, damit sich die des Workflows
+    // von der des Versions-Badges unterscheiden laesst.
+    healthSubjects = [];
+
     const fixture = TestBed.createComponent(ClockPage);
     fixture.detectChanges();
+
+    const pending = healthSubjects;
+    expect(pending.every((s) => s.observed)).toBe(true);
 
     const component = fixture.componentInstance as unknown as { healthPollTimer: number | null };
     const timerId = component.healthPollTimer;
@@ -783,8 +802,13 @@ describe('ClockPage offline behaviour', () => {
     const clearSpy = vi.spyOn(window, 'clearInterval');
     fixture.destroy();
 
+    // Der Takt endet ...
     expect(clearSpy).toHaveBeenCalledWith(timerId);
     clearSpy.mockRestore();
+    // ... und die noch laufende Anfrage wird abgebrochen (Review-Befund Runde 2).
+    // Genau eine Abmeldung: das Versions-Badge haengt am Root-Injector und
+    // laeuft weiter, die Anfrage des Workflows darf es nicht.
+    expect(pending.filter((s) => !s.observed)).toHaveLength(1);
   });
 
   it('signs in OFFLINE with a PIN remembered from an earlier ONLINE login', async () => {
