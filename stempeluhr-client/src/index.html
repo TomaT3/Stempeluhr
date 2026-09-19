@@ -6,6 +6,17 @@
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <script>
+    // Dunkles Kiosk-Design (Issue #39) noch VOR dem Bootstrap setzen: das
+    // Grundgeruest (body-Hintergrund) steht sonst kurz hell da, bevor Angular
+    // rendert. Die Regel fuer den Rest der Sitzung fuehrt die App selbst
+    // (TerminalPage -> ThemeService.apply) - hier geht es nur um den ersten
+    // Anstrich. Laeuft das auseinander, faerbt die App weiterhin korrekt ein;
+    // es blitzt dann lediglich wieder hell auf.
+    if (/\/terminal\/?$/.test(location.pathname)) {
+      document.documentElement.dataset.theme = 'dark';
+    }
+  </script>
 </head>
 <body>
   <app-root></app-root>
