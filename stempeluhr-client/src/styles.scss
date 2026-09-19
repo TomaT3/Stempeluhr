@@ -10,11 +10,22 @@ body {
   box-sizing: border-box;
 }
 
+/*
+ * Farb- und Schatten-Tokens. Die Komponenten greifen ausschliesslich hierauf zu,
+ * damit ein Theme nur diesen Block austauscht. Ausnahme: Werte, die auf einer
+ * farbigen Aktionsflaeche liegen (weisse Schrift/Glyphen auf gruen/rot/amber/blau)
+ * bleiben literal - sie sind in beiden Themes gleich.
+ */
 :root {
   color-scheme: light;
   --color-page: #f4f7fb;
   --color-surface: #ffffff;
   --color-surface-muted: #f7f9fc;
+  /* Setzt sich sichtbar vom Panel ab (Loeschtaste des Tastenfelds, Zurueck-Knopf) */
+  --color-surface-subtle: #eef2f7;
+  /* Panels, Topbar und Karten: leicht durchscheinend ueber dem Seitenhintergrund */
+  --color-surface-translucent: rgba(255, 255, 255, 0.92);
+  --color-page-glow: rgba(33, 87, 214, 0.12);
   --color-text: #172033;
   --color-muted: #607086;
   --color-border: #d8e0eb;
@@ -23,14 +34,63 @@ body {
   --color-primary-strong: #173fa5;
   --color-success: #16865c;
   --color-danger: #c9432f;
+  /* Fehlermeldungen am Kiosk (Hinweiszeile, abgelehnter Nachtrag) */
+  --color-danger-text: #8a3a2f;
+  --color-danger-border: #d8b4a6;
+  --color-danger-surface: #fdf3ef;
+  /* Neutraler Punkt: Ring der PIN-Punkte, Statuspunkt */
+  --color-indicator: #9aa7b8;
+  /* Versions-Badge (liegt immer ueber Karten und Panel-Ecken) */
+  --color-badge-surface: rgba(15, 23, 42, 0.55);
+  --color-badge-text: rgba(255, 255, 255, 0.85);
+  /* Fokusrahmen der Bedienelemente (Tastaturbedienung am Kiosk) */
+  --color-focus-ring: rgba(33, 87, 214, 0.28);
   --shadow-soft: 0 14px 34px rgba(24, 39, 75, 0.1);
   --shadow-raised: 0 22px 48px rgba(24, 39, 75, 0.16);
+  --shadow-panel: 0 10px 24px rgba(24, 39, 75, 0.1);
   --radius: 8px;
+}
+
+/*
+ * Dunkles Design fuer den Kiosk (Issue #39). Das Display steht den ganzen Tag im
+ * Raum, ein helles Vollflaechen-UI blendet. Bewusst KEIN Neubau der Komponenten:
+ * derselbe Token-Satz, andere Werte.
+ *
+ * --color-success/--color-danger bleiben absichtlich unveraendert: sie tragen
+ * nur die Stempelflaechen (gruen/rot mit weisser Schrift) und sind in beiden
+ * Themes gleich.
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --color-page: #0f1621;
+  --color-surface: #1a2231;
+  --color-surface-muted: #232d3f;
+  --color-surface-subtle: #232d3f;
+  --color-surface-translucent: rgba(26, 34, 49, 0.92);
+  --color-page-glow: rgba(63, 116, 232, 0.2);
+  --color-text: #e7edf7;
+  --color-muted: #9aa9c0;
+  --color-border: #2b3648;
+  --color-border-strong: #4e5e78;
+  --color-primary: #3a6ee2;
+  --color-primary-strong: #6f9bf5;
+  --color-danger-text: #f0a08f;
+  --color-danger-border: #6b3a2c;
+  --color-danger-surface: #33201a;
+  --color-indicator: #55647d;
+  --color-badge-surface: rgba(255, 255, 255, 0.16);
+  --color-badge-text: rgba(233, 239, 248, 0.9);
+  /* Der helle Fokusrahmen (Blau mit 28 % Deckkraft) verschwindet auf dunklem
+     Grund (1,1:1 gegen die Knopfflaeche). Hier ein helles Blau: 5,8:1. */
+  --color-focus-ring: #6f9bf5;
+  --shadow-soft: 0 14px 34px rgba(0, 0, 0, 0.45);
+  --shadow-raised: 0 22px 48px rgba(0, 0, 0, 0.55);
+  --shadow-panel: 0 10px 24px rgba(0, 0, 0, 0.5);
 }
 
 body {
   background:
-    radial-gradient(circle at 50% -20%, rgba(33, 87, 214, 0.12), transparent 36rem),
+    radial-gradient(circle at 50% -20%, var(--color-page-glow), transparent 36rem),
     var(--color-page);
   color: var(--color-text);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -59,6 +119,6 @@ input {
 button:focus-visible,
 a:focus-visible,
 input:focus-visible {
-  outline: 3px solid rgba(33, 87, 214, 0.28);
+  outline: 3px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
