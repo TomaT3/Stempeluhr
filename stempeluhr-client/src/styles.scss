@@ -43,9 +43,11 @@ body {
   /* Versions-Badge (liegt immer ueber Karten und Panel-Ecken) */
   --color-badge-surface: rgba(15, 23, 42, 0.55);
   --color-badge-text: rgba(255, 255, 255, 0.85);
+  /* Fokusrahmen der Bedienelemente (Tastaturbedienung am Kiosk) */
+  --color-focus-ring: rgba(33, 87, 214, 0.28);
   --shadow-soft: 0 14px 34px rgba(24, 39, 75, 0.1);
   --shadow-raised: 0 22px 48px rgba(24, 39, 75, 0.16);
-  --shadow-tight: 0 5px 12px rgba(24, 39, 75, 0.1);
+  --shadow-panel: 0 10px 24px rgba(24, 39, 75, 0.1);
   --radius: 8px;
 }
 
@@ -78,9 +80,12 @@ body {
   --color-indicator: #55647d;
   --color-badge-surface: rgba(255, 255, 255, 0.16);
   --color-badge-text: rgba(233, 239, 248, 0.9);
+  /* Der helle Fokusrahmen (Blau mit 28 % Deckkraft) verschwindet auf dunklem
+     Grund (1,1:1 gegen die Knopfflaeche). Hier ein helles Blau: 5,8:1. */
+  --color-focus-ring: #6f9bf5;
   --shadow-soft: 0 14px 34px rgba(0, 0, 0, 0.45);
   --shadow-raised: 0 22px 48px rgba(0, 0, 0, 0.55);
-  --shadow-tight: 0 5px 12px rgba(0, 0, 0, 0.4);
+  --shadow-panel: 0 10px 24px rgba(0, 0, 0, 0.5);
 }
 
 body {
@@ -114,6 +119,6 @@ input {
 button:focus-visible,
 a:focus-visible,
 input:focus-visible {
-  outline: 3px solid rgba(33, 87, 214, 0.28);
+  outline: 3px solid var(--color-focus-ring);
   outline-offset: 2px;
 }

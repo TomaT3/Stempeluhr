@@ -37,7 +37,7 @@
   border-radius: var(--radius);
   background: var(--color-surface);
   text-align: center;
-  box-shadow: var(--shadow-tight);
+  box-shadow: 0 8px 20px rgba(24, 39, 75, 0.06);
 }
 
 .hours-grid dt {
