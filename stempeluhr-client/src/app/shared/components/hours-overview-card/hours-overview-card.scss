@@ -5,7 +5,7 @@
   padding: clamp(14px, 2vw, 20px);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--color-surface-translucent);
   box-shadow: var(--shadow-soft);
 }
 
@@ -35,9 +35,9 @@
   padding: clamp(10px, 1.8vw, 14px) clamp(12px, 2vw, 18px);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--color-surface);
   text-align: center;
-  box-shadow: 0 8px 20px rgba(24, 39, 75, 0.06);
+  box-shadow: var(--shadow-tight);
 }
 
 .hours-grid dt {
@@ -51,7 +51,7 @@
   display: grid;
   gap: 2px;
   margin: 0;
-  color: #172033;
+  color: var(--color-text);
   font-size: clamp(1.2rem, 3.6vw, 2rem);
   font-variant-numeric: tabular-nums;
   font-weight: 900;
