@@ -1,59 +1,49 @@
-# StempeluhrClient
+# Stempeluhr Angular-Client
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 21.2.10.
+Angular-Frontend für die Mitarbeiteransicht (`/clock`), das kompakte
+NFC-Terminal (`/terminal?terminalId=<id>`) und den Admin-Bereich. Im
+Produktionscontainer liefert `Stempeluhr.Api` den gebauten Client aus.
 
-## Development server
+## Voraussetzungen
 
-To start a local development server, run:
-
-```bash
-ng serve
-```
-
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
-
-## Code scaffolding
-
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
+- Node.js 22 wie in `.github/workflows/ci.yml`
+- npm in der unter `packageManager` in `package.json` angegebenen Version
+- lokal laufende API auf `http://localhost:5100`
 
 ```bash
-ng generate component component-name
+npm ci
 ```
 
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
+## Entwicklungsserver
+
+Das Projekt-Startskript verwendet Port `4500` und den lokalen API-Proxy:
 
 ```bash
-ng generate --help
+npm start
 ```
 
-## Building
-
-To build the project run:
+Ein direkter Angular-CLI-Start verwendet den Standardport `4200`:
 
 ```bash
-ng build
+npx ng serve
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
+Beide Varianten laden `proxy.conf.json` und leiten `/api` an die lokale
+.NET-API weiter.
 
-## Running unit tests
-
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
+## Build und Tests
 
 ```bash
-ng test
+npx ng build --configuration production
+npx ng test --watch=false
 ```
 
-## Running end-to-end tests
+Der Produktionsbuild liegt unter `dist/stempeluhr-client/browser`. Der
+Repository-`Dockerfile` kopiert ihn in das `wwwroot` der API.
 
-For end-to-end (e2e) testing, run:
+## Weitere Dokumentation
 
-```bash
-ng e2e
-```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+Produkt, RuntimeSettings, Offline-Verhalten, Docker-Betrieb und Releases sind
+im [`../README.md`](../README.md) beschrieben. Die Raspberry-Pi- und
+NFC-Einrichtung steht in
+[`../docs/raspberry-pi-kiosk-nfc.md`](../docs/raspberry-pi-kiosk-nfc.md).
