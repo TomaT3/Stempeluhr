@@ -1,395 +1,198 @@
-# Stempeluhr fuer Kimai
+# Stempeluhr für Kimai
 
-Touch-freundliche Stempeluhr fuer eine gehostete Kimai-Instanz.
+Touchfreundliche Web-Stempeluhr für eine gehostete Kimai-Instanz. Mitarbeiter
+identifizieren sich per PIN oder NFC-Karte und wählen anschließend Kommen,
+Gehen, Pausenbeginn oder Pausenende.
 
-## Aufbau
+- Mitarbeiteransicht: `/clock`
+- kompakte Kioskansicht: `/terminal?terminalId=<id>`
+- Administration: `Admin` in der Web-App
 
-- `Stempeluhr.Api`: .NET Minimal API als sicherer Kimai-Proxy
-- `stempeluhr-client`: Angular-App fuer die Mitarbeiteroberflaeche
+## Architektur
 
-Die Kimai-API-Tokens bleiben im Backend. Der Browser bekommt nur Namen, Farben und Statusdaten.
+- `Stempeluhr.Api`: .NET 10 Minimal API, Kimai-Proxy und Auslieferung des
+  gebauten Frontends
+- `stempeluhr-client`: Angular-Client für Mitarbeiter, Terminal und Admin
+- `tools/pi-nfc-agent`: Python-Dienst für Raspberry Pi und ACR122U
+- `Stempeluhr.Api.Tests`: xUnit-Tests der API
 
-## Kimai konfigurieren
+Kimai-Tokens und andere Secrets bleiben im Backend. Der Browser erhält nur die
+für Bedienung und Anzeige benötigten Daten.
 
-Die Kimai-Adresse, Admin-Tokens, Mitarbeiter-Tokens und Bilder werden nicht in Git gespeichert.
-Die App schreibt diese Werte lokal in `Stempeluhr.Api/data/settings.json`; der Ordner `data/` ist ignoriert.
+## Einrichtung und RuntimeSettings
 
-Lokal kannst du `Stempeluhr.Api/appsettings.Development.json` verwenden. Diese Datei ist ebenfalls ignoriert.
-Als Vorlage gibt es `Stempeluhr.Api/appsettings.Development.example.json`.
+Für die lokale Entwicklung:
 
-Minimaler lokaler Start:
-
-```json
-{
-  "Admin": {
-    "Password": "admin"
-  },
-  "Kimai": {
-    "BaseUrl": "https://kimai.example.invalid"
-  }
-}
+```bash
+cp Stempeluhr.Api/appsettings.Development.example.json \
+  Stempeluhr.Api/appsettings.Development.json
 ```
 
-Danach in der App oben `Admin` oeffnen:
+Dort mindestens ein lokales Admin-Passwort und die Kimai-Basis-URL setzen.
+Anschließend im Admin-Bereich konfigurieren:
 
-- Kimai-URL und Admin-API-Token setzen
-- Kimai-Mitarbeiter laden
-- pro Mitarbeiter API-Token, PIN, Farbe und optional Bild pflegen
-- optional pro Mitarbeiter NFC-Karten-ID fuer ein Raspberry-Pi-Terminal pflegen
-- Standard-Projekt-ID, Standard-Aktivitaet-ID und Pause-Aktivitaet-ID setzen
+- Kimai-URL und Admin-API-Token
+- Mitarbeiter mit API-Token, optionaler PIN, Farbe und Bild
+- optional eine NFC-Karten-ID pro Mitarbeiter
+- Standard-Projekt, Standard-Aktivität und Pause-Aktivität
 
-`Pin` ist optional. Ohne PIN kann ein Mitarbeiter direkt ein- und ausstempeln.
-Die Pause-Aktivitaet-ID verweist auf eine normale Kimai-Taetigkeit, die als Pause genutzt wird.
-Aktive Timesheets mit dieser Taetigkeit werden in der Stempeluhr als `In Pause` angezeigt.
+Die zur Laufzeit gespeicherten Einstellungen liegen standardmäßig in
+`Stempeluhr.Api/data/settings.json`. `data/` ist nicht Teil des Repositories und
+muss im Betrieb persistent eingebunden und gesichert werden. Secrets werden in
+Admin-Antworten nicht zurückgegeben.
 
-### Offline-Nachtrag von Pausenenden: Voraussetzungen und Toleranz
+Der NFC-Agent benötigt zusätzlich einen Reader-Token. Die Agent-Einstellung
+`reader_token` muss dem API-Konfigurationswert
+`Stempeluhr__NfcReaderToken` entsprechen.
 
-Die automatische Recovery eines unterbrochenen Offline-`pauseEnd` (das
-Pausen-Timesheet wurde bereits gestoppt, der Wiedereinstieg in die Arbeit
-schlug transient fehl) setzt eine konfigurierte **Pause-Aktivitaet-ID
-voraus**: Nur mit ihr kann die API ein gestopptes Timesheet ueberhaupt als
-Pause erkennen. Ohne diese Einstellung bleibt ein solcher Fall bewusst ein
-No-op mit lauter Warnung im Log - die Arbeit muss dann manuell nachgetragen
-werden.
+## Lokal entwickeln
 
-Die Erkennung nutzt eine Toleranz (`PauseEndRecoveryToleranceSeconds` in
-der `settings.json`, Standard 30 s): Das Ende des letzten gestoppten
-Pausen-Timesheets darf nur um diesen Betrag vom Zeitstempel des
-nachgetragenen Events abweichen. Trade-off dabei:
+Backend (`http://localhost:5100`):
 
-- Kleiner Wert = kleines Phantom-Fenster (ein echter Live-Stopp innerhalb
-  des Fensters wuerde sonst faelschlich als unterbrochene Transaktion
-  mitgebucht), braucht aber synchronisierte Uhren.
-- Groesserer Wert = robust gegen Uhrenabweichung zwischen Client
-  (Raspberry Pi, Kiosk-Browser) und Kimai-Server, oeffnet aber eben dieses
-  Fenster.
-
-Clients sollten daher per NTP synchronisiert sein (der Raspberry Pi tut das
-standardmaessig ueber systemd-timesyncd); laeuft ein Client ohne
-Zeitsynchronisation, den Wert in der Admin-Umgebung entsprechend erhoehen.
-
-### Bekannte Grenze: Reihenfolge beim Live-Apply nach einer Stoerung
-
-Die "eine Timeline"-Garantie gilt fuer die **Outbox**: Sobald Events in der
-Server-Outbox warten, werden alle Backlogs (NFC- und Kiosk-Queue zusammen)
-strikt in Event-Zeitordnung abgespielt. Im **Live-Pfad** dagegen (Outbox leer,
-Kimai erreichbar - der Normalfall direkt nach einer Störungserholung, weil
-beide Clients ihre Events clientseitig queuen und danach selbst synchronisieren)
-werden zwei unabhaengige Sync-Requests in **Ankunftsreihenfolge** angewendet,
-nicht in Event-Zeitordnung. Innerhalb eines Requests bleibt die Ordnung stets
-erhalten; es kann aber passieren, dass z. B. ein NFC-Toggle@09:00 vor einem
-Kiosk-pauseStart@08:00 ankommt und dann gegen einen anderen Zustand abgeleitet
-wird. Praktische Gegenmassnahme: Waehrend einer Stoerung pro Mitarbeiter bei
-einem Terminal bleiben, bis der Nachtrag durch ist. Ein kurzes serverseitiges
-Merge-Fenster ueberlappender Requests ist als moeglicher Ausbau notiert.
-
-## Raspberry Pi NFC-Terminal
-
-Fuer ein Terminal mit Raspberry Pi 5, Touchdisplay und ACR122U gibt es einen
-separaten Agenten unter `tools/pi-nfc-agent`. Die Einrichtung ist in
-`docs/raspberry-pi-kiosk-nfc.md` beschrieben.
-Das Touchdisplay verwendet die kompakte Route `/terminal?terminalId=<id>`;
-die normale Mitarbeiteroberflaeche bleibt unter `/clock`.
-
-## Starten
-
-Backend:
-
-```powershell
-dotnet run --project .\Stempeluhr.Api\Stempeluhr.Api.csproj
+```bash
+dotnet run --project Stempeluhr.Api/Stempeluhr.Api.csproj
 ```
 
-Frontend:
+Frontend mit API-Proxy (`http://localhost:4500`):
 
-```powershell
-cd .\stempeluhr-client
-npm install
+```bash
+cd stempeluhr-client
+npm ci
 npm start
 ```
 
-Danach ist die App unter `http://localhost:4200` erreichbar. Das Backend laeuft auf `http://localhost:5100`.
-Der Angular-Dev-Server leitet `/api` ueber `stempeluhr-client/proxy.conf.json` lokal an das Backend weiter. Das gilt auch fuer direktes `ng serve`, weil der Proxy in `angular.json` eingetragen ist.
+`npm start` verwendet Port `4500`. Ein direktes `npx ng serve` verwendet Port
+`4200`. Beide Varianten leiten `/api` über `proxy.conf.json` an die lokale API
+weiter.
 
-## Docker
+## NFC-Terminal
 
-Image lokal bauen:
+Die vollständige Raspberry-Pi-, Chromium-, ACR122U- und systemd-Einrichtung
+steht in [`docs/raspberry-pi-kiosk-nfc.md`](docs/raspberry-pi-kiosk-nfc.md). Die
+aktuelle Agent-Konfiguration zeigt
+[`tools/pi-nfc-agent/config.example.json`](tools/pi-nfc-agent/config.example.json).
 
-```powershell
+Für die Verbindung müssen folgende Werte zusammenpassen:
+
+- Chromium öffnet `https://<host>/terminal?terminalId=<id>`.
+- Der Agent verwendet als `api_base_url` nur `https://<host>`.
+- `terminal_id` des Agenten entspricht `terminalId` in der URL.
+- `reader_token` entspricht `Stempeluhr__NfcReaderToken` der API.
+
+### Identifikationsablauf
+
+Der Agent stellt einen Scan ausschließlich über seinen lokalen Loopback-Server
+(`127.0.0.1:8737`) bereit. Die Terminal-Web-App liest und bestätigt den Scan und
+identifiziert den Mitarbeiter. **Der Scan selbst bucht keine Zeit.** Erst die
+anschließend gewählte Aktion verwendet den Clock-/Kiosk-Endpunkt.
+
+Bekannte Karten kann der Browser aus seinem lokalen Cache auch ohne API-Verbindung
+identifizieren. Unbekannte Karten werden online über die API aufgelöst und für
+die spätere Offline-Nutzung gespeichert.
+
+Ohne Bestätigung verwirft der Agent den Scan standardmäßig
+(`fallback_mode: "none"`). Der Kompatibilitätsmodus `toggle` schreibt nach dem
+Timeout stattdessen ein Toggle-Ereignis in die persistente Agent-Queue. Dieser
+Fallback ist vom normalen Scan-und-Bestätigungsablauf getrennt.
+
+## Online- und Offline-Verhalten
+
+Live-Aktionen und Offline-Replay sind getrennte Pfade:
+
+- Der Browser speichert fehlgeschlagene explizite Aktionen mit Zeitstempel und
+  Identität lokal und überträgt sie nach Wiederherstellung der Verbindung.
+- Die API puffert transiente Kimai-Fehler in einer serverseitigen Outbox.
+- Replay bleibt geordnet und idempotent. Dauerhafte fachliche Ablehnungen werden
+  am Kiosk sichtbar, statt still verloren zu gehen.
+- Lokal bekannte Karten und früher online bestätigte PINs können offline
+  identifizieren. Die Aktion wird beim Nachtrag weiterhin serverseitig geprüft.
+- Lokale Zustände sind als „zuletzt gesehen“, „offline vorgemerkt“ oder
+  „unbekannt“ gekennzeichnet. Bei unbekanntem Status bietet die UI beide
+  zulässigen Richtungen an.
+- Der Queue-Hinweis bleibt sichtbar, solange Aktionen warten. Eine erreichbare
+  API bedeutet nicht automatisch, dass Kimai den Nachtrag angenommen hat.
+
+## Build und Tests
+
+```bash
+export PATH="$HOME/.dotnet:$PATH"
+export DOTNET_ROOT="$HOME/.dotnet"
+
+dotnet build Stempeluhr.Api/Stempeluhr.Api.csproj -v q
+dotnet test Stempeluhr.Api.Tests/Stempeluhr.Api.Tests.csproj \
+  -v minimal --logger "console;verbosity=normal"
+
+cd stempeluhr-client
+npm ci
+npx ng build --configuration production
+npx ng test --watch=false
+
+cd ..
+python3 tools/pi-nfc-agent/test_offline_queue.py
+bash tools/testenv/run_e2e_test.sh
+```
+
+`Stempeluhr.slnx` enthält das Testprojekt nicht; API-Tests deshalb direkt über
+das Test-`csproj` starten.
+
+## Docker und Betrieb
+
+Lokales Image mit persistentem Datenverzeichnis starten:
+
+```bash
 docker build -t stempeluhr:local .
+docker run --rm -p 8080:8080 \
+  -v stempeluhr-data:/app/data \
+  -e Admin__Password=change-me \
+  stempeluhr:local
 ```
 
-Container starten:
+Für ein Kunden-Deployment:
 
-```powershell
-docker run --rm -p 8080:8080 -v stempeluhr-data:/app/data -e Admin__Password=admin stempeluhr:local
+1. `data/` einschließlich `settings.json` sichern.
+2. Einen festen GHCR-Versionstag verwenden, nicht nur `latest`.
+3. Container-Image aktualisieren und den Container neu erstellen.
+4. Falls nötig den Pi-Agent mit
+   `tools/deploy/pi-deploy.sh agent vX.Y.Z` aktualisieren; seine vorhandene
+   Konfiguration bleibt erhalten.
+5. Bei einer veralteten Kiosk-App den Chromium-Cache mit
+   `tools/deploy/pi-deploy.sh kiosk` zurücksetzen.
+6. PIN/NFC, Kommen/Pause/Gehen, Stundenanzeige und gegebenenfalls Offline-Replay
+   prüfen.
+
+Die Voraussetzungen und Hostliste für Agent-Update und Cache-Recovery sind in
+[`tools/deploy/pi-deploy.sh`](tools/deploy/pi-deploy.sh) und
+[`tools/deploy/pis.conf.example`](tools/deploy/pis.conf.example) dokumentiert.
+Bei einem NAS hinter Cloudflare/Cloudflared zeigt die Portfreigabe intern zum
+Container, beispielsweise `8002:8080`; Browser und Agent verwenden weiterhin
+die externe HTTPS-Adresse.
+
+## Release
+
+Maßgeblich ist der manuell auf `main` gestartete Workflow
+[`.github/workflows/release.yml`](.github/workflows/release.yml) mit dem Namen
+**Release**. Er bestimmt den SemVer-Bump aus Conventional Commits oder aus der
+Eingabe, erstellt Tag, GitHub Release und Pi-Agent-ZIP und veröffentlicht das
+GHCR-Image mit den Tags `X.Y.Z`, `X.Y` und `latest`.
+
+Expliziter Patch-Release:
+
+```bash
+gh workflow run release.yml --ref main -f bump=patch
 ```
 
-Die App ist dann unter `http://localhost:8080` erreichbar.
-Im Container werden Frontend und Backend vom selben .NET-Prozess ausgeliefert. Dadurch funktionieren API-Aufrufe relativ ueber `/api`, auch wenn der Container spaeter ueber Cloudflared unter einer externen Domain erreichbar ist.
+Für die automatische Ermittlung des Bumps `-f bump=...` weglassen. Nach dem
+Lauf Release, Pi-Agent-Asset und alle erwarteten Image-Tags prüfen. Das
+Kunden-Deployment erfolgt separat und verwendet einen festen Versionstag.
 
-### Docker Compose auf NAS / Docker Desktop
+## Sicherheit
 
-Beispiel fuer ein NAS, das intern auf Host-Port `8002` laeuft und extern per
-Cloudflare/Cloudflared unter `https://stempeluhr.example.local` erreichbar ist:
-
-```yaml
-services:
-  stempeluhr:
-    image: ghcr.io/tomat3/stempeluhr:0.4.0
-    container_name: stempeluhr
-    restart: unless-stopped
-    volumes:
-      - /volume1/docker/stempeluhr/data:/app/data
-    ports:
-      - 8002:8080
-    environment:
-      Admin__Password: "change-me"
-      Kimai__BaseUrl: "https://kimai.example.local"
-      Stempeluhr__NfcReaderToken: "change-me-reader-token"
-      # Optional und nur in besonderen Topologien noetig (siehe
-      # Sicherheitshinweis unten): IP-Adresse(n) vertrauter Reverse-Proxys,
-      # damit X-Forwarded-For ausgewertet wird. Im Standard-Setup (alle Geräte
-      # ueber den Cloudflare-Tunnel) ist KEINE Einstellung noetig.
-      # Stempeluhr__KnownProxies__0: "172.18.0.1"
-```
-
-Die App ist intern unter `http://<nas-ip>:8002/` erreichbar. Fuer Raspberry Pi,
-Tablet und normale Benutzer sollte die externe HTTPS-Adresse verwendet werden,
-also z.B. `https://stempeluhr.example.local/`.
-
-Fuer das Raspberry-Pi-Terminal:
-
-- Chromium-URL:
-  `https://stempeluhr.example.local/terminal?terminalId=stempeluhr-pi-01`
-- NFC-Agent `api_base_url`:
-  `https://stempeluhr.example.local`
-- NFC-Agent `reader_token`:
-  derselbe Wert wie `Stempeluhr__NfcReaderToken`
-- `terminal_id` im Agenten und `terminalId` in der Chromium-URL muessen identisch sein.
-
-Wichtig: Der Docker-Port `8002:8080` ist nur die interne NAS-Veroeffentlichung.
-Wenn Cloudflared davor liegt, bekommen Chromium und der NFC-Agent die externe
-HTTPS-Adresse. Der Agent bekommt trotzdem nur die Basis-Adresse ohne `/terminal`.
-
-### Sicherheitshinweis: Offline-Queue und PINs
-
-Der Kiosk/Client speichert gequeute Offline-Stempel (inklusive PIN) im
-`localStorage` des Browsers, damit ein Offline-Stempel auch einen Neustart des
-Kiosk-Browsers ueberlebt. Das ist eine bewusste Abwaegung:
-
-- `localStorage` ist auf dem Geraet im Klartext lesbar (lokaler Zugang oder
-  erfolgreicher XSS). Die Stempeluhr geht davon aus, dass Kiosk-Hardware
-  (Tablet am Eingang, Raspberry-Pi-Terminal) vertrauenswuerdig ist.
-- Wer das Risiko senken will: Kiosk-Geraete physisch sichern, Browser im
-  Kiosk-Modus ohne DevTools betreiben, keine weiteren Websites im selben
-  Browser-Profil oeffnen.
-- Sauberste Loesung waere eine Terminal-/Reader-Token-Authentifizierung statt
-  der PIN fuer gequeute Events; das ist als Follow-up eingeplant.
-
-Zusaetzlich gilt: Der Sync-Endpoint `/api/kiosk/clock/sync` ist unauthentifiziert
-(4-stellige PIN als einziger Schutz), wird aber per Client-IP gedrosselt
-(20 Request-Einheiten/60 s) und nimmt maximal 100 Events pro Batch an. Das
-Budget wird dabei nach **Event-Anzahl** bepreist (10 Events = 1
-Request-Einheit), und eine Batch-Verarbeitung bricht beim ersten
-PIN-Fehlschlag ab - die uebrigen Events des Batches bleiben in der
-Client-Queue und werden einzeln in Folgerunden erneut versucht. Pro Request
-entsteht so hoechstens **ein** PIN-Vergleichsergebnis; massenhaftes
-Durchprobieren von PINs ueber grosse Batches ist damit ausgeschlossen (ein
-Angreifer mit eigenen Requests bleibt auf die 20 Requests/60 s begrenzt).
-
-Der Replay akzeptiert daneben die NFC-Karten-ID, mit der die Session am
-Terminal entsperrt wurde (Paritaet zum Live-Pfad, der Karten-Touch ohne PIN
-authentifiziert). Die Karte wird nur akzeptiert, wenn sie demselben
-Mitarbeiter zugeordnet ist wie die Event-Angabe.
-
-Wichtig zur Einordnung: Wenn alle Geraete wie ueblich ueber den
-Cloudflare-Tunnel zugreifen, teilen sie sich die oeffentliche IP des Standorts -
-das Budget ist dann zwangslaeufig ein gemeinsamer Topf, und
-`Stempeluhr__KnownProxies__0` aendert daran nichts. Die Einstellung lohnt nur,
-wenn die App Anfragen mit echten, unterscheidbaren Client-IPs sieht (z. B.
-mehrere Standorte mit eigenen Internetanschluessen, VPN-Zugriffe oder direkte
-LAN-Nutzung). Gegen gezieltes PIN-Raten an einem einzelnen Konto ist ein
-Fehlversuch-Backoff vorgesehen (Issue #8); die sauberste Loesung bleibt die
-Terminal-Token-Auth (Issue #7).
-
-### Offline am Kiosk: Anmeldung und Statusanzeige
-
-Ist die API (oder Kimai) nicht erreichbar, arbeitet der Kiosk aus drei lokalen
-Zwischenspeichern im Browser (`localStorage`) weiter:
-
-- **Karten-Katalog** (`stempeluhr.employee-card-cache.v1`): Karten-ID →
-  Mitarbeiter, gefuellt aus frueheren Online-Scans. Ein Scan am Pi meldet den
-  Mitarbeiter damit auch offline an.
-- **PIN-Verifier** (`stempeluhr.employee-pin-cache.v1`): Von jeder PIN, die
-  sich ONLINE erfolgreich angemeldet hat, merkt sich der Kiosk einen
-  gesalzenen SHA-256-Wert. Offline prueft er die eingegebene PIN dagegen und
-  meldet den Mitarbeiter an.
-- **Status** (`stempeluhr.employee-status-cache.v1`): der zuletzt bekannte
-  Stempel-Status je Mitarbeiter.
-
-Der Offline-Pfad **meldet nur an**, er stempelt nicht selbst: Jeder Stempel
-landet in der Offline-Queue und wird beim Nachtrag serverseitig geprueft
-(PIN bzw. Karten-ID muessen zum Mitarbeiter passen).
-
-Der angezeigte Status traegt seine Herkunft mit, damit ein Schaetzwert nicht
-wie eine Buchung aussieht. Die Labels beschreiben die **Herkunft des Wertes**,
-nicht den Verbindungszustand — den meldet der Offline-Banner:
-
-- `Eingestempelt (zuletzt gesehen 07:55)` — letzter vom Server gemeldeter Stand.
-- `Eingestempelt (offline vorgemerkt)` — aus einem lokal vorgemerkten
-  Offline-Stempel abgeleitet; die Stempel-Buttons folgen diesem Zustand, nach
-  einem Offline-Einstempeln wird also Ausstempeln/Pause angeboten.
-- `Status unbekannt (offline)` — es ist nichts bekannt. Dann werden **beide**
-  Richtungen (Ein- und Ausstempeln) angeboten, statt „Nicht eingestempelt" zu
-  behaupten; welcher Stempel richtig war, entscheidet der Nachtrag. Solange die
-  API antwortet, steht dort nur `Status unbekannt` (die Serverantwort ist noch
-  unterwegs).
-
-Ein gemerkter Stand wird auch dann gezeigt, wenn die Serverantwort noch
-unterwegs ist — oder bei haengender Verbindung nie ankommt. Der Mitarbeiter
-steht damit nie vor einem schlechteren Stand als vor dem Ausfall; die
-Button-Auswahl folgt dem gemerkten Zustand.
-
-### Abgelehnte Offline-Stempel (Nachtrag abgelehnt)
-
-Lehnt der Server einen nachgetragenen Stempel ab (PIN zwischenzeitlich
-geaendert, Karte neu zugeordnet, Mitarbeiter geloescht), ist die Zeit **nicht**
-gebucht — bisher verschwand sie stillschweigend. Der Kiosk merkt sich solche
-Faelle (`stempeluhr.offline-rejected.v1`, die letzten 20) und zeigt sie auf dem
-Idle-Screen an: Zeitpunkt, Name, Aktion und die Begruendung des Servers, dazu
-einen Knopf `Alle erledigt`, mit dem der Nachtrag nach der Korrektur in Kimai
-quittiert wird. Quittierte Faelle verschwinden nur aus dem Hinweis, sie bleiben
-im Speicher erhalten — der Datensatz ist die letzte Spur, solange die Zeit in
-Kimai fehlt (bis die Liste mit 20 Eintraegen voll ist; quittierte zaehlen dabei
-mit). Diese Datensaetze sind nur im Geraetespeicher nachschlagbar: es gibt
-bewusst keinen Bildschirm und keine Route dafuer. Die Details stehen bewusst
-nur am Kiosk; die Mitarbeiter-Seite `/clock` (auch auf persoenlichen Handys)
-zeigt nur die Anzahl.
-
-### Offline-Banner mit Wartezähler (Issue #6)
-
-Der Banner am Kiosk **und** auf `/clock` nennt die Stempel, die auf die
-Übertragung warten (`Offline – 2 Stempel warten auf Übertragung`, Einzahl:
-`1 Stempel wartet …`). Er hängt **nicht** allein an der Erreichbarkeit, sondern
-steht, solange etwas in der Queue liegt — nimmt Kimai die Nachträge nicht an
-(die API puffert sie), bliebe sonst genau der Hinweis weg, um den es geht.
-`Offline` steht davor, solange der Client den Server für nicht erreichbar hält —
-das setzt nicht nur der Health-Poll, sondern auch eine fehlgeschlagene Aktion
-(etwa die Offline-Anmeldung). Wartet etwas, während der Client den Server für
-erreichbar hält, lautet die Zeile `2 Stempel warten auf Übertragung`.
-Ohne wartende Stempel zeigt der Banner online gar nichts und offline den
-allgemeinen Text (kein „0 Stempel").
-
-Hosts **ohne** `terminalId` (`/clock`) haben keinen NFC-Poll, an dem sie den
-Ausfall merken — dort fragt ein leichter Health-Poll (`/api/health`, alle 15 s,
-Timeout 10 s) die Erreichbarkeit ab; der Timeout ist kürzer als der Takt, es
-läuft also nie mehr als eine Anfrage. Er setzt den Banner schon beim Laden
-(also auch für Stempel aus einer früheren
-Sitzung), löst beim Zurückkommen sofort den Nachtrag aus und verschwindet, sobald
-die Queue leer ist; beim Verlassen der Seite enden Takt und laufende Anfrage.
-Ein Timeout zählt als offline — ein Server, der TCP annimmt
-und nie antwortet, darf den Hinweis nicht verschlucken.
-
-Grenzen des PIN-Verifiers: Ein 4-stelliger PIN-Raum ist mit Geraetezugriff
-ohnehin durchprobierbar — der Verifier verhindert nur, dass PINs im Klartext
-im Browser liegen (der gequeute Stempel traegt die PIN weiterhin mit, siehe
-Sicherheitshinweis oben). Lehnt der Server eine PIN ab, loescht der Kiosk den
-gespeicherten Verifier sofort; eine OFFLINE gedrehte PIN kann den Kiosk also
-weiterhin entsperren, die Stempel werden beim Nachtrag dann abgelehnt.
-
-## Telegram-Benachrichtigung bei Stempelungen
-
-Optional kann die API bei jedem **echten** Stempel-Übergang eine
-Telegram-Nachricht an einen Chat (z. B. eine private Gruppe des Kunden)
-senden. Gemeldet werden Kommen, Gehen, Pause-Start und Pause-Ende.
-Bewusst **nicht** gemeldet werden:
-
-- No-op-Stempel („schon eingestempelt", „nicht eingestempelt" usw.) —
-  Doppel-Taps bleiben stumm.
-- Nachgeholte Offline-Stempel (Sync-Replay) — nur Live-Stempelungen lösen
-  eine Nachricht aus.
-
-Nachrichtenformat (erzeugt von `TelegramMessageFactory`):
-
-```text
-🟢 Anna Mustermann · eingestempelt um 08:12
-🔴 Anna Mustermann · ausgestempelt um 17:03
-🟡 Anna Mustermann · Pause um 12:31
-```
-
-Die Uhrzeit wird in der Kimai-User-Zeitzone des Mitarbeiters formatiert.
-Fehler beim Senden (Telegram nicht erreichbar) beeinflussen den Stempelvorgang
-nie — die Benachrichtigung ist Best effort (kein Retry, kein Doppelversand).
-
-### Einrichten
-
-1. **Bot anlegen:** Bei @BotFather im Telegram `/newbot` ausführen und den
-   Bot-Token kopieren (Secret — wird weder im Client noch über die Admin-API
-   ausgeliefert, dort gibt es nur „hinterlegt: ja/nein". Eine Anzeige/
-   Bearbeitung im Admin-UI ist als Ausblick geplant — aktuell wird die
-   Telegram-Konfiguration ausschließlich in der `settings.json` gesetzt).
-2. **Gruppe:** Eine private Telegram-Gruppe anlegen, den Bot hinzufügen und
-   als Administrator einstellen. Weitere Empfänger lassen sich später einfach
-   in die Gruppe aufnehmen.
-3. **Chat-ID ermitteln:** Eine beliebige Nachricht in die Gruppe schreiben,
-   dann im Browser `https://api.telegram.org/bot<TOKEN>/getUpdates` öffnen —
-   `result[0].message.chat.id` ist die Gruppen-ID (negative Zahl).
-4. **Eintragen:** In `data/settings.json` (dort, wo auch die Kimai-Tokens
-   liegen) ergänzen:
-
-   ```json
-   {
-     "telegramBotToken": "<TOKEN>",
-     "telegramChatId": "-1001234567890"
-   }
-   ```
-
-   Die Einstellungen werden pro Request aus der Datei geladen — die Änderung
-   wirkt sofort, kein Neustart nötig. Fehlen beide Felder (oder ist eines
-   leer), ist die Benachrichtigung deaktiviert. Über Umgebungsvariablen ist
-   die Telegram-Konfiguration bewusst nicht einstellbar.
-
-5. **Testen:** Ein Mitarbeiter stempelt — die Nachricht muss in der Gruppe
-   erscheinen. Alle vier Aktionen einmal durchspielen.
-
-## Semantische Versionierung
-
-Versionen folgen SemVer: `MAJOR.MINOR.PATCH`. Die Release-Version ist der Git-Tag, zum Beispiel `v0.1.3`.
-
-Es gibt keine Versionsdatei, die pro Release angepasst werden muss:
-
-- Lokale Builds verwenden `0.0.0-local`.
-- Release-Builds bekommen die Version aus dem Git-Tag.
-- Die GitHub Action uebergibt die Tag-Version als Docker-Build-Arg an `.NET`.
-- `stempeluhr-client/package.json` bleibt bei `0.0.0`, weil die Angular-App nicht als npm-Paket released wird.
-
-Automatisch versionieren:
-
-1. In GitHub `Actions` oeffnen.
-2. Workflow `Create version tag` starten.
-3. `patch`, `minor` oder `major` waehlen.
-4. Der Workflow erzeugt den naechsten Tag, zum Beispiel `v0.1.3`.
-5. Der Workflow `Release container` baut und pusht danach automatisch das Docker-Image.
-
-Manuell geht es weiterhin ueber einen Git-Tag:
-
-```powershell
-git tag v0.1.3
-git push origin v0.1.3
-```
-
-Der Workflow `.github/workflows/release-container.yml` baut bei Tags wie `v0.1.3` oder bei einem veroeffentlichten GitHub Release ein Docker-Image und pusht es nach GitHub Container Registry:
-
-```text
-ghcr.io/<owner>/<repo>:0.1.3
-ghcr.io/<owner>/<repo>:0.1
-ghcr.io/<owner>/<repo>:latest
-```
-
-## Kimai-Endpunkte
-
-Die App verwendet serverseitig diese Kimai-Endpunkte:
-
-- `GET /api/timesheets/active`
-- `POST /api/timesheets`
-- `PATCH /api/timesheets/{id}/stop`
+- `settings.json`, lokale `appsettings.*`-Dateien, Admin-Passwort, Kimai-Tokens
+  und Reader-Token nicht committen; Produktionszugriffe nur über HTTPS führen.
+- Das persistente `data/`-Verzeichnis schützen und sichern.
+- Die Offline-Queue und Identifikations-Caches liegen im `localStorage` und
+  können PIN- oder Kartendaten enthalten. Kiosk-Hardware und Browser-Profil
+  deshalb physisch und administrativ schützen und nicht für andere Websites
+  verwenden.
+- Für Admin und NFC-Reader eigene, starke Secrets verwenden und den Reader-Token
+  nur auf API und Agent bereitstellen.
