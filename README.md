@@ -41,10 +41,6 @@ Die zur Laufzeit gespeicherten Einstellungen liegen standardmäßig in
 muss im Betrieb persistent eingebunden und gesichert werden. Secrets werden in
 Admin-Antworten nicht zurückgegeben.
 
-Der NFC-Agent benötigt zusätzlich einen Reader-Token. Die Agent-Einstellung
-`reader_token` muss dem API-Konfigurationswert
-`Stempeluhr__NfcReaderToken` entsprechen.
-
 ## Lokal entwickeln
 
 Backend (`http://localhost:5100`):
@@ -77,7 +73,6 @@ Für die Verbindung müssen folgende Werte zusammenpassen:
 - Chromium öffnet `https://<host>/terminal?terminalId=<id>`.
 - Der Agent verwendet als `api_base_url` nur `https://<host>`.
 - `terminal_id` des Agenten entspricht `terminalId` in der URL.
-- `reader_token` entspricht `Stempeluhr__NfcReaderToken` der API.
 
 ### Identifikationsablauf
 
@@ -90,10 +85,8 @@ Bekannte Karten kann der Browser aus seinem lokalen Cache auch ohne API-Verbindu
 identifizieren. Unbekannte Karten werden online über die API aufgelöst und für
 die spätere Offline-Nutzung gespeichert.
 
-Ohne Bestätigung verwirft der Agent den Scan standardmäßig
-(`fallback_mode: "none"`). Der Kompatibilitätsmodus `toggle` schreibt nach dem
-Timeout stattdessen ein Toggle-Ereignis in die persistente Agent-Queue. Dieser
-Fallback ist vom normalen Scan-und-Bestätigungsablauf getrennt.
+Ohne Bestätigung verwirft der Agent den Scan nach
+`selection_timeout_seconds`. Der Agent selbst bucht nie und hält keine Queue.
 
 ## Online- und Offline-Verhalten
 
@@ -128,7 +121,8 @@ npx ng build --configuration production
 npx ng test --watch=false
 
 cd ..
-python3 tools/pi-nfc-agent/test_offline_queue.py
+python3 tools/pi-nfc-agent/test_scan_handling.py
+python3 tools/pi-nfc-agent/test_local_scan_server.py
 bash tools/testenv/run_e2e_test.sh
 ```
 

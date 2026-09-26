@@ -155,7 +155,7 @@ jobs:
           # Zentrales Deploy-Artefakt fuer die Pi-Clients (tools/deploy/pi-deploy.sh):
           # eine Quelle pro Version, kein manuelles ZIP-Bauen mehr.
           cd tools/pi-nfc-agent
-          zip -j "pi-nfc-agent-${TAG}.zip" stempeluhr_nfc_agent.py offline_queue.py config.example.json
+          zip -j "pi-nfc-agent-${TAG}.zip" stempeluhr_nfc_agent.py config.example.json
           # --clobber: Idempotenz — nach einem fehlgeschlagenen Upload (Release
           # existiert dann schon) kann der Job re-runt werden, ohne dass
           # "gh release create" am existierenden Tag scheitert.

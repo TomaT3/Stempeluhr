@@ -37,7 +37,8 @@ npx ng build --configuration production
 npx ng test --watch=false
 
 cd ..
-python3 tools/pi-nfc-agent/test_offline_queue.py
+python3 tools/pi-nfc-agent/test_scan_handling.py
+python3 tools/pi-nfc-agent/test_local_scan_server.py
 bash tools/testenv/run_e2e_test.sh
 ```
 

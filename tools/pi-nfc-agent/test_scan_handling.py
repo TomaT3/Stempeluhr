@@ -1,11 +1,9 @@
-"""Tests for the publish-instead-of-toggle scan handling.
+"""Tests for the publish-and-ack scan handling.
 
 Run manually: python3 test_scan_handling.py
 """
 
-import json
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -36,27 +34,24 @@ if "smartcard" not in sys.modules:
         sys.modules["smartcard.Exceptions"] = exc
         sys.modules["smartcard.System"] = sysm
 
+
 from stempeluhr_nfc_agent import (  # noqa: E402
     AgentConfig,
-    CardStatusCache,
     LocalScanServer,
     handle_card_scan,
+    read_version,
 )
-from offline_queue import OfflineQueue  # noqa: E402
 import stempeluhr_nfc_agent as agent_module  # noqa: E402
 
 
-def make_config(queue_path: Path, fallback_mode: str = "none") -> AgentConfig:
+def make_config() -> AgentConfig:
     return AgentConfig(
         api_base_url="http://127.0.0.1:1",
         terminal_id="t1",
-        reader_token=None,
         debounce_seconds=3,
         reader_name_contains=None,
-        queue_path=queue_path,
         local_port=0,
         selection_timeout_seconds=0.2,
-        fallback_mode=fallback_mode,
     )
 
 
@@ -70,171 +65,107 @@ def ack_after(server: LocalScanServer, delay: float) -> threading.Thread:
     return thread
 
 
-def main() -> int:
+def with_server(test) -> None:
+    server = LocalScanServer(port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        test(server)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_ack_within_timeout(server: LocalScanServer) -> None:
+    acker = ack_after(server, 0.05)
+    outcome = handle_card_scan(make_config(), "CARD1", server)
+    acker.join(timeout=2)
+    assert outcome == "acked", outcome
+    scan = server.latest_scan()
+    assert scan is not None and scan.consumed, "scan must be published+consumed"
+
+
+def test_timeout_drops_and_expires(server: LocalScanServer) -> None:
+    outcome = handle_card_scan(make_config(), "CARD2", server)
+    assert outcome == "dropped", outcome
+    scan = server.latest_scan()
+    assert scan is not None and scan.consumed, "dropped scan must be expired"
+    # A late UI ack must not change anything any more.
+    before = server.latest_scan()
+    server.ack_latest()
+    assert server.latest_scan() == before, "late ack after drop is a no-op"
+
+
+def test_newer_scan_supersedes(server: LocalScanServer) -> None:
+    outcomes: dict[str, str] = {}
+
+    def first() -> None:
+        outcomes["A"] = handle_card_scan(make_config(), "CARD_A", server)
+
+    thread = threading.Thread(target=first, daemon=True)
+    thread.start()
+    time.sleep(0.05)
+    outcomes["B"] = handle_card_scan(make_config(), "CARD_B", server)
+    thread.join(timeout=5)
+    assert outcomes == {"A": "superseded", "B": "dropped"}, outcomes
+
+
+def test_late_ack_counts_as_acked(server: LocalScanServer) -> None:
+    # Force the watchdog verdict to "timeout" even though a real ack arrives
+    # during the wait - exactly the race window between timeout and drop.
+    real_wait = agent_module._wait_for_ack
+
+    def late_timeout(*args, **kwargs):
+        real_wait(*args, **kwargs)
+        return "timeout"
+
+    agent_module._wait_for_ack = late_timeout
+    try:
+        acker = ack_after(server, 0.05)
+        outcome = handle_card_scan(make_config(), "CARD5", server)
+        acker.join(timeout=2)
+    finally:
+        agent_module._wait_for_ack = real_wait
+    assert outcome == "acked", outcome
+
+
+def test_config_ignores_legacy_keys() -> None:
+    import tempfile
+
     with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
+        path = Path(tmp_dir) / "config.json"
+        path.write_text(
+            '{"api_base_url": "https://host/", "terminal_id": "pi-1",'
+            ' "reader_token": "x", "fallback_mode": "toggle",'
+            ' "queue_path": "/var/lib/q.json"}',
+            encoding="utf-8",
+        )
+        config = AgentConfig.load(path)
+        assert config.api_base_url == "https://host"
+        assert config.terminal_id == "pi-1"
+        assert config.local_port == 8737
+        assert config.selection_timeout_seconds == 10
 
-        # 1) Ack within the timeout -> published, NOT queued.
-        config = make_config(tmp / "q1.json")
-        queue = OfflineQueue.load(config.queue_path)
-        cache = CardStatusCache.load(None)
-        server = LocalScanServer(port=0)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        try:
-            acker = ack_after(server, 0.05)
-            handle_card_scan(config, queue, cache, "CARD1", server)
-            acker.join(timeout=2)
-            assert len(queue) == 0, f"acked scan must not be queued, got {len(queue)}"
-            scan = server.latest_scan()
-            assert scan is not None and scan.consumed, "scan must be published+consumed"
-        finally:
-            server.shutdown()
-            server.server_close()
 
-        # 2) Timeout + fallback_mode "none" -> no queue event.
-        config = make_config(tmp / "q2.json", fallback_mode="none")
-        queue = OfflineQueue.load(config.queue_path)
-        cache = CardStatusCache.load(None)
-        server = LocalScanServer(port=0)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        try:
-            handle_card_scan(config, queue, cache, "CARD2", server)
-            assert len(queue) == 0, "mode 'none' must not queue on timeout"
-        finally:
-            server.shutdown()
-            server.server_close()
+def test_read_version() -> None:
+    import tempfile
 
-        # 3) Timeout + fallback_mode "toggle" -> queued like before.
-        config = make_config(tmp / "q3.json", fallback_mode="toggle")
-        queue = OfflineQueue.load(config.queue_path)
-        cache = CardStatusCache.load(None)
-        server = LocalScanServer(port=0)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        try:
-            handle_card_scan(config, queue, cache, "CARD3", server)
-            assert len(queue) == 1, "mode 'toggle' must queue on timeout"
-            pending = queue.snapshot()
-            assert pending[0].card_id == "CARD3"
-            # Toggle chain preserved: second timeout flips the cached state.
-            handle_card_scan(config, queue, cache, "CARD3", server)
-            assert len(queue) == 2, "second scan must queue again"
-        finally:
-            server.shutdown()
-            server.server_close()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "VERSION"
+        assert read_version(path) == "0.0.0-local", "missing file -> dev version"
+        path.write_text("1.2.3\n", encoding="utf-8")
+        assert read_version(path) == "1.2.3"
 
-        # 4) A newer scan replaces the previous one before the timeout;
-        #    only the newest card reaches the fallback.
-        config = make_config(tmp / "q4.json", fallback_mode="toggle")
-        queue = OfflineQueue.load(config.queue_path)
-        cache = CardStatusCache.load(None)
-        server = LocalScanServer(port=0)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        try:
-            first = threading.Thread(
-                target=handle_card_scan,
-                args=(config, queue, cache, "CARD_A", server),
-                daemon=True,
-            )
-            first.start()
-            time.sleep(0.05)
-            handle_card_scan(config, queue, cache, "CARD_B", server)
-            first.join(timeout=5)
-            pending = queue.snapshot()
-            cards = {event.card_id for event in pending}
-            assert cards == {"CARD_B"}, f"only newest scan may fall back, got {cards}"
-            assert len(pending) == 1
-        finally:
-            server.shutdown()
-            server.server_close()
 
-        # 5) Late-ack race: the ack lands in the window between the
-        #    watchdog reporting "timeout" and the fallback executing ->
-        #    no queue event, treated like "acked".
-        config = make_config(tmp / "q5.json", fallback_mode="toggle")
-        queue = OfflineQueue.load(config.queue_path)
-        cache = CardStatusCache.load(None)
-        server = LocalScanServer(port=0)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        try:
-            # Force the watchdog verdict to "timeout" even though a real
-            # ack arrives during the wait - this is exactly the late-ack
-            # race window between timeout expiry and the fallback.
-            real_wait = agent_module._wait_for_ack
-
-            def late_timeout(*args, **kwargs):
-                real_wait(*args, **kwargs)
-                return "timeout"
-
-            agent_module._wait_for_ack = late_timeout
-            try:
-                acker = ack_after(server, 0.05)
-                handle_card_scan(config, queue, cache, "CARD5", server)
-                acker.join(timeout=2)
-            finally:
-                agent_module._wait_for_ack = real_wait
-            assert len(queue) == 0, f"late-acked scan must not be queued, got {len(queue)}"
-            scan = server.latest_scan()
-            assert scan is not None and scan.consumed, "scan must be consumed"
-        finally:
-            server.shutdown()
-            server.server_close()
-
-        # 6) After the fallback fired, the scan is EXPIRED: a late UI ack
-        #    must not consume an already-handled scan (which would let the
-        #    client queue AND the agent toggle both act on the same tap).
-        config = make_config(tmp / "q6.json", fallback_mode="none")
-        queue = OfflineQueue.load(config.queue_path)
-        cache = CardStatusCache.load(None)
-        server = LocalScanServer(port=0)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        try:
-            handle_card_scan(config, queue, cache, "CARD6", server)
-            scan = server.latest_scan()
-            assert scan is not None, "scan must still be present"
-            assert (
-                scan.consumed
-            ), "fallback (mode none) must expire the scan immediately"
-            # A late UI ack must not resurrect the scan: the fallback already
-            # owns it, so acking again must not change any state the watchdog
-            # or a second fallback could act on.
-            before = server.latest_scan()
-            server.ack_latest()
-            assert server.latest_scan() == before, "late ack after fallback is a no-op"
-        finally:
-            server.shutdown()
-            server.server_close()
-
-        # 6b) Toggle variant: the fallback queued + expired the scan; a late
-        #     ack must not enable a second toggle for the same tap (the
-        #     client queue and the agent toggle would both act otherwise).
-        config = make_config(tmp / "q6b.json", fallback_mode="toggle")
-        queue = OfflineQueue.load(config.queue_path)
-        cache = CardStatusCache.load(None)
-        server = LocalScanServer(port=0)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        try:
-            handle_card_scan(config, queue, cache, "CARD7", server)
-            assert len(queue) == 1, "toggle fallback must queue once"
-            scan = server.latest_scan()
-            assert scan is not None and scan.consumed, (
-                "toggle fallback must expire the scan immediately"
-            )
-            # A subsequent late ack cannot re-arm anything: state unchanged.
-            before = server.latest_scan()
-            server.ack_latest()
-            assert server.latest_scan() == before
-            assert len(queue) == 1, "late ack must not produce a second event"
-        finally:
-            server.shutdown()
-            server.server_close()
-
-        # Config defaults.
-        assert (
-            AgentConfig.__dataclass_fields__["selection_timeout_seconds"].default == 10
-        ), "default selection timeout must be 10s"
-        assert (
-            AgentConfig.__dataclass_fields__["fallback_mode"].default == "none"
-        ), "default fallback mode must be 'none'"
+def main() -> int:
+    with_server(test_ack_within_timeout)
+    with_server(test_timeout_drops_and_expires)
+    with_server(test_newer_scan_supersedes)
+    with_server(test_late_ack_counts_as_acked)
+    test_config_ignores_legacy_keys()
+    test_read_version()
+    assert (
+        AgentConfig.__dataclass_fields__["selection_timeout_seconds"].default == 10
+    ), "default selection timeout must be 10s"
 
     print("ScanHandling: all tests passed")
     return 0

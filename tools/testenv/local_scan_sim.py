@@ -3,15 +3,14 @@
 
 Der echte Agent braucht einen PC/SC-Reader (pyscard), der im CI/Container
 nicht vorhanden ist. Dieses Skript stubt das ``smartcard``-Modul, importiert
-den echten Agent-Code (LocalScanServer + handle_card_scan + OfflineQueue)
+den echten Agent-Code (LocalScanServer + handle_card_scan)
 und steuert ihn über stdin-Kommandos:
 
     scan <card_id>   -> publish_scan(card_id) auf dem LocalScanServer
-    handle <card_id> -> handle_card_scan(...) inkl. Ack-Watchdog + Fallback
+    handle <card_id> -> handle_card_scan(...) inkl. Ack-Watchdog
     quit             -> beenden
 
-Damit lässt sich der Offline-Identifikationspfad (Publish → Ack / Timeout →
-Fallback) ohne Hardware gegen den laufenden Loopback-Server testen. Die
+Damit lässt sich der Identifikationspfad (Publish → Ack / Timeout → Drop) ohne Hardware gegen den laufenden Loopback-Server testen. Die
 Grenze: kein echter Browser/Angular-Kiosk - die UI-Seite wird per curl
 gegen 127.0.0.1:<port> simuliert (siehe run_e2e_test.sh).
 """
@@ -58,12 +57,11 @@ def _stub_smartcard() -> None:
 
 
 def main() -> int:
-    if len(sys.argv) < 3:
-        print("usage: local_scan_sim.py <config.json> <queue.json>", file=sys.stderr)
+    if len(sys.argv) < 2:
+        print("usage: local_scan_sim.py <config.json>", file=sys.stderr)
         return 2
 
     config_path = Path(sys.argv[1])
-    queue_path = Path(sys.argv[2])
 
     # Import the real agent code from tools/pi-nfc-agent/.
     agent_dir = Path(__file__).resolve().parent.parent / "pi-nfc-agent"
@@ -72,8 +70,6 @@ def main() -> int:
     import stempeluhr_nfc_agent as agent  # noqa: E402
 
     config = agent.AgentConfig.load(config_path)
-    queue = agent.OfflineQueue.load(queue_path)
-    status_cache = agent.CardStatusCache.load(None)
     scan_server = agent.LocalScanServer(port=config.local_port)
     scan_server.start_background()
 
@@ -99,12 +95,11 @@ def main() -> int:
             card_id = parts[1]
 
             def _run(card_id: str = card_id) -> None:
+                outcome = "error"
                 try:
-                    agent.handle_card_scan(
-                        config, queue, status_cache, card_id, scan_server
-                    )
+                    outcome = agent.handle_card_scan(config, card_id, scan_server)
                 finally:
-                    print(f"SIM_HANDLED {card_id} queue_len={len(queue)}", flush=True)
+                    print(f"SIM_HANDLED {card_id} outcome={outcome}", flush=True)
 
             t = threading.Thread(target=_run, daemon=True)
             t.start()

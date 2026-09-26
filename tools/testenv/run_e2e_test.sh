@@ -214,28 +214,26 @@ assert_status '"rejected"' "$R" "Unbekannter Mitarbeiter → rejected"
 # ------------------------------------------------- Test 4: Agent-Level-Offline-Identifikation
 # Grenze: Ein vollständiges Browser-/Angular-E2E ist hier nicht machbar - der
 # NFC-Agent braucht einen PC/SC-Reader (pyscard). Stattdessen steuert
-# local_scan_sim.py den ECHTEN Agent-Code (LocalScanServer, Ack-Watchdog,
-# OfflineQueue) an; die Kiosk-UI wird per curl gegen 127.0.0.1:<port>
+# local_scan_sim.py den ECHTEN Agent-Code (LocalScanServer, Ack-Watchdog)
+# an; die Kiosk-UI wird per curl gegen 127.0.0.1:<port>
 # simuliert. Die API selbst ist in Test 1-3 bereits abgedeckt.
-say "Test 4: Agent-Level-Simulation (LocalScanServer: Publish → Ack / Timeout → Fallback)"
+say "Test 4: Agent-Level-Simulation (LocalScanServer: Publish → Ack / Timeout → Drop)"
 
 SIM_PORT=18737
 cat > "$WORK/agent-config.json" <<EOF
 {
   "api_base_url": "$API_URL",
   "terminal_id": "e2e-sim",
-  "reader_token": "test-reader-token",
   "local_port": $SIM_PORT,
-  "selection_timeout_seconds": 1.5,
-  "fallback_mode": "none"
+  "selection_timeout_seconds": 1.5
 }
 EOF
 
-start_sim() { # config_file queue_file
+start_sim() { # config_file
   # FIFO als stdin, damit wir dem Sim laufend Kommandos schicken können.
   local fifo="$WORK/sim-stdin.fifo"
   rm -f "$fifo"; mkfifo "$fifo"
-  python3 "$ROOT/tools/testenv/local_scan_sim.py" "$1" "$2" < "$fifo" > "$WORK/sim.log" 2>&1 & SIM_PID=$!
+  python3 "$ROOT/tools/testenv/local_scan_sim.py" "$1" < "$fifo" > "$WORK/sim.log" 2>&1 & SIM_PID=$!
   exec 3>"$fifo"   # Schreibende offen halten
   for _ in $(seq 1 20); do
     grep -q '^SIM_READY' "$WORK/sim.log" 2>/dev/null && break
@@ -255,10 +253,21 @@ sim_cmd() { echo "$*" >&3; }
 
 scan_url="http://127.0.0.1:${SIM_PORT}/scan/latest"
 
-# --- 4a: Publish + Ack-Pfad (fallback_mode=none) ---
-QUEUE_NONE="$WORK/queue-none.json"; rm -f "$QUEUE_NONE"
-if start_sim "$WORK/agent-config.json" "$QUEUE_NONE"; then
-  ok "Agent-Sim läuft mit fallback_mode=none auf Port $SIM_PORT"
+wait_drained() {
+  # drain only queues the command - wait until the worker actually finished
+  # (watchdog timeout elapsed) before grepping the log.
+  for _ in $(seq 1 40); do
+    grep -q '^SIM_DRAINED' "$WORK/sim.log" 2>/dev/null && break
+    sleep 0.5
+  done
+}
+
+# --- 4a: Publish + Ack-Pfad ---
+if start_sim "$WORK/agent-config.json"; then
+  ok "Agent-Sim läuft auf Port $SIM_PORT"
+
+  R=$(curl -s -m 5 "http://127.0.0.1:${SIM_PORT}/health")
+  assert_status '"version"' "$R" "/health meldet die Agent-Version"
 
   sim_cmd handle 04A2B3C4
   sleep 0.4
@@ -272,58 +281,24 @@ if start_sim "$WORK/agent-config.json" "$QUEUE_NONE"; then
   R=$(curl -s -m 5 "$scan_url")
   assert_status '"consumed": true' "$R" "/scan/latest zeigt consumed nach Ack"
 
-  sleep 2  # Watchdog (Timeout 1.5s) ablaufen lassen; Ack ist bereits da
-  if [[ -f "$QUEUE_NONE" ]] && grep -q '04A2B3C4' "$QUEUE_NONE"; then
-    bad "Acked Scan landete doch in der Queue (darf nicht passieren)"
-  else
-    ok "Acked Scan erzeugte KEIN Queue-Event"
-  fi
-fi
-stop_sim
-
-# --- 4b: Timeout ohne Ack + mode none → KEIN Queue-Event ---
-rm -f "$QUEUE_NONE"
-if start_sim "$WORK/agent-config.json" "$QUEUE_NONE"; then
-  sim_cmd handle 04A2B3C4
   sim_cmd drain
-  # drain only queues the command - wait until the worker actually finished
-  # (watchdog timeout elapsed) before grepping the log.
-  for _ in $(seq 1 40); do
-    grep -q '^SIM_DRAINED' "$WORK/sim.log" 2>/dev/null && break
-    sleep 0.5
-  done
-  R=$(grep -c 'SIM_HANDLED 04A2B3C4 queue_len=0' "$WORK/sim.log" || true)
-  if [[ "$R" -ge 1 ]]; then
-    ok "Timeout ohne Ack + mode none → kein Event in der Queue"
-  else
-    bad "Erwartete queue_len=0 nach Timeout, sim.log: $(tail -5 "$WORK/sim.log")"
-  fi
-  [[ -f "$QUEUE_NONE" ]] && grep -q '04A2B3C4' "$QUEUE_NONE" \
-    && bad "Queue-Datei enthält trotz mode none ein Event" \
-    || ok "Queue-Datei bleibt leer (mode none)"
+  wait_drained
+  grep -q 'SIM_HANDLED 04A2B3C4 outcome=acked' "$WORK/sim.log" \
+    && ok "Acked Scan wird als acked gemeldet" \
+    || bad "Erwartete outcome=acked, sim.log: $(tail -5 "$WORK/sim.log")"
 fi
 stop_sim
 
-# --- 4c: Timeout ohne Ack + mode toggle → Queue-Event vorhanden ---
-sed 's/"fallback_mode": "none"/"fallback_mode": "toggle"/' \
-  "$WORK/agent-config.json" > "$WORK/agent-config-toggle.json"
-QUEUE_TOGGLE="$WORK/queue-toggle.json"; rm -f "$QUEUE_TOGGLE"
-if start_sim "$WORK/agent-config-toggle.json" "$QUEUE_TOGGLE"; then
+# --- 4b: Timeout ohne Ack → Scan verworfen und abgelaufen ---
+if start_sim "$WORK/agent-config.json"; then
   sim_cmd handle 04D5E6F7
   sim_cmd drain
-  for _ in $(seq 1 40); do
-    grep -q '^SIM_DRAINED' "$WORK/sim.log" 2>/dev/null && break
-    sleep 0.5
-  done
-  # With the API up, the toggle fallback submits IMMEDIATELY and removes the
-  # event on delivery (even a server-side "rejected" counts as delivered) -
-  # the queue file only stays populated when the API is unreachable. Assert
-  # on the sim outcome instead: handled with an empty queue = delivered.
-  if grep -q 'SIM_HANDLED 04D5E6F7' "$WORK/sim.log"; then
-    ok "Timeout ohne Ack + mode toggle → Toggle-Pfad ausgeführt (Event zugestellt/queued)"
-  else
-    bad "Erwartetes Toggle-Event fehlt in $QUEUE_TOGGLE (sim.log: $(tail -5 "$WORK/sim.log"))"
-  fi
+  wait_drained
+  grep -q 'SIM_HANDLED 04D5E6F7 outcome=dropped' "$WORK/sim.log" \
+    && ok "Timeout ohne Ack → Scan verworfen (keine Buchung)" \
+    || bad "Erwartete outcome=dropped, sim.log: $(tail -5 "$WORK/sim.log")"
+  R=$(curl -s -m 5 "$scan_url")
+  assert_status '"consumed": true' "$R" "Verworfener Scan ist abgelaufen (spätes Ack wirkungslos)"
 fi
 stop_sim
 
