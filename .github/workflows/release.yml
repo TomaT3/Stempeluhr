@@ -109,7 +109,13 @@ jobs:
           [ -z "$LATEST_TAG" ] && header="## First Release"
 
           subjects="$(git log --pretty=%s "$range")"
-          merges="$(git log --merges --pretty='- %s' "$range" | sed -E 's/- Merge pull request #([0-9]+) from [^/]+\/[^[:space:]]+/- #\1/')"
+          # Nur echte PR-Merges: ein gewoehnlicher "Merge branch ..."-Commit ist kein
+          # Pull Request und stuende sonst als "#"lose Zeile in dieser Ueberschrift.
+          # (In unserem Testrepo nachgestellt: dort landete "Merge branch 'thema1'"
+          # zusaetzlich unter "Other".)
+          merges="$(git log --merges --pretty='- %s' "$range" \
+            | sed -E 's/- Merge pull request #([0-9]+) from [^/]+\/[^[:space:]]+/- #\1/' \
+            | { grep -E '^- [#][0-9]+' || true; })"
 
           notes="$header"
           for pair in "Breaking Changes ^[a-z]+(\[[^]]*\])?(\([^)]*\))!" "Features feat(\([^)]*\))?" "Bug Fixes (fix|fix\+test)(\([^)]*\))?" "Performance perf(\([^)]*\))?"; do
@@ -122,7 +128,7 @@ jobs:
               notes+=$'\n\n### '"$title"$'\n'"$body"
             fi
           done
-          other="$(echo "$subjects" | { grep -viE '^(feat|fix|perf)(\([^)]*\))?:' || true; } | { grep -v '^Merge pull request #' || true; } | sed 's/^/- /')"
+          other="$(echo "$subjects" | { grep -viE '^(feat|fix|perf)(\([^)]*\))?:' || true; } | { grep -viE '^Merge (pull request|branch)' || true; } | sed 's/^/- /')"
           if [ -n "$other" ]; then
             notes+=$'\n\n### Other\n'"$other"
           fi
