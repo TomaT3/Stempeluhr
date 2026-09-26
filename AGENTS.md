@@ -12,7 +12,10 @@ nur, was zusätzlich für Änderungen gilt.
 - API-Tests sind xUnit (`[Fact]`, `[Theory]`) und laufen über
   `Stempeluhr.Api.Tests/Stempeluhr.Api.Tests.csproj` (nicht über die `.slnx`).
 - Build- und Testbefehle nicht durch Pipes führen, die den Exit-Code verdecken.
-- Der Kunden-Deploy ist nicht Teil eines PRs.
+- Nach einer Merge-Freigabe: mergen, Branches löschen, Release starten und
+  Release sowie Image-Tags prüfen. Bei gestapelten PRs vor jedem Merge die
+  Basis auf `main` umstellen – das Löschen eines Basis-Branches schließt
+  abhängige PRs. Der Kunden-Deploy ist nicht Teil dieses Ablaufs.
 
 ## Invarianten
 
