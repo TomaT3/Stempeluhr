@@ -55,7 +55,7 @@ AGENT_DIR=/opt/stempeluhr-nfc-agent
 TS="$(date +%Y%m%d-%H%M%S)"
 
 echo "  Backup bisheriger Dateien (Zeitstempel-Suffix .bak-$TS)..."
-for f in stempeluhr_nfc_agent.py offline_queue.py; do
+for f in stempeluhr_nfc_agent.py; do
   if [ -f "$AGENT_DIR/$f" ]; then
     sudo cp "$AGENT_DIR/$f" "$AGENT_DIR/$f.bak-$TS"
   fi
@@ -65,10 +65,10 @@ echo "  Entpacke ZIP und spiele Dateien ein..."
 sudo rm -rf /tmp/pi-nfc-agent-extract
 sudo mkdir -p /tmp/pi-nfc-agent-extract
 sudo unzip -o -q /tmp/pi-nfc-agent.zip -d /tmp/pi-nfc-agent-extract
-sudo cp /tmp/pi-nfc-agent-extract/stempeluhr_nfc_agent.py \
-        /tmp/pi-nfc-agent-extract/offline_queue.py \
-        "$AGENT_DIR/"
-sudo chown root:root "$AGENT_DIR/stempeluhr_nfc_agent.py" "$AGENT_DIR/offline_queue.py"
+sudo cp /tmp/pi-nfc-agent-extract/stempeluhr_nfc_agent.py "$AGENT_DIR/"
+# offline_queue.py gehoert seit dem Wegfall des Toggle-Modus nicht mehr dazu.
+sudo rm -f "$AGENT_DIR/offline_queue.py"
+sudo chown root:root "$AGENT_DIR/stempeluhr_nfc_agent.py"
 sudo rm -rf /tmp/pi-nfc-agent-extract /tmp/pi-nfc-agent.zip
 
 echo "  Service neu starten..."
@@ -86,12 +86,12 @@ done
 
 if [ "$ACTIVE" != "yes" ]; then
   echo "  ✗ Service wurde nicht aktiv - Rollback auf Backup (.bak-$TS)..." >&2
-  for f in stempeluhr_nfc_agent.py offline_queue.py; do
+  for f in stempeluhr_nfc_agent.py; do
     if [ -f "$AGENT_DIR/$f.bak-$TS" ]; then
       sudo cp "$AGENT_DIR/$f.bak-$TS" "$AGENT_DIR/$f"
     fi
   done
-  sudo chown root:root "$AGENT_DIR/stempeluhr_nfc_agent.py" "$AGENT_DIR/offline_queue.py"
+  sudo chown root:root "$AGENT_DIR/stempeluhr_nfc_agent.py"
   sudo systemctl restart stempeluhr-nfc-agent
 
   # Rollback-Folge-Check mit Retry (bis 10 s): bei trägem Start (pyscard-Init)
