@@ -59,13 +59,19 @@ ausführen:
   `stempeluhr-nfc-agent.service` starten
 - `stempeluhr-nfc-agent-update.timer` aktivieren (kurz nach dem Boot und alle
   15 Minuten)
-- Chromium-Autostart für `kiosk` auf `https://<host>/terminal?terminalId=<id>`
-- Chromium-Policy `LocalNetworkAccessAllowedForUrls` für `https://<host>`, damit
-  die Kiosk-Seite den Agenten auf `127.0.0.1:8737` ohne Nachfrage erreicht
+- Chromium-Policy `/etc/chromium/policies/managed/stempeluhr.json`
+  (`LocalNetworkAccessAllowedForUrls` und `LoopbackNetworkAllowedForUrls` für
+  `https://<host>`): Seit Chromium 142 darf eine öffentliche Seite
+  `127.0.0.1` nur nach einem Erlaubnis-Dialog erreichen – im Kiosk würde der
+  den Kartenleser stilllegen. Wirkt ab dem nächsten Chromium-Start.
+- mit `--kiosk-user`: Chromium-Autostart auf
+  `https://<host>/terminal?terminalId=<id>`
 
-Ein Pi mit einem früher von Hand kopierten Agenten wird mit demselben Befehl
-ohne Parameter umgestellt (Werte kommen aus der vorhandenen `config.json`) oder
-zentral mit `tools/deploy/pi-deploy.sh bootstrap`.
+Ein Pi, der nach der früheren Anleitung von Hand eingerichtet wurde, wird mit
+demselben Befehl ohne Parameter umgestellt (Werte kommen aus der vorhandenen
+`config.json`, der vorhandene Autostart bleibt) oder zentral mit
+`tools/deploy/pi-deploy.sh bootstrap`. Danach einmal neu starten, damit
+Chromium die Policy liest. Kontrolle im Kiosk-Browser: `chrome://policy`.
 
 ## 4. Prüfen
 

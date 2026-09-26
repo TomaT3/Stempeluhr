@@ -14,7 +14,7 @@
 #   --server URL          Basis-URL der Stempeluhr (ohne /terminal)
 #   --terminal-id ID      Terminal-Kennung (= terminalId der Kiosk-URL)
 #   --reader NAME         Filter auf den PC/SC-Reader-Namen (Default: ACR122)
-#   --kiosk-user USER     Chromium-Autostart und -Policy für diesen Benutzer
+#   --kiosk-user USER     Chromium-Autostart für diesen Benutzer anlegen
 #   --skip-apt            keine Pakete installieren (Tests)
 #
 # Nicht enthalten (siehe docs/raspberry-pi-kiosk-nfc.md): Desktop-Autologin,
@@ -125,6 +125,17 @@ rm -f "$AGENT_DIR"/*.py "$AGENT_DIR"/*.py.bak-*
 systemctl enable stempeluhr-nfc-agent.service
 systemctl enable --now stempeluhr-nfc-agent-update.timer
 
+# Chromium ab Version 142 blockiert Anfragen einer öffentlichen Seite an
+# 127.0.0.1 (Local Network Access), bis jemand einen Erlaubnis-Dialog
+# bestätigt - im Kiosk legt das den Kartenleser still. Die Policy gibt die
+# Stempeluhr-Origin frei; ab Chromium 145 heißt die Loopback-Freigabe
+# LoopbackNetworkAllowedForUrls, ältere Versionen ignorieren unbekannte
+# Einträge. Wirkt beim nächsten Chromium-Start.
+log "Chromium-Policy: lokalen Agenten für $SERVER erlauben"
+mkdir -p /etc/chromium/policies/managed
+printf '{\n  "LocalNetworkAccessAllowedForUrls": ["%s"],\n  "LoopbackNetworkAllowedForUrls": ["%s"]\n}\n' "$SERVER" "$SERVER" \
+  > /etc/chromium/policies/managed/stempeluhr.json
+
 if [ -n "$KIOSK_USER" ]; then
   id "$KIOSK_USER" >/dev/null 2>&1 || fail "Kiosk-Benutzer '$KIOSK_USER' existiert nicht"
   KIOSK_HOME="$(getent passwd "$KIOSK_USER" | cut -d: -f6)"
@@ -140,14 +151,6 @@ Exec=chromium --password-store=basic --no-first-run --no-default-browser-check -
 X-GNOME-Autostart-enabled=true
 EOF
   chown "$KIOSK_USER:$KIOSK_USER" "$KIOSK_HOME/.config/autostart/stempeluhr-kiosk.desktop"
-
-  # Neuere Chromium-Versionen fragen nach, bevor eine öffentliche Seite
-  # 127.0.0.1 erreicht (Local Network Access). Im Kiosk würde der Dialog den
-  # Kartenleser stilllegen - die Stempeluhr-Origin wird deshalb freigegeben.
-  log "Chromium-Policy: lokalen Agenten für $SERVER erlauben"
-  mkdir -p /etc/chromium/policies/managed
-  printf '{\n  "LocalNetworkAccessAllowedForUrls": ["%s"]\n}\n' "$SERVER" \
-    > /etc/chromium/policies/managed/stempeluhr.json
 fi
 
 log "Fertig. Terminal '$TERMINAL_ID' holt Agent-Updates jetzt selbst von $SERVER."
