@@ -1,6 +1,7 @@
 import { Directive, OnDestroy, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
-import { Subscription, timeout } from 'rxjs';
+import { SwUpdate } from '@angular/service-worker';
+import { Subscription, finalize, timeout } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
 import { ClockStatus, Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
@@ -27,6 +28,8 @@ import { OfflineQueueService } from '../../core/services/offline-queue';
 
 /** Wartezeit zwischen Versions-Hinweis und Auto-Reload (Mitarbeiter kann abbrechen). */
 const VERSION_RELOAD_DELAY_MS = 3000;
+/** Neuer Versuch, wenn der Reload gerade nicht ging (Kiosk belegt, Update noch nicht geladen). */
+const VERSION_RETRY_MS = 60_000;
 
 const PIN_LENGTH = 4;
 /** Abstand des Erreichbarkeits-Polls auf Hosts ohne NFC-Poll (§ /clock). */
@@ -37,6 +40,16 @@ const HEALTH_POLL_MS = 15_000;
  */
 const HEALTH_TIMEOUT_MS = 10_000;
 
+/** A stamp as captured at button press (see sendClockAction). */
+interface PendingStamp {
+  action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd';
+  performedAt: string;
+  employeeId: string;
+  employeeName: string;
+  pin: string;
+  nfcCardId: string | null;
+}
+
 @Directive()
 export abstract class ClockWorkflow implements OnDestroy {
   private readonly kioskApi = inject(KioskApi);
@@ -44,6 +57,8 @@ export abstract class ClockWorkflow implements OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly localNfcScan = inject(LocalNfcScanService);
   private readonly appVersion = inject(AppVersionService);
+  /** Nur im Produktions-Build registriert (app.config.ts); in Tests/Dev null. */
+  private readonly swUpdate = inject(SwUpdate, { optional: true });
   protected readonly offlineQueue = inject(OfflineQueueService);
   readonly clockState = inject(ClockState);
 
@@ -95,6 +110,8 @@ export abstract class ClockWorkflow implements OnDestroy {
   /** Interval handle for the local agent scan poll (only while offline). */
   private localNfcTimer: number | null = null;
   private lastNfcEventId: string | null = null;
+  /** Ein Poll läuft noch - bei hängender Verbindung keine Anfragen stapeln. */
+  private nfcPollInFlight = false;
   private hasInitializedNfcPolling = false;
   /**
    * True while a connectivity loss (failed NFC poll OR an offline-queued
@@ -126,7 +143,9 @@ export abstract class ClockWorkflow implements OnDestroy {
   private readonly terminalId = this.readTerminalId();
   /** Auto-Reload: Timer-Handle für den verzögerten Reload bei Server-Update. */
   private versionReloadTimer: number | null = null;
+  private versionRetryTimer: number | null = null;
   private versionReloadSub: Subscription | null = null;
+  private swUnrecoverableSub: Subscription | null = null;
 
   constructor() {
     // Hosts without a terminalId (the /clock default route) have no NFC
@@ -168,6 +187,11 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.versionReloadSub = this.appVersion.version$.subscribe(version => {
       this.handleServerVersionChange(version);
     });
+    // Der Service Worker kann seinen Cache nicht mehr bedienen (z. B. Dateien
+    // der laufenden Version serverseitig weg): nur ein Reload hilft.
+    if (this.swUpdate?.isEnabled) {
+      this.swUnrecoverableSub = this.swUpdate.unrecoverable.subscribe(() => this.performReload());
+    }
 
     if (!this.terminalId) {
       // Ohne NFC-Poll (§ /clock) merkt die Seite einen Ausfall nur an einer
@@ -191,9 +215,10 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /**
    * Reagiert auf Server-Versionswechsel: bei Mismatch (und Idle) Hinweis
-   * zeigen und nach kurzer Verzögerung neu laden. Der erneute Idle-Check
-   * beim Timer-Fire verhindert, dass eine inzwischen gestartete Aktion
-   * unterbrochen wird — der nächste Poll (60 s) versucht es dann erneut.
+   * zeigen und nach kurzer Verzögerung neu laden. Klappt das gerade nicht
+   * (inzwischen jemand aktiv, Service Worker hat die neue Version noch nicht),
+   * folgt ein neuer Versuch nach VERSION_RETRY_MS - version$ meldet dieselbe
+   * Version kein zweites Mal.
    */
   private handleServerVersionChange(version: string | null): void {
     if (!this.isReleaseBuild()) {
@@ -202,7 +227,8 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (version === null || version === APP_VERSION) {
       return;
     }
-    if (this.selectedEmployee() || this.isBusy() || this.pin().length > 0) {
+    if (!this.isIdle()) {
+      this.scheduleVersionRetry();
       return; // nicht in eine laufende Interaktion platzen
     }
     this.message.set('Neue Version verfügbar – Aktualisierung...');
@@ -211,14 +237,69 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
     this.versionReloadTimer = window.setTimeout(() => {
       this.versionReloadTimer = null;
-      if (this.selectedEmployee() || this.isBusy() || this.pin().length > 0) {
-        // Abort: inzwischen ist jemand aktiv geworden — den Hinweis wieder
-        // entfernen, sonst bleibt er (ohne weiteren Poll) dauerhaft stehen.
-        this.message.set('');
+      void this.reloadIntoNewVersion();
+    }, VERSION_RELOAD_DELAY_MS);
+  }
+
+  /**
+   * Lädt die App in der neuen Version. Mit Service Worker reicht ein Reload
+   * nicht: er lieferte die alte, gecachte App aus - und der Versions-Poll
+   * löste sofort den nächsten Reload aus. Deshalb erst die neue Version
+   * holen und aktivieren; gelingt das nicht, bleibt die laufende App stehen.
+   */
+  private async reloadIntoNewVersion(): Promise<void> {
+    if (this.swUpdate?.isEnabled) {
+      try {
+        await this.swUpdate.checkForUpdate();
+      } catch {
+        this.retryVersionReloadLater();
         return;
       }
-      this.performReload();
-    }, VERSION_RELOAD_DELAY_MS);
+    }
+
+    // Während des Update-Checks kann jemand aktiv geworden sein. Erst danach
+    // aktivieren: lazy geladene Teile der alten Version fehlen nach der
+    // Aktivierung, die App muss dann sofort neu laden.
+    if (!this.isIdle()) {
+      this.retryVersionReloadLater();
+      return;
+    }
+
+    if (this.swUpdate?.isEnabled) {
+      let activated = false;
+      try {
+        activated = await this.swUpdate.activateUpdate();
+      } catch {
+        activated = false;
+      }
+      if (!activated) {
+        this.retryVersionReloadLater();
+        return;
+      }
+    }
+
+    this.performReload();
+  }
+
+  private retryVersionReloadLater(): void {
+    // Hinweis entfernen, sonst bliebe er bis zum nächsten Versuch stehen.
+    this.message.set('');
+    this.scheduleVersionRetry();
+  }
+
+  private scheduleVersionRetry(): void {
+    if (this.versionRetryTimer !== null) {
+      return;
+    }
+    this.versionRetryTimer = window.setTimeout(() => {
+      this.versionRetryTimer = null;
+      this.handleServerVersionChange(this.appVersion.serverVersion());
+    }, VERSION_RETRY_MS);
+  }
+
+  /** Kein Mitarbeiter angemeldet, keine laufende Aktion, keine PIN-Eingabe. */
+  private isIdle(): boolean {
+    return !this.selectedEmployee() && !this.isBusy() && this.pin().length === 0;
   }
 
   /** True im echten Release-Build; getrennt gehalten, damit Tests den Guard überschreiben können. */
@@ -449,7 +530,11 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (this.versionReloadTimer !== null) {
       window.clearTimeout(this.versionReloadTimer);
     }
+    if (this.versionRetryTimer !== null) {
+      window.clearTimeout(this.versionRetryTimer);
+    }
     this.versionReloadSub?.unsubscribe();
+    this.swUnrecoverableSub?.unsubscribe();
 
     this.stopLocalNfcPolling();
 
@@ -459,11 +544,14 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   private pollNfcEvents(): void {
-    if (this.isBusy() || !this.terminalId) {
+    if (this.isBusy() || !this.terminalId || this.nfcPollInFlight) {
       return;
     }
 
-    this.kioskApi.latestNfcEvent(this.terminalId).subscribe({
+    this.nfcPollInFlight = true;
+    this.kioskApi.latestNfcEvent(this.terminalId).pipe(
+      finalize(() => (this.nfcPollInFlight = false)),
+    ).subscribe({
       next: latest => {
         if (this.pendingRecoveryFlush) {
           // Connection just recovered: flush the offline queue ONCE immediately
@@ -516,15 +604,11 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   private pollLocalScan(): void {
-    // Deliberately runs even while isBusy(): kioskApi.clock has no request
-    // timeout, so a hung stamp request would keep isBusy true indefinitely
-    // and every tap would fall into the agent's fallback (reader blocked
-    // for the whole selection timeout, phantom toggle with mode=toggle).
-    // Consuming scans is always safe - it only acks, never stamps.
-    // Also consume scans while UNLOCKED (offline the kiosk stays unlocked):
-    // otherwise every tap blocks the agent's reader loop for the whole
-    // selection timeout and - with fallback_mode=toggle - fires a phantom
-    // toggle from a possibly stale status cache. We only ack here; no
+    // Deliberately runs even while isBusy(): a stamp request can take up to
+    // its timeout, and an unacked scan blocks the agent's reader loop for
+    // the whole selection timeout. Consuming scans is always safe - it only
+    // acks, never stamps. Also consume scans while UNLOCKED (offline the
+    // kiosk stays unlocked) for the same reason. We only ack here; no
     // employee switch while an action is in flight.
     if (this.isUnlocked()) {
       this.localNfcScan.poll().subscribe(scan => {
@@ -714,77 +798,50 @@ export abstract class ClockWorkflow implements OnDestroy {
   private sendClockAction(action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd'): void {
     this.isBusy.set(true);
     // Capture the stamp time AND the acting identity SYNCHRONOUSLY at button
-    // press: a hanging request (kioskApi.clock has no timeout) reports its
-    // failure only seconds to minutes later - and in between a new scan
-    // (handleLocalScan), a back() or another unlock may have changed
-    // selectedEmployee/pin/nfcCardId. The queued event must describe WHO
-    // acted WHEN, so freeze both at press time.
-    const performedAt = new Date().toISOString();
-    const employeeId = this.selectedEmployee()?.id ?? '';
-    // Only for the notice about refused stamps (issue #34): the person has to
-    // be named so somebody can repair the missing time in Kimai.
-    const employeeName = this.selectedEmployee()?.displayName ?? '';
-    const pin = this.pin();
-    const nfcCardId = this.nfcCardId;
-    this.kioskApi.clock(employeeId, pin, action, nfcCardId).subscribe({
+    // press: a request reports its failure only after up to its timeout - and
+    // in between a new scan (handleLocalScan), a back() or another unlock may
+    // have changed selectedEmployee/pin/nfcCardId. The queued event must
+    // describe WHO acted WHEN, so freeze both at press time.
+    const stamp: PendingStamp = {
+      action,
+      performedAt: new Date().toISOString(),
+      employeeId: this.selectedEmployee()?.id ?? '',
+      // Only for the notice about refused stamps (issue #34): the person has
+      // to be named so somebody can repair the missing time in Kimai.
+      employeeName: this.selectedEmployee()?.displayName ?? '',
+      pin: this.pin(),
+      nfcCardId: this.nfcCardId,
+    };
+
+    // Known outage: queue right away instead of letting the employee wait
+    // for a request that can only time out. The polls reset isOffline as soon
+    // as the backend answers again (and trigger the replay).
+    if (this.isOffline()) {
+      this.queueOffline(stamp);
+      return;
+    }
+
+    this.kioskApi.clock(stamp.employeeId, stamp.pin, action, stamp.nfcCardId).subscribe({
       next: status => {
         this.isOffline.set(false);
         this.clockState.setStatus(status);
-        if (employeeId) {
-          rememberObservedStatus(employeeId, status);
+        if (stamp.employeeId) {
+          rememberObservedStatus(stamp.employeeId, status);
         }
         this.message.set(status.stateText);
         this.isBusy.set(false);
         this.audioFeedback.playBeeps(1);
-        this.loadHoursOverview(pin);
+        this.loadHoursOverview(stamp.pin);
         this.scheduleReset();
       },
       error: (err) => {
         const status = err?.status ?? 0;
         if (status === 0 || status >= 500) {
-          // Backend/Kimai unreachable (network error or server failure): queue
-          // the action with its real timestamp so it is replayed once
-          // connectivity returns. 4xx responses are permanent (wrong PIN,
-          // deleted employee, ...) - showing the error is better than queuing
-          // an event that can never succeed.
-          this.offlineQueue.enqueueKiosk({
-            eventId: this.generateEventId(),
-            employeeId,
-            pin,
-            action,
-            performedAt,
-            // Live-path parity: a session unlocked by NFC touch has NO pin -
-            // the replay resolves the employee via the card instead.
-            nfcCardId,
-            employeeName,
-          });
-          this.isOffline.set(true);
-          // Show where this action leaves the employee instead of keeping the
-          // pre-action status on screen: after an offline Einstempeln the
-          // kiosk then offers Pause/Ausstempeln instead of another
-          // Einstempeln (which would queue a second, redundant start).
-          const projected = projectClockStatus(this.clockState.status(), action, performedAt);
-          this.clockState.setStatus(withOfflineLabel(projected, 'projected', performedAt));
-          if (employeeId) {
-            rememberProjectedStatus(employeeId, projected);
-          }
-          // Let the next successful NFC poll catch the queue up immediately.
-          this.pendingRecoveryFlush = true;
-          this.message.set(
-            'Offline gespeichert - wird automatisch nachgetragen.',
-          );
-          this.audioFeedback.playBeeps(1);
-          // Reset busy state - otherwise the terminal stays locked after the
-          // first offline-stamped action (all buttons and the NFC poll check
-          // isBusy()).
-          this.isBusy.set(false);
-          // Stay unlocked instead of resetting to the idle screen: coming
-          // back requires a PIN login, and that is impossible while the
-          // backend is unreachable - the terminal could then queue exactly
-          // ONE stamp per outage. The current employee keeps stamping at
-          // THIS terminal (the documented kiosk limitation anyway); once
-          // connectivity recovers, the NFC poll runs the deferred back().
-          this.pendingResetOnRecovery = true;
+          // Backend/Kimai unreachable (network error, timeout or server
+          // failure). 4xx responses are permanent (wrong PIN, deleted
+          // employee, ...) - showing the error is better than queuing an
+          // event that can never succeed.
+          this.queueOffline(stamp);
           return;
         }
 
@@ -797,6 +854,46 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.scheduleReset();
       },
     });
+  }
+
+  /**
+   * Queues the action with its real timestamp so it is replayed once
+   * connectivity returns, and shows where it leaves the employee.
+   */
+  private queueOffline(stamp: PendingStamp): void {
+    this.offlineQueue.enqueueKiosk({
+      eventId: this.generateEventId(),
+      employeeId: stamp.employeeId,
+      pin: stamp.pin,
+      action: stamp.action,
+      performedAt: stamp.performedAt,
+      // Live-path parity: a session unlocked by NFC touch has NO pin - the
+      // replay resolves the employee via the card instead.
+      nfcCardId: stamp.nfcCardId,
+      employeeName: stamp.employeeName,
+    });
+    this.isOffline.set(true);
+    // Show where this action leaves the employee instead of keeping the
+    // pre-action status on screen: after an offline Einstempeln the kiosk
+    // then offers Pause/Ausstempeln instead of another Einstempeln (which
+    // would queue a second, redundant start).
+    const projected = projectClockStatus(this.clockState.status(), stamp.action, stamp.performedAt);
+    this.clockState.setStatus(withOfflineLabel(projected, 'projected', stamp.performedAt));
+    if (stamp.employeeId) {
+      rememberProjectedStatus(stamp.employeeId, projected);
+    }
+    // Let the next successful NFC poll catch the queue up immediately.
+    this.pendingRecoveryFlush = true;
+    this.message.set('Offline gespeichert - wird automatisch nachgetragen.');
+    this.audioFeedback.playBeeps(1);
+    // Reset busy state - otherwise the terminal stays locked after the first
+    // offline-stamped action (all buttons and the NFC poll check isBusy()).
+    this.isBusy.set(false);
+    // Stay unlocked instead of resetting to the idle screen: the current
+    // employee may want to stamp again (e.g. pause) while the backend is
+    // still unreachable. Once connectivity recovers, the recovered signal
+    // runs the deferred back().
+    this.pendingResetOnRecovery = true;
   }
 
   private generateEventId(): string {

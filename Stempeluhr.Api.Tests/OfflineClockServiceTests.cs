@@ -340,6 +340,26 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task PauseStart_WhilePauseAlreadyRuns_IsNoOp()
+    {
+        var (service, kimai) = CreateService();
+
+        // The kiosk sent pauseStart live, the request timed out on the client
+        // AFTER the server had applied it, so the same action is also queued.
+        await service.SyncKioskAsync([Kiosk("s1", "start", T08)]);
+        await service.SyncKioskAsync([Kiosk("s2", "pauseStart", T12)]);
+        var operationsAfterPause = kimai.Operations.Count;
+
+        // Replaying it must not stop the pause and open a second one.
+        var result = await service.SyncKioskAsync([Kiosk("s3", "pauseStart", T12)]);
+
+        Assert.Equal(1, result.Accepted);
+        Assert.Equal("Pause lief bereits - kein Nachtrag noetig.", result.Results.Single().Message);
+        Assert.Equal(operationsAfterPause, kimai.Operations.Count);
+        Assert.True(kimai.ActiveIsPause);
+    }
+
+    [Fact]
     public async Task PauseEnd_LiveStopBeforeFlush_DoesNotPhantomStart()
     {
         var (service, kimai) = CreateService();

@@ -1,5 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
+import { SwUpdate } from '@angular/service-worker';
 import { of, Subject, throwError } from 'rxjs';
 
 import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcLatestEvent } from '../../../core/models/kiosk.models';
@@ -19,6 +20,13 @@ describe('ClockPage', () => {
   let terminalIdValue: string | null;
   /** Health-Poll für AppVersionService (Badge + Auto-Reload). */
   let healthMock: ReturnType<typeof vi.fn>;
+  /** Service-Worker-Mock; null = kein Service Worker (Dev/Test-Standard). */
+  let swUpdateMock: {
+    isEnabled: boolean;
+    checkForUpdate: ReturnType<typeof vi.fn>;
+    activateUpdate: ReturnType<typeof vi.fn>;
+    unrecoverable: Subject<unknown>;
+  } | null;
 
   const status: ClockStatus = {
     isRunning: false,
@@ -56,6 +64,7 @@ describe('ClockPage', () => {
     latestNfcValue = { event: null };
     terminalIdValue = null;
     healthMock = vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }));
+    swUpdateMock = null;
 
     await TestBed.configureTestingModule({
       imports: [ClockPage],
@@ -71,6 +80,7 @@ describe('ClockPage', () => {
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
+        { provide: SwUpdate, useFactory: () => swUpdateMock },
         // No HttpClient is provided in this spec - keep the local agent
         // poll fully mocked.
         {
@@ -463,6 +473,83 @@ describe('ClockPage', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    describe('mit Service Worker', () => {
+      function enableServiceWorker(activateResults: boolean[]) {
+        swUpdateMock = {
+          isEnabled: true,
+          checkForUpdate: vi.fn(async () => true),
+          activateUpdate: vi.fn(async () => activateResults.shift() ?? false),
+          unrecoverable: new Subject<unknown>(),
+        };
+        return swUpdateMock;
+      }
+
+      it('aktiviert die neue Version vor dem Reload', async () => {
+        vi.useFakeTimers();
+        try {
+          const sw = enableServiceWorker([true]);
+          const { reloadSpy } = createPageWithVersion('9.9.9');
+
+          await vi.advanceTimersByTimeAsync(3_000);
+
+          expect(sw.checkForUpdate).toHaveBeenCalledTimes(1);
+          expect(sw.activateUpdate).toHaveBeenCalledTimes(1);
+          expect(reloadSpy).toHaveBeenCalledTimes(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('lädt nicht neu, solange der Service Worker die neue Version nicht hat, und versucht es später erneut', async () => {
+        vi.useFakeTimers();
+        try {
+          // Erst liegt die neue Version noch nicht vor, beim zweiten Versuch schon.
+          const sw = enableServiceWorker([false, true]);
+          const { component, reloadSpy } = createPageWithVersion('9.9.9');
+
+          await vi.advanceTimersByTimeAsync(3_000);
+          // Ein Reload würde die alte App aus dem Cache laden - Schleife.
+          expect(reloadSpy).not.toHaveBeenCalled();
+          expect(component.message()).toBe('');
+
+          await vi.advanceTimersByTimeAsync(60_000 + 3_000);
+          expect(sw.activateUpdate).toHaveBeenCalledTimes(2);
+          expect(reloadSpy).toHaveBeenCalledTimes(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('aktiviert nichts, wenn während des Update-Checks jemand aktiv wird', async () => {
+        vi.useFakeTimers();
+        try {
+          const sw = enableServiceWorker([true]);
+          let finishCheck: (value: boolean) => void = () => {};
+          sw.checkForUpdate.mockImplementation(() => new Promise<boolean>(resolve => (finishCheck = resolve)));
+          const { component, reloadSpy } = createPageWithVersion('9.9.9');
+
+          await vi.advanceTimersByTimeAsync(3_000);
+          component.pin.set('1'); // Mitarbeiter beginnt zu tippen
+          finishCheck(true);
+          await vi.advanceTimersByTimeAsync(0);
+
+          expect(sw.activateUpdate).not.toHaveBeenCalled();
+          expect(reloadSpy).not.toHaveBeenCalled();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('lädt neu, wenn der Service Worker nicht mehr weiterweiß', () => {
+        const sw = enableServiceWorker([]);
+        const { reloadSpy } = createPageWithVersion(null);
+
+        sw.unrecoverable.next({ reason: 'test' });
+
+        expect(reloadSpy).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('lädt im Dev-Build (0.0.0-local) nie automatisch neu', () => {

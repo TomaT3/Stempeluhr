@@ -513,6 +513,15 @@ public sealed class OfflineClockService(
                 return ($"Nachgetragen: Ausstempeln {timestamp.ToLocalTime():HH:mm}", "clockedOut");
 
             case "pauseStart":
+                // A pause that already runs is this very action applied live
+                // before its request timed out on the kiosk (the kiosk then
+                // queued it as well). Stopping it and opening another pause
+                // would leave a zero-length pause timesheet behind.
+                if (status.State == "paused")
+                {
+                    return ("Pause lief bereits - kein Nachtrag noetig.", status.State);
+                }
+
                 if (!status.IsRunning || status.ActiveTimesheetId is not int pauseStopId)
                 {
                     return ("Lief nicht - Pause nicht nachtragbar.", status.State);

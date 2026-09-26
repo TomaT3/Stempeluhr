@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { signal } from '@angular/core';
-import { Observable, Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, TimeoutError, of, throwError } from 'rxjs';
 
 import { ClockStatus, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../../core/models/offline.models';
@@ -526,14 +526,14 @@ describe('ClockPage offline behaviour', () => {
     expect(enqueueKiosk).not.toHaveBeenCalled();
   });
 
-  it('acks scans even while BUSY so a hung stamp request cannot starve the agent', () => {
-    // Regression pin: kioskApi.clock has no timeout - while isBusy stays
-    // true, polls must STILL consume scans (ack only, no employee switch).
+  it('acks scans even while BUSY so a pending stamp request cannot starve the agent', () => {
+    // Regression pin: a stamp request can run up to its timeout - while
+    // isBusy stays true, polls must STILL consume scans (ack only, no
+    // employee switch). Online, so the request is actually sent.
     window.localStorage.setItem(
       'stempeluhr.employee-card-cache.v1',
       JSON.stringify({ '04ABCD': session.employee }),
     );
-    failPolls = true;
     const fixture = createComponent();
     const component = fixture.componentInstance;
 
@@ -562,7 +562,7 @@ describe('ClockPage offline behaviour', () => {
     // 4) Only NOW does the hung request fail offline.
     // The queued event must carry max (press-time snapshot), never berta's
     // id or an empty string - against 1e5f388 this test fails with ''.
-    failPolls = true;
+    // Online, so the request is actually sent (and hangs).
     const fixture = createComponent();
     const component = fixture.componentInstance;
 
@@ -600,6 +600,67 @@ describe('ClockPage offline behaviour', () => {
     // Press-time snapshot wins: max started the action, not berta.
     expect(queued.employeeId).toBe('max');
     expect(queued.action).toBe('start');
+  });
+
+  it('does not stack NFC polls while one is still pending', () => {
+    const kioskApi = TestBed.inject(KioskApi) as unknown as { latestNfcEvent: ReturnType<typeof vi.fn> };
+    const hanging = new Subject<NfcLatestEvent>();
+    kioskApi.latestNfcEvent.mockReturnValue(hanging);
+    createComponent();
+
+    vi.advanceTimersByTime(5_000);
+    expect(kioskApi.latestNfcEvent).toHaveBeenCalledTimes(1);
+
+    // Once the pending poll settles, polling resumes.
+    hanging.error({ status: 0 });
+    vi.advanceTimersByTime(1_000);
+    expect(kioskApi.latestNfcEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it('queues immediately without a request while the outage is already known', () => {
+    window.localStorage.setItem(
+      'stempeluhr.employee-card-cache.v1',
+      JSON.stringify({ '04ABCD': session.employee }),
+    );
+    failPolls = true;
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    const kioskApi = TestBed.inject(KioskApi) as unknown as { clock: ReturnType<typeof vi.fn> };
+
+    localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+    vi.advanceTimersByTime(1_000);
+    expect(component.isOffline()).toBe(true);
+    expect(component.isUnlocked()).toBe(true);
+
+    component.start();
+
+    // No request that could only time out - the stamp is queued right away.
+    expect(kioskApi.clock).not.toHaveBeenCalled();
+    expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    expect(enqueueKiosk.mock.calls[0][0]).toMatchObject({ employeeId: 'max', action: 'start', nfcCardId: '04ABCD' });
+    expect(component.isBusy()).toBe(false);
+    expect(component.message()).toContain('Offline gespeichert');
+    expect(component.clockState.status()?.state).toBe('working');
+  });
+
+  it('queues the stamp when the request times out', () => {
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    pinLoginResult.next(session);
+
+    component.start();
+    expect(component.isBusy()).toBe(true);
+    // rxjs TimeoutError carries no HTTP status -> offline path.
+    clockResult.error(new TimeoutError());
+
+    expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    expect(enqueueKiosk.mock.calls[0][0]).toMatchObject({ employeeId: 'max', pin: '1234', action: 'start' });
+    expect(component.isOffline()).toBe(true);
+    expect(component.isBusy()).toBe(false);
   });
 
   it('fills the card cache from an ONLINE NFC event so a later OFFLINE scan can identify it', () => {
