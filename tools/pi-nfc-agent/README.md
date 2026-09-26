@@ -22,10 +22,19 @@ Private-Network-Header erlauben den Zugriff aus der HTTPS-Kiosk-Seite.
 
 - `stempeluhr_nfc_agent.py` – Leserauswahl, UID-Erkennung, Entprellung,
   Loopback-Server und Ack-Watchdog
-- `stempeluhr-nfc-agent.service` – systemd-Unit
+- `stempeluhr-nfc-agent.service` – systemd-Unit des Agenten
+- `stempeluhr-nfc-agent-update.service` / `.timer` – Auto-Update (Boot + alle
+  15 Minuten)
+- `update.sh` – holt `/pi/agent.json` vom Server, prüft SHA-256, installiert
+  nach `/opt/stempeluhr-nfc-agent/releases/<version>`, setzt `current` um,
+  prüft `/health` und rollt bei Fehler zurück
+- `install.sh` – Ersteinrichtung bzw. Umstellung eines Pis
+  (siehe [docs/raspberry-pi-kiosk-nfc.md](../../docs/raspberry-pi-kiosk-nfc.md))
+- `build-bundle.sh` – baut im Docker-Image das Bundle für `/pi/`
 - `config.example.json` – Beispielkonfiguration
 - `test_scan_handling.py`, `test_local_scan_server.py` – Selbsttests ohne
-  Kartenleser (`python3 <datei>`)
+  Kartenleser (`python3 <datei>`); Updater-Test:
+  `bash tools/testenv/test_pi_update.sh`
 
 ## Konfiguration
 

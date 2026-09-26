@@ -1,0 +1,8 @@
+[Unit]
+Description=Stempeluhr NFC agent update (follows the server version)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/stempeluhr-nfc-agent/current/update.sh

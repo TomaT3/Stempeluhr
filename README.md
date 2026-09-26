@@ -146,17 +146,17 @@ Für ein Kunden-Deployment:
 1. `data/` einschließlich `settings.json` sichern.
 2. Einen festen GHCR-Versionstag verwenden, nicht nur `latest`.
 3. Container-Image aktualisieren und den Container neu erstellen.
-4. Falls nötig den Pi-Agent mit
-   `tools/deploy/pi-deploy.sh agent vX.Y.Z` aktualisieren; seine vorhandene
-   Konfiguration bleibt erhalten.
-5. Bei einer veralteten Kiosk-App den Chromium-Cache mit
-   `tools/deploy/pi-deploy.sh kiosk` zurücksetzen.
-6. PIN/NFC, Kommen/Pause/Gehen, Stundenanzeige und gegebenenfalls Offline-Replay
+4. Die Pis übernehmen den passenden NFC-Agenten innerhalb von etwa 15 Minuten
+   selbst (`/pi/agent.json`); `tools/deploy/pi-deploy.sh status` zeigt die
+   Versionen.
+5. PIN/NFC, Kommen/Pause/Gehen, Stundenanzeige und gegebenenfalls Offline-Replay
    prüfen.
 
-Die Voraussetzungen und Hostliste für Agent-Update und Cache-Recovery sind in
+Pis mit einem noch manuell kopierten Agenten einmalig mit
+`tools/deploy/pi-deploy.sh bootstrap` auf das Auto-Update umstellen. Hostliste
+und Voraussetzungen stehen in
 [`tools/deploy/pi-deploy.sh`](tools/deploy/pi-deploy.sh) und
-[`tools/deploy/pis.conf.example`](tools/deploy/pis.conf.example) dokumentiert.
+[`tools/deploy/pis.conf.example`](tools/deploy/pis.conf.example).
 Bei einem NAS hinter Cloudflare/Cloudflared zeigt die Portfreigabe intern zum
 Container, beispielsweise `8002:8080`; Browser und Agent verwenden weiterhin
 die externe HTTPS-Adresse.
@@ -166,8 +166,9 @@ die externe HTTPS-Adresse.
 Maßgeblich ist der manuell auf `main` gestartete Workflow
 [`.github/workflows/release.yml`](.github/workflows/release.yml) mit dem Namen
 **Release**. Er bestimmt den SemVer-Bump aus Conventional Commits oder aus der
-Eingabe, erstellt Tag, GitHub Release und Pi-Agent-ZIP und veröffentlicht das
-GHCR-Image mit den Tags `X.Y.Z`, `X.Y` und `latest`.
+Eingabe, erstellt Tag und GitHub Release und veröffentlicht das GHCR-Image mit
+den Tags `X.Y.Z`, `X.Y` und `latest`. Das Image enthält unter `/pi/` auch
+Installer und Agent-Bundle derselben Version.
 
 Expliziter Patch-Release:
 
@@ -176,7 +177,7 @@ gh workflow run release.yml --ref main -f bump=patch
 ```
 
 Für die automatische Ermittlung des Bumps `-f bump=...` weglassen. Nach dem
-Lauf Release, Pi-Agent-Asset und alle erwarteten Image-Tags prüfen. Das
+Lauf Release und alle erwarteten Image-Tags prüfen. Das
 Kunden-Deployment erfolgt separat und verwendet einen festen Versionstag.
 
 ## Sicherheit

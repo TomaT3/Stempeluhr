@@ -97,30 +97,25 @@ if (knownProxies.Length > 0)
 
 app.UseApiExceptionHandling();
 app.UseCors("AngularDev");
-// SPA-Cache-Strategie: index.html IMMER frisch validieren (no-cache) — der
-// Kiosk bekommt nach jedem Deploy die neue App statt der alten Cache-Kopie.
-// Die gehashten Bundles (main-*.js, styles-*.css) ändern ihren Namen bei
-// jedem Build und sind immutable cachebar.
-// WICHTIG: dieselbe Logik gilt für UseStaticFiles UND den SPA-Fallback
-// (MapFallbackToFile) — der Kiosk lädt die App über /terminal?terminalId=...
-// und das ist ein Fallback-Pfad mit eigener StaticFile-Instanz.
-void ApplyCacheHeaders(Microsoft.AspNetCore.StaticFiles.StaticFileResponseContext context)
-{
-    var headers = context.Context.Response.Headers;
-    if (string.Equals(context.File.Name, "index.html", StringComparison.OrdinalIgnoreCase))
-    {
-        headers.CacheControl = "no-cache";
-    }
-    else
-    {
-        headers.CacheControl = "public, max-age=31536000, immutable";
-    }
-}
+// SPA-Cache-Strategie (StaticFileCachePolicy): nur gehashte Bundles sind
+// immutable, alles andere (index.html, Service Worker, /pi/-Manifest) wird
+// revalidiert. WICHTIG: dieselbe Logik gilt für UseStaticFiles UND den
+// SPA-Fallback (MapFallbackToFile) — der Kiosk lädt die App über
+// /terminal?terminalId=... und das ist ein Fallback-Pfad mit eigener
+// StaticFile-Instanz.
+// /pi/ liefert Installer und Agent-Bundle für die Terminals (siehe Dockerfile).
+var contentTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+contentTypes.Mappings[".sh"] = "text/x-shellscript";
+contentTypes.Mappings[".gz"] = "application/gzip";
 
 app.UseDefaultFiles();
-app.UseStaticFiles(new StaticFileOptions { OnPrepareResponse = ApplyCacheHeaders });
+app.UseStaticFiles(new StaticFileOptions
+{
+    ContentTypeProvider = contentTypes,
+    OnPrepareResponse = StaticFileCachePolicy.Apply,
+});
 
 app.MapApiEndpoints();
-app.MapFallbackToFile("index.html", new StaticFileOptions { OnPrepareResponse = ApplyCacheHeaders });
+app.MapFallbackToFile("index.html", new StaticFileOptions { OnPrepareResponse = StaticFileCachePolicy.Apply });
 
 app.Run();
