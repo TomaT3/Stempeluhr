@@ -5,3 +5,7 @@
 
 # Agent-Python-Dateien ebenfalls LF (werden per scp/ZIP auf die Pis gespielt).
 *.py text eol=lf
+
+# systemd-Units des Agenten (landen unverändert auf den Pis).
+*.service text eol=lf
+*.timer text eol=lf

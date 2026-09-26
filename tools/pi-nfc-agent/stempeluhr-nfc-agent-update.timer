@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the Stempeluhr server for a new NFC agent version
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

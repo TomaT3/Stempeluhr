@@ -26,6 +26,13 @@ RUN dotnet publish Stempeluhr.Api/Stempeluhr.Api.csproj \
     /p:InformationalVersion=${VERSION} \
     --no-restore
 
+# Agent-Bundle für die Pi-Terminals. Der Server liefert es unter /pi/ aus,
+# die Pis holen es sich per update.sh selbst - Agent-Version = Server-Version.
+FROM alpine:3.22 AS pi-bundle
+ARG VERSION=0.0.0-local
+COPY tools/pi-nfc-agent/ /src/pi-nfc-agent/
+RUN sh /src/pi-nfc-agent/build-bundle.sh "${VERSION}" /out/pi
+
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS final
 WORKDIR /app
 # tzdata: TimeZoneInfo.FindSystemTimeZoneById(Europe/Berlin) braucht die
@@ -36,4 +43,5 @@ ENV TZ=Europe/Berlin
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 COPY --from=api-build /app/publish ./
+COPY --from=pi-bundle /out/pi ./wwwroot/pi
 ENTRYPOINT ["dotnet", "Stempeluhr.Api.dll"]

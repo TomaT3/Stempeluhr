@@ -78,5 +78,8 @@ jobs:
           python3 tools/pi-nfc-agent/test_scan_handling.py
           python3 tools/pi-nfc-agent/test_local_scan_server.py
 
+      - name: Pi agent bundle + updater test
+        run: bash tools/testenv/test_pi_update.sh
+
       - name: Run offline integration tests (Fake-Kimai + real API)
         run: bash tools/testenv/run_e2e_test.sh
