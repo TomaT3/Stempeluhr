@@ -84,8 +84,8 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
               clockSubjects.push(subject);
               return subject;
             }),
-            latestNfcEvent: vi.fn(() =>
-              failPolls ? throwError(() => ({ status: 0 })) : of({ event: null }),
+            ping: vi.fn(() =>
+              failPolls ? throwError(() => ({ status: 0 })) : of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }),
             ),
             hoursOverview: vi.fn(() => of(null)),
             health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),

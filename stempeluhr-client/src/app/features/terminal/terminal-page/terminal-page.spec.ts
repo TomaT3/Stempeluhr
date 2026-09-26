@@ -3,7 +3,7 @@ import { ActivatedRoute } from '@angular/router';
 import { signal } from '@angular/core';
 import { of, Subject, throwError } from 'rxjs';
 
-import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../../../core/models/kiosk.models';
+import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent } from '../../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../../core/models/offline.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
@@ -75,8 +75,8 @@ describe('TerminalPage', () => {
             pinLogin,
             clock: clockImpl,
             hoursOverview,
-            latestNfcEvent: vi.fn(() =>
-              failPolls ? throwError(() => ({ status: 0 })) : of<NfcLatestEvent>({ event: null }),
+            ping: vi.fn(() =>
+              failPolls ? throwError(() => ({ status: 0 })) : of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }),
             ),
             identify: vi.fn(() => new Subject<NfcClockEvent>()),
             health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),

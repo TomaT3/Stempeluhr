@@ -2,16 +2,6 @@ namespace Stempeluhr.Api.Models;
 
 public sealed record ClockRequest(string EmployeeId, string? Pin);
 
-/// <summary>
-/// One queued card scan from an NFC terminal, submitted with its original
-/// scan timestamp so offline events can be replayed with backdating.
-/// </summary>
-public sealed record OfflineNfcClockEventDto(
-    string EventId,
-    string CardId,
-    string? TerminalId,
-    DateTimeOffset ScannedAt);
-
 public sealed record KioskPinLoginRequest(string? Pin);
 
 public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action, string? NfcCardId);
@@ -24,15 +14,9 @@ public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Ac
 public sealed record KioskIdentifyRequest(string? CardId, string? TerminalId);
 
 /// <summary>
-/// Live stamp request from an NFC terminal. <paramref name="EventId"/> is
-/// optional; when present the live endpoint registers it in the offline
-/// event-ID store so a retry after an ambiguous timeout (server applied the
-/// stamp, response never arrived) is recognized as a duplicate instead of
-/// toggling a second time.
+/// Card identification input for <c>IClockService.IdentifyWithNfcCardAsync</c>.
 /// </summary>
-public sealed record NfcClockRequest(string? CardId, string? Action, string? TerminalId, string? EventId = null);
-
-public sealed record OfflineSyncRequest(IReadOnlyList<OfflineNfcClockEventDto>? Events);
+public sealed record NfcClockRequest(string? CardId, string? Action, string? TerminalId);
 
 /// <summary>
 /// One queued kiosk action from the browser client, submitted with its

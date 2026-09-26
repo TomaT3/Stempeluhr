@@ -1,15 +1,13 @@
 @baseUrl = http://localhost:5100
-@nfcToken = change-me
 
-### NFC card identifies employee and publishes latest terminal event
-POST {{baseUrl}}/api/nfc/clock
+### Kiosk identifies a scanned card (no stamp) and publishes it for the admin page
+POST {{baseUrl}}/api/kiosk/identify
 Content-Type: application/json
-X-Nfc-Reader-Token: {{nfcToken}}
 
 {
   "cardId": "04 AA BB CC DD 11 80",
   "terminalId": "stempeluhr-pi-01"
 }
 
-### Latest NFC event for kiosk display
+### Latest identified card (admin: assign card to employee)
 GET {{baseUrl}}/api/nfc/events/latest?terminalId=stempeluhr-pi-01

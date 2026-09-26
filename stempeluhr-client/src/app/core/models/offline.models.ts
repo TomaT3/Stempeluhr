@@ -1,10 +1,3 @@
-export interface OfflineNfcClockEvent {
-  eventId: string;
-  cardId: string;
-  terminalId?: string | null;
-  scannedAt: string;
-}
-
 export interface OfflineKioskClockEvent {
   eventId: string;
   employeeId: string;

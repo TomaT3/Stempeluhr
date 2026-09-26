@@ -28,7 +28,7 @@ describe('KioskApi', () => {
     ['clock', '/api/kiosk/clock', () => api.clock('max', '1234', 'start')],
     ['pinLogin', '/api/kiosk/pin-login', () => api.pinLogin('1234')],
     ['hoursOverview', '/api/kiosk/hours', () => api.hoursOverview('1234')],
-    ['latestNfcEvent', '/api/nfc/events/latest?terminalId=t1', () => api.latestNfcEvent('t1')],
+    ['ping', '/api/health', () => api.ping()],
   ];
 
   for (const [name, url, call] of hangingCalls) {

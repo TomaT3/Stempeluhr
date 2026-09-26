@@ -92,7 +92,7 @@ echo "  Fake-Kimai läuft (PID $KIMAI_PID)"
 
 dotnet run --project "$ROOT/Stempeluhr.Api/Stempeluhr.Api.csproj" --no-build \
   --urls "$API_URL" -- \
-  "Stempeluhr:SettingsPath=$WORK/settings.json" "Stempeluhr:NfcReaderToken=test-reader-token" \
+  "Stempeluhr:SettingsPath=$WORK/settings.json" \
   > "$WORK/api.log" 2>&1 & API_PID=$!
 wait_for "$API_URL/healthz" 30 || wait_for "$API_URL/api/health" 5 || {
   # Fallback: erster Endpoint, der eine Antwort liefert
@@ -210,6 +210,27 @@ assert_status '"rejected"' "$R" "Falsche PIN → rejected"
 
 R=$(post_sync "{\"events\":[{\"eventId\":\"${RUN}-bad-card-1\",\"employeeId\":\"unbekannt\",\"pin\":\"1234\",\"action\":\"start\",\"performedAt\":\"2026-08-23T08:00:00+02:00\"}]}")
 assert_status '"rejected"' "$R" "Unbekannter Mitarbeiter → rejected"
+
+# ------------------------------------------------- Test 3b: Karte zuordnen (Admin)
+say "Test 3b: Kiosk-Identifikation erscheint als letzte Karte für die Admin-Seite"
+
+R=$(curl -s -m 10 -X POST "$API_URL/api/kiosk/identify" -H 'Content-Type: application/json' \
+  -d '{"cardId":"04 99 88 77","terminalId":"e2e-admin"}')
+assert_status '"success":false' "$R" "Unbekannte Karte wird nicht identifiziert"
+R=$(curl -s -m 5 "$API_URL/api/nfc/events/latest?terminalId=e2e-admin")
+assert_status '"cardId":"04998877"' "$R" "Admin sieht die unbekannte Karte zum Zuordnen"
+
+R=$(curl -s -m 10 -X POST "$API_URL/api/kiosk/identify" -H 'Content-Type: application/json' \
+  -d '{"cardId":"04A2B3C4","terminalId":"e2e-admin"}')
+assert_status '"success":true' "$R" "Bekannte Karte wird identifiziert"
+R=$(curl -s -m 5 "$API_URL/api/nfc/events/latest?terminalId=e2e-admin")
+assert_status '"displayName":"Max Mustermann"' "$R" "Admin sieht den zugeordneten Mitarbeiter"
+
+# Der SPA-Fallback darf hier antworten - entscheidend ist, dass kein
+# Sync-Ergebnis mehr zurückkommt.
+R=$(curl -s -m 5 -X POST "$API_URL/api/nfc/clock/sync" -H 'Content-Type: application/json' -d '{"events":[]}')
+[[ "$R" != *'"results"'* ]] && ok "Alter NFC-Toggle-Endpunkt ist entfernt" \
+  || bad "/api/nfc/clock/sync liefert noch ein Sync-Ergebnis"
 
 # ------------------------------------------------- Test 4: Agent-Level-Offline-Identifikation
 # Grenze: Ein vollständiges Browser-/Angular-E2E ist hier nicht machbar - der
