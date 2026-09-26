@@ -2,7 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 
-import { OfflineKioskClockEvent, OfflineNfcClockEvent } from '../models/offline.models';
+import { OfflineKioskClockEvent } from '../models/offline.models';
 import { OfflineQueueService } from './offline-queue';
 
 describe('OfflineQueueService sync batching', () => {
@@ -10,14 +10,9 @@ describe('OfflineQueueService sync batching', () => {
   let httpMock: HttpTestingController;
 
   const kioskEndpoint = '/api/kiosk/clock/sync';
-  const nfcEndpoint = '/api/nfc/clock/sync';
 
   function kioskEvent(id: string): OfflineKioskClockEvent {
     return { eventId: id, employeeId: 'max', pin: '1234', action: 'start', performedAt: '2026-08-24T08:00:00Z' };
-  }
-
-  function nfcEvent(id: string): OfflineNfcClockEvent {
-    return { eventId: id, cardId: '04AB', scannedAt: '2026-08-24T08:00:00Z' };
   }
 
   function resultFor(events: OfflineKioskClockEvent[], status: string) {
@@ -157,7 +152,6 @@ describe('OfflineQueueService sync batching', () => {
     req.flush(resultFor(req.request.body.events as OfflineKioskClockEvent[], 'applied'));
     await drainMicrotasks();
     expect(service.pendingCount().length).toBe(0);
-    httpMock.expectNone(nfcEndpoint);
   });
 
   it('does not emit recovered when the server only buffers (API up, Kimai down)', async () => {
@@ -361,23 +355,40 @@ describe('OfflineQueueService sync batching', () => {
     httpMock.expectNone(r => r.url === kioskEndpoint);
   });
 
-  it('stops the whole replay (all groups) when a chunk fails with a network error', async () => {
-    // Mixed queue: NFC group runs first, then the kiosk group. A network
-    // failure in the NFC chunk must abort the kiosk group too - not just the
-    // inner chunk loop - otherwise the kiosk events are sent against a dead
-    // network (or worse, re-ordered) and the "stop here" intent is lost.
-    service.enqueueNfc(nfcEvent('n1'));
-    service.enqueueKiosk(kioskEvent('k1'));
+  it('stops the whole replay when a chunk fails with a network error', async () => {
+    // Two chunks: a network failure in the first must not send the second
+    // against a dead network.
+    for (let i = 0; i < 101; i++) {
+      service.enqueueKiosk(kioskEvent(`c${i}`));
+    }
 
     service.syncNow().subscribe();
 
-    const nfcReq = httpMock.expectOne(r => r.url === nfcEndpoint);
-    nfcReq.flush({}, { status: 500, statusText: 'Server Error' });
+    const first = httpMock.expectOne(r => r.url === kioskEndpoint);
+    expect(first.request.body.events.length).toBe(100);
+    first.flush({}, { status: 500, statusText: 'Server Error' });
     await drainMicrotasks();
 
-    // Kiosk group must NOT be sent: both queued events remain.
     httpMock.expectNone(r => r.url === kioskEndpoint);
-    expect(service.pendingCount().length).toBe(2);
+    expect(service.pendingCount().length).toBe(101);
+  });
+
+  it('ignores stored entries of the removed NFC queue format', () => {
+    window.localStorage.setItem(
+      'stempeluhr.offline-queue.v1',
+      JSON.stringify([
+        { kind: 'nfc', event: { eventId: 'n1', cardId: '04AB', scannedAt: '2026-08-24T08:00:00Z' } },
+        { kind: 'kiosk', event: kioskEvent('k1') },
+      ]),
+    );
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    const fresh = TestBed.inject(OfflineQueueService);
+    const mock = TestBed.inject(HttpTestingController);
+
+    expect(fresh.pendingCount().map(entry => entry.event.eventId)).toEqual(['k1']);
+    // The constructor flushes the restored queue.
+    mock.expectOne(r => r.url === kioskEndpoint).flush({ accepted: 0, duplicates: 0, buffered: 0, results: [] });
   });
 
   it('does not wedge the in-flight guard when syncNow() is called without subscribing', async () => {

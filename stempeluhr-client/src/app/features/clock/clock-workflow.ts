@@ -4,7 +4,7 @@ import { SwUpdate } from '@angular/service-worker';
 import { Subscription, finalize, timeout } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
-import { ClockStatus, Employee, HoursOverview, NfcClockEvent } from '../../core/models/kiosk.models';
+import { ClockStatus, Employee, HoursOverview } from '../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../core/models/offline.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
@@ -32,7 +32,7 @@ const VERSION_RELOAD_DELAY_MS = 3000;
 const VERSION_RETRY_MS = 60_000;
 
 const PIN_LENGTH = 4;
-/** Abstand des Erreichbarkeits-Polls auf Hosts ohne NFC-Poll (§ /clock). */
+/** Abstand des Erreichbarkeits-Polls auf Hosts ohne Kiosk-Poll (§ /clock). */
 const HEALTH_POLL_MS = 15_000;
 /**
  * Obergrenze für einen Health-Versuch: ohne Timeout stapeln sich Anfragen,
@@ -106,15 +106,14 @@ export abstract class ClockWorkflow implements OnDestroy {
   readonly hoursOverview = signal<HoursOverview | null>(null);
 
   private resetTimer: number | null = null;
-  private nfcPollTimer: number | null = null;
-  /** Interval handle for the local agent scan poll (only while offline). */
+  /** Erreichbarkeits-Poll des Kiosks (nur mit terminalId). */
+  private connectivityPollTimer: number | null = null;
+  /** Interval handle for the local agent scan poll. */
   private localNfcTimer: number | null = null;
-  private lastNfcEventId: string | null = null;
   /** Ein Poll läuft noch - bei hängender Verbindung keine Anfragen stapeln. */
-  private nfcPollInFlight = false;
-  private hasInitializedNfcPolling = false;
+  private connectivityPollInFlight = false;
   /**
-   * True while a connectivity loss (failed NFC poll OR an offline-queued
+   * True while a connectivity loss (failed poll OR an offline-queued
    * action whose request died) has not yet seen a follow-up successful
    * poll. The FIRST successful poll afterwards triggers exactly ONE
    * immediate queue flush. Tracked separately from isOffline on purpose:
@@ -129,7 +128,7 @@ export abstract class ClockWorkflow implements OnDestroy {
   private recoveryUnsubscribe: (() => void) | null = null;
   /**
    * Leichter Erreichbarkeits-Poll für Hosts OHNE terminalId (§ /clock, Issue
-   * #6): dort gibt es keinen NFC-Poll, der das Offline-Banner pflegt.
+   * #6): dort gibt es keinen Kiosk-Poll, der das Offline-Banner pflegt.
    */
   private healthPollTimer: number | null = null;
   /** Laufende Health-Anfrage - wird beim Seitenende abgebrochen (Befund R2). */
@@ -148,7 +147,7 @@ export abstract class ClockWorkflow implements OnDestroy {
   private swUnrecoverableSub: Subscription | null = null;
 
   constructor() {
-    // Hosts without a terminalId (the /clock default route) have no NFC
+    // Hosts without a terminalId (the /clock default route) have no kiosk
     // poll, so they never see the connection recover on their own. Use the
     // offline queue's own recovery signal to release a terminal that was
     // kept unlocked for offline stamping and clear the stale banner. The
@@ -194,7 +193,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
 
     if (!this.terminalId) {
-      // Ohne NFC-Poll (§ /clock) merkt die Seite einen Ausfall nur an einer
+      // Ohne Kiosk-Poll (§ /clock) merkt die Seite einen Ausfall nur an einer
       // fehlgeschlagenen Aktion - und nach einem Reload bliebe der wartende
       // Stempel unsichtbar. Deshalb ein leichter Health-Poll (Issue #6): er
       // setzt das Banner schon beim Laden und stoesst beim Zurueckkommen den
@@ -204,12 +203,11 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
 
-    this.pollNfcEvents();
-    this.nfcPollTimer = window.setInterval(() => this.pollNfcEvents(), 1000);
-    // Der Agent publiziert Karten NUR an den LocalScanServer (nicht mehr an
-    // die API) - der Local-Poll ist damit die einzige Kartenquelle und läuft
-    // IMMER, online wie offline. Der Guard in startLocalNfcPolling
-    // verhindert einen Doppelstart.
+    this.pollConnectivity();
+    this.connectivityPollTimer = window.setInterval(() => this.pollConnectivity(), 1000);
+    // Der Agent publiziert Karten NUR an den LocalScanServer - der Local-Poll
+    // ist die einzige Kartenquelle und läuft IMMER, online wie offline. Der
+    // Guard in startLocalNfcPolling verhindert einen Doppelstart.
     this.startLocalNfcPolling();
   }
 
@@ -490,7 +488,7 @@ export abstract class ClockWorkflow implements OnDestroy {
   /**
    * Fragt nur die Erreichbarkeit ab (/api/health) und pflegt daraus das
    * Offline-Banner samt Wartezähler (Issue #6, nur auf Hosts ohne
-   * terminalId - der Kiosk hat dafür seinen NFC-Poll). Beim Zurückkommen
+   * terminalId - der Kiosk hat dafür seinen eigenen Poll). Beim Zurückkommen
    * wird der wartende Nachtrag sofort angestoßen.
    */
   private checkHealth(): void {
@@ -523,8 +521,8 @@ export abstract class ClockWorkflow implements OnDestroy {
       window.clearTimeout(this.resetTimer);
     }
 
-    if (this.nfcPollTimer) {
-      window.clearInterval(this.nfcPollTimer);
+    if (this.connectivityPollTimer) {
+      window.clearInterval(this.connectivityPollTimer);
     }
 
     if (this.versionReloadTimer !== null) {
@@ -543,16 +541,21 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clockState.setEmployeeMode(false);
   }
 
-  private pollNfcEvents(): void {
-    if (this.isBusy() || !this.terminalId || this.nfcPollInFlight) {
+  /**
+   * Kiosk-Erreichbarkeit (jede Sekunde): pflegt isOffline und stößt nach
+   * einem Ausfall den Nachtrag an. Karten kommen ausschließlich über den
+   * lokalen Agenten (pollLocalScan).
+   */
+  private pollConnectivity(): void {
+    if (this.isBusy() || !this.terminalId || this.connectivityPollInFlight) {
       return;
     }
 
-    this.nfcPollInFlight = true;
-    this.kioskApi.latestNfcEvent(this.terminalId).pipe(
-      finalize(() => (this.nfcPollInFlight = false)),
+    this.connectivityPollInFlight = true;
+    this.kioskApi.ping().pipe(
+      finalize(() => (this.connectivityPollInFlight = false)),
     ).subscribe({
-      next: latest => {
+      next: () => {
         if (this.pendingRecoveryFlush) {
           // Connection just recovered: flush the offline queue ONCE immediately
           // instead of waiting for the retry timer. The deferred back() is NOT
@@ -572,17 +575,12 @@ export abstract class ClockWorkflow implements OnDestroy {
             }
           });
         }
-        this.handleLatestNfcEvent(latest.event);
       },
       error: () => {
-        this.hasInitializedNfcPolling = true;
         // Backend unreachable: keep polling (it will recover automatically).
+        // Card scans keep unlocking from the local cache; stamps are queued.
         this.isOffline.set(true);
         this.pendingRecoveryFlush = true;
-        // While the backend is down, the local Pi NFC agent becomes the
-        // identification source: a scan now only UNLOCKS an employee, the
-        // actual stamping happens via the offline-queued buttons.
-        this.startLocalNfcPolling();
       },
     });
   }
@@ -752,49 +750,6 @@ export abstract class ClockWorkflow implements OnDestroy {
     rememberObservedStatus(employeeId, status);
   }
 
-  private handleLatestNfcEvent(event: NfcClockEvent | null): void {
-    if (!this.hasInitializedNfcPolling) {
-      this.lastNfcEventId = event?.eventId ?? null;
-      this.hasInitializedNfcPolling = true;
-      return;
-    }
-
-    if (!event || event.eventId === this.lastNfcEventId) {
-      return;
-    }
-
-    this.lastNfcEventId = event.eventId;
-    if (event.success && event.employee && event.status) {
-      // Remember the card -> employee pair so a later OFFLINE scan of the
-      // same card can still be identified (the backend does that mapping
-      // online, but is unreachable then).
-      rememberEmployeeCard(event.cardId, event.employee);
-      this.selectedEmployee.set(event.employee);
-      this.applyObservedStatus(event.employee.id, event.status);
-      this.clockState.setEmployeeMode(true);
-      this.isUnlocked.set(true);
-      this.pin.set('');
-      // Identity switch: the previous employee's hours must never stay on
-      // screen - the new identity has no pin, so no reload can happen.
-      this.hoursOverview.set(null);
-      this.nfcCardId = event.cardId;
-      this.message.set(event.message);
-      this.audioFeedback.playBeeps(1);
-      return;
-    }
-
-    this.selectedEmployee.set(null);
-    this.clockState.clear();
-    this.clockState.setEmployeeMode(this.keepFocusedShellAfterReset());
-    this.isUnlocked.set(false);
-    this.pin.set('');
-    // Identity switch: drop any hours of the previous employee (privacy).
-    this.hoursOverview.set(null);
-    this.nfcCardId = null;
-    this.message.set(event.message || 'NFC-Karte nicht erkannt');
-    this.audioFeedback.playBeeps(2);
-  }
-
   private sendClockAction(action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd'): void {
     this.isBusy.set(true);
     // Capture the stamp time AND the acting identity SYNCHRONOUSLY at button
@@ -882,12 +837,12 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (stamp.employeeId) {
       rememberProjectedStatus(stamp.employeeId, projected);
     }
-    // Let the next successful NFC poll catch the queue up immediately.
+    // Let the next successful poll catch the queue up immediately.
     this.pendingRecoveryFlush = true;
     this.message.set('Offline gespeichert - wird automatisch nachgetragen.');
     this.audioFeedback.playBeeps(1);
     // Reset busy state - otherwise the terminal stays locked after the first
-    // offline-stamped action (all buttons and the NFC poll check isBusy()).
+    // offline-stamped action (all buttons and the connectivity poll check isBusy()).
     this.isBusy.set(false);
     // Stay unlocked instead of resetting to the idle screen: the current
     // employee may want to stamp again (e.g. pause) while the backend is

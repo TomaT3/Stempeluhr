@@ -3,10 +3,10 @@ import { ActivatedRoute } from '@angular/router';
 import { SwUpdate } from '@angular/service-worker';
 import { of, Subject, throwError } from 'rxjs';
 
-import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcLatestEvent } from '../../../core/models/kiosk.models';
+import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent } from '../../../core/models/kiosk.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
-import { LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
+import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
 import { ClockPage } from './clock-page';
 
 describe('ClockPage', () => {
@@ -14,8 +14,10 @@ describe('ClockPage', () => {
   let pinLoginResult: Subject<KioskEmployeeSession>;
   let clockResult: Subject<ClockStatus>;
   let hoursOverview: ReturnType<typeof vi.fn>;
-  /** Poll result for kioskApi.latestNfcEvent (only polled with a terminalId). */
-  let latestNfcValue: NfcLatestEvent;
+  /** Card published by the local agent (only polled with a terminalId). */
+  let localScanValue: LocalNfcScan | null;
+  /** Online card identification (kioskApi.identify). */
+  let identifyResult: Subject<NfcClockEvent>;
   /** terminalId served by the ActivatedRoute mock (null = /clock default route). */
   let terminalIdValue: string | null;
   /** Health-Poll für AppVersionService (Badge + Auto-Reload). */
@@ -61,7 +63,8 @@ describe('ClockPage', () => {
     clockResult = new Subject<ClockStatus>();
     hoursOverview = vi.fn(() => of(overview));
     pinLogin = vi.fn(() => pinLoginResult);
-    latestNfcValue = { event: null };
+    localScanValue = null;
+    identifyResult = new Subject<NfcClockEvent>();
     terminalIdValue = null;
     healthMock = vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }));
     swUpdateMock = null;
@@ -75,7 +78,8 @@ describe('ClockPage', () => {
             pinLogin,
             clock: vi.fn(() => clockResult),
             hoursOverview,
-            latestNfcEvent: vi.fn(() => of(latestNfcValue)),
+            ping: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
+            identify: vi.fn(() => identifyResult),
             health: healthMock,
           },
         },
@@ -85,7 +89,7 @@ describe('ClockPage', () => {
         // poll fully mocked.
         {
           provide: LocalNfcScanService,
-          useValue: { poll: vi.fn(() => of(null)), ack: vi.fn(() => of(null)) },
+          useValue: { poll: vi.fn(() => of(localScanValue)), ack: vi.fn(() => of(null)) },
         },
         {
           provide: ActivatedRoute,
@@ -342,19 +346,19 @@ describe('ClockPage', () => {
       const fixture = createPollingFixture();
       const component = fixture.componentInstance;
 
-      latestNfcValue = {
-        event: {
-          eventId: 'ev-nfc-1',
-          occurredAt: new Date().toISOString(),
-          terminalId: 'term-1',
-          cardId: '04AB',
-          employee: session.employee,
-          status,
-          message: 'NFC-Karte erkannt.',
-          success: true,
-        },
-      };
+      // Card touch: the local agent publishes it, identify resolves it online.
+      localScanValue = { cardId: '04AB', scannedAt: new Date().toISOString(), consumed: false };
       vi.advanceTimersByTime(1_000);
+      identifyResult.next({
+        eventId: 'ev-nfc-1',
+        occurredAt: new Date().toISOString(),
+        terminalId: 'term-1',
+        cardId: '04AB',
+        employee: session.employee,
+        status: status,
+        message: 'NFC-Karte erkannt.',
+        success: true,
+      });
 
       expect(component.isUnlocked()).toBe(true);
       expect(component.selectedEmployee()?.id).toBe('max');
@@ -366,58 +370,6 @@ describe('ClockPage', () => {
       expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
     });
 
-    it('hides the previous employee hours when an NFC card switches the identity', () => {
-      const fixture = createPollingFixture();
-      const component = fixture.componentInstance;
-
-      // max logs in via PIN: his hours card is visible.
-      unlock(fixture);
-      fixture.detectChanges();
-      expect(component.hoursOverview()).toEqual(overview);
-      expect(fixture.nativeElement.querySelector('.hours-overview')).not.toBeNull();
-
-      // berta taps her NFC card: the identity switches without any pin.
-      const berta = {
-        ...session.employee,
-        id: 'berta',
-        displayName: 'Berta Beispiel',
-        initials: 'BB',
-      };
-      const bertaStatus: ClockStatus = {
-        ...status,
-        isRunning: true,
-        activeTimesheetId: 9,
-        startedAt: new Date().toISOString(),
-        durationSeconds: 0,
-        state: 'working',
-        stateText: 'Eingestempelt',
-      };
-      latestNfcValue = {
-        event: {
-          eventId: 'ev-nfc-2',
-          occurredAt: new Date().toISOString(),
-          terminalId: 'term-1',
-          cardId: 'BB01',
-          employee: berta,
-          status: bertaStatus,
-          message: 'NFC-Karte erkannt.',
-          success: true,
-        },
-      };
-      vi.advanceTimersByTime(1_000);
-      fixture.detectChanges();
-
-      // Berta's identity and status are shown ...
-      expect(component.selectedEmployee()?.id).toBe('berta');
-      expect(component.isUnlocked()).toBe(true);
-      expect(component.clockState.status()?.stateText).toBe('Eingestempelt');
-      expect(fixture.nativeElement.textContent).toContain('Berta Beispiel');
-
-      // ... but NOT max's hours: the stale card must disappear instead of
-      // leaking the previous employee's data (privacy).
-      expect(component.hoursOverview()).toBeNull();
-      expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
-    });
   });
 
   describe('Auto-Reload bei Server-Update', () => {

@@ -5,7 +5,6 @@ import { catchError } from 'rxjs/operators';
 
 import {
   OfflineKioskClockEvent,
-  OfflineNfcClockEvent,
   OfflineSyncEventResult,
   OfflineSyncResult,
   RejectedOfflineStamp,
@@ -26,7 +25,7 @@ const SYNC_RETRY_MS = 15_000;
 // restart losing that in-memory outbox before it flushes.
 const SYNC_RETRY_BUFFERED_MS = 60_000;
 /**
- * Must mirror MaxSyncBatchSize in Stempeluhr.Api/Api/NfcEndpoints.cs: the API
+ * Must mirror MaxSyncBatchSize in Stempeluhr.Api/Api/KioskEndpoints.cs: the API
  * rejects batches above this size with 400 WITHOUT processing any event, so a
  * queue larger than one batch has to be split here - otherwise every sync
  * would fail forever and events beyond the limit would never reach Kimai.
@@ -51,16 +50,17 @@ function syncRequestTimeoutMs(chunkSize: number): number {
   return SYNC_REQUEST_TIMEOUT_BASE_MS + chunkSize * SYNC_REQUEST_TIMEOUT_PER_EVENT_MS;
 }
 
+const SYNC_ENDPOINT = '/api/kiosk/clock/sync';
+
+/** Storage format; `kind` stays for compatibility with queues already on devices. */
 interface StoredOfflineEvent {
-  kind: 'nfc' | 'kiosk';
-  event: OfflineNfcClockEvent | OfflineKioskClockEvent;
+  kind: 'kiosk';
+  event: OfflineKioskClockEvent;
 }
 
 /**
- * Queues clock events in localStorage while the backend (or the internet) is
- * unreachable and replays them once connectivity returns. NFC scans are
- * synced via the reader token; PIN-driven kiosk actions use the public
- * kiosk sync endpoint.
+ * Queues kiosk clock actions in localStorage while the backend (or the
+ * internet) is unreachable and replays them once connectivity returns.
  */
 @Injectable({ providedIn: 'root' })
 export class OfflineQueueService {
@@ -81,7 +81,7 @@ export class OfflineQueueService {
   private readonly recoveredSubject = new Subject<void>();
   /**
    * Emits once per sync run that received at least one successful server
-   * response. Hosts without NFC polling (the /clock default route has no
+   * response. Hosts without the kiosk poll (the /clock default route has no
    * terminalId) use this as their only connectivity signal.
    */
   readonly recovered: Observable<void> = this.recoveredSubject.asObservable();
@@ -97,17 +97,6 @@ export class OfflineQueueService {
     if (this.queued().length > 0) {
       this.syncNow().subscribe();
     }
-  }
-
-  /**
-   * Queues an NFC reader event for the /api/nfc/clock/sync replay. Note:
-   * this path requires a trusted X-Nfc-Reader-Token header, which browsers
-   * must not hold - it exists only for non-browser integrations that share
-   * this service. Kiosk/browser offline stamping goes through
-   * enqueueKiosk() instead.
-   */
-  enqueueNfc(event: OfflineNfcClockEvent): void {
-    this.enqueue({ kind: 'nfc', event });
   }
 
   enqueueKiosk(event: OfflineKioskClockEvent): void {
@@ -128,7 +117,7 @@ export class OfflineQueueService {
       const snapshot = this.queued();
       if (snapshot.length === 0 || this.syncing) {
         // Empty queue: nothing to do. Overlapping call (constructor, retry
-        // timer and NFC poll can overlap): skip - the in-flight run drains
+        // timer and connectivity poll can overlap): skip - the in-flight run drains
         // the same queue, and duplicate chunks are absorbed server-side by
         // _syncLock + idempotency. Guarding here avoids the wasteful
         // double-send.
@@ -160,15 +149,10 @@ export class OfflineQueueService {
    * outbox backlog instead of making progress.
    */
   private async flushQueue(snapshot: StoredOfflineEvent[]): Promise<OfflineSyncResult[]> {
-    const groups: Array<readonly [string, Array<OfflineNfcClockEvent | OfflineKioskClockEvent>]> = [
-      ['/api/nfc/clock/sync', snapshot.filter(e => e.kind === 'nfc').map(e => e.event as OfflineNfcClockEvent)],
-      ['/api/kiosk/clock/sync', snapshot.filter(e => e.kind === 'kiosk').map(e => e.event as OfflineKioskClockEvent)],
-    ];
-
+    const events = snapshot.map(entry => entry.event);
     const results: OfflineSyncResult[] = [];
     const mentionedIds = new Set<string>();
     const bufferedIds = new Set<string>();
-    let bufferingEverything = false;
     // The backend "recovered" only means something for the host UI when at
     // least one event was actually PROCESSED (applied/duplicate/rejected) -
     // not when the whole batch was merely buffered (API up, Kimai down). In
@@ -180,51 +164,47 @@ export class OfflineQueueService {
     // chunks already processed events - PIN logins are still impossible.
     let replayAborted = false;
 
-    replay:
-    for (const [endpoint, events] of groups) {
-      for (let offset = 0; offset < events.length; offset += MAX_SYNC_BATCH_SIZE) {
-        if (bufferingEverything) {
-          break replay;
+    for (let offset = 0; offset < events.length; offset += MAX_SYNC_BATCH_SIZE) {
+      const chunk = events.slice(offset, offset + MAX_SYNC_BATCH_SIZE);
+      let result: OfflineSyncResult;
+      try {
+        result = await firstValueFrom(
+          this.http.post<OfflineSyncResult>(SYNC_ENDPOINT, { events: chunk })
+            .pipe(timeout(syncRequestTimeoutMs(chunk.length))),
+        );
+      } catch {
+        // Network or 5xx failure mid-run: stop here. Events already resolved
+        // by earlier chunks are dropped below, so partial progress survives;
+        // the rest retries on the timer.
+        replayAborted = true;
+        break;
+      }
+      results.push(result);
+
+      const chunkById = new Map(chunk.map(event => [event.eventId, event]));
+      let chunkFullyBuffered = (result.results?.length ?? 0) > 0;
+      for (const detail of result.results ?? []) {
+        if (!detail.eventId) {
+          continue;
         }
 
-        try {
-          const chunk = events.slice(offset, offset + MAX_SYNC_BATCH_SIZE);
-          const result = await firstValueFrom(
-            this.http.post<OfflineSyncResult>(endpoint, {
-              events: chunk,
-            }).pipe(timeout(syncRequestTimeoutMs(chunk.length))),
-          );
-          results.push(result);
-
-          const chunkById = new Map(chunk.map(event => [event.eventId, event]));
-          let chunkFullyBuffered = (result.results?.length ?? 0) > 0;
-          for (const detail of result.results ?? []) {
-            if (!detail.eventId) {
-              continue;
-            }
-
-            mentionedIds.add(detail.eventId);
-            if (detail.status === 'buffered') {
-              bufferedIds.add(detail.eventId);
-            } else {
-              chunkFullyBuffered = false;
-              anyProcessed = true;
-            }
-
-            if (detail.status === 'rejected') {
-              this.recordRejected(detail, chunkById.get(detail.eventId));
-            }
-          }
-          bufferingEverything = chunkFullyBuffered;
-        } catch {
-          // Network or 5xx failure mid-run: stop here entirely. Events already
-          // resolved by earlier chunks are dropped below, so partial
-          // progress survives; the rest retries on the timer. Breaking out of
-          // BOTH loops (not just the chunk loop) keeps the remaining groups
-          // unsent - the network is down, they would fail the same way.
-          replayAborted = true;
-          break replay;
+        mentionedIds.add(detail.eventId);
+        if (detail.status === 'buffered') {
+          bufferedIds.add(detail.eventId);
+        } else {
+          chunkFullyBuffered = false;
+          anyProcessed = true;
         }
+
+        if (detail.status === 'rejected') {
+          this.recordRejected(detail, chunkById.get(detail.eventId));
+        }
+      }
+
+      // The API buffered the whole chunk ("Kimai nicht erreichbar"): sending
+      // more would only pile the rest onto the same outbox backlog.
+      if (chunkFullyBuffered) {
+        break;
       }
     }
 
@@ -273,11 +253,7 @@ export class OfflineQueueService {
    * Best effort by design: the sync response is the only moment the server
    * tells us, and losing the record would only restore the silent loss.
    */
-  private recordRejected(
-    detail: OfflineSyncEventResult,
-    event: OfflineNfcClockEvent | OfflineKioskClockEvent | undefined,
-  ): void {
-    const kiosk = event as OfflineKioskClockEvent | undefined;
+  private recordRejected(detail: OfflineSyncEventResult, kiosk: OfflineKioskClockEvent | undefined): void {
     const record: RejectedOfflineStamp = {
       eventId: detail.eventId,
       employeeId: kiosk?.employeeId ?? '',
@@ -322,7 +298,7 @@ export class OfflineQueueService {
     try {
       const raw = window.localStorage.getItem(QUEUE_STORAGE_KEY);
       const parsed = raw ? (JSON.parse(raw) as StoredOfflineEvent[]) : [];
-      return Array.isArray(parsed) ? parsed : [];
+      return Array.isArray(parsed) ? parsed.filter(entry => entry?.kind === 'kiosk') : [];
     } catch {
       return [];
     }

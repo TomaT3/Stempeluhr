@@ -3,7 +3,7 @@ import { ActivatedRoute } from '@angular/router';
 import { signal } from '@angular/core';
 import { Observable, Subject, TimeoutError, of, throwError } from 'rxjs';
 
-import { ClockStatus, KioskEmployeeSession, NfcClockEvent, NfcLatestEvent } from '../../../core/models/kiosk.models';
+import { ClockStatus, KioskEmployeeSession, NfcClockEvent } from '../../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../../core/models/offline.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
@@ -15,7 +15,6 @@ import { ClockPage } from './clock-page';
 describe('ClockPage offline behaviour', () => {
   let pinLoginResult: Subject<KioskEmployeeSession>;
   let clockResult: Subject<ClockStatus>;
-  let latestNfcValue: NfcLatestEvent;
   let failPolls: boolean;
   let recovered$: Subject<void>;
   let terminalIdValue: string | null;
@@ -59,7 +58,6 @@ describe('ClockPage offline behaviour', () => {
     window.localStorage.clear();
     pinLoginResult = new Subject<KioskEmployeeSession>();
     clockResult = new Subject<ClockStatus>();
-    latestNfcValue = { event: null };
     failPolls = false;
     recovered$ = new Subject<void>();
     terminalIdValue = 'term-1';
@@ -95,8 +93,8 @@ describe('ClockPage offline behaviour', () => {
           useValue: {
             pinLogin: vi.fn(() => pinLoginResult),
             clock: vi.fn(() => clockResult),
-            latestNfcEvent: vi.fn(() =>
-              failPolls ? throwError(() => ({ status: 0 })) : of(latestNfcValue),
+            ping: vi.fn(() =>
+              failPolls ? throwError(() => ({ status: 0 })) : of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }),
             ),
             hoursOverview: vi.fn(() => of(null)),
             identify: vi.fn(() => identifyValue),
@@ -327,24 +325,23 @@ describe('ClockPage offline behaviour', () => {
     const fixture = createComponent();
     const component = fixture.componentInstance;
 
-    // Unlock via NFC touch on the polled terminal: no pin entry happened.
-    latestNfcValue = {
-      event: {
-        eventId: 'ev-nfc-1',
-        occurredAt: new Date().toISOString(),
-        terminalId: 'term-1',
-        cardId: '04AB',
-        employee: session.employee,
-        status,
-        message: 'NFC-Karte erkannt.',
-        success: true,
-      },
-    };
+    // Unlock via card touch while online: the kiosk resolves the card via
+    // identify - no pin entry happened.
+    localScanValue = { cardId: '04ab', scannedAt: new Date().toISOString(), consumed: false };
     vi.advanceTimersByTime(1_000);
+    identifyValue.next({
+      eventId: 'ev-1',
+      occurredAt: new Date().toISOString(),
+      terminalId: 'term-1',
+      cardId: '04AB',
+      employee: session.employee,
+      status,
+      message: 'NFC-Karte erkannt.',
+      success: true,
+    });
     expect(component.isUnlocked()).toBe(true);
 
     // Backend unreachable: the stamp queues for replay ...
-    failPolls = true;
     component.start();
     clockResult.error({ status: 0 });
 
@@ -354,9 +351,9 @@ describe('ClockPage offline behaviour', () => {
     expect(enqueueKiosk).toHaveBeenCalledTimes(1);
     const queued = enqueueKiosk.mock.calls[0][0];
     expect(queued.employeeId).toBe('max');
+    expect(queued.pin).toBe('');
     expect(queued.nfcCardId).toBe('04AB');
   });
-
   it('unlocks the employee from a local agent scan while offline and acks it', () => {
     failPolls = true; // backend unreachable -> offline mode
     const fixture = createComponent();
@@ -602,19 +599,19 @@ describe('ClockPage offline behaviour', () => {
     expect(queued.action).toBe('start');
   });
 
-  it('does not stack NFC polls while one is still pending', () => {
-    const kioskApi = TestBed.inject(KioskApi) as unknown as { latestNfcEvent: ReturnType<typeof vi.fn> };
-    const hanging = new Subject<NfcLatestEvent>();
-    kioskApi.latestNfcEvent.mockReturnValue(hanging);
+  it('does not stack connectivity polls while one is still pending', () => {
+    const kioskApi = TestBed.inject(KioskApi) as unknown as { ping: ReturnType<typeof vi.fn> };
+    const hanging = new Subject<unknown>();
+    kioskApi.ping.mockReturnValue(hanging);
     createComponent();
 
     vi.advanceTimersByTime(5_000);
-    expect(kioskApi.latestNfcEvent).toHaveBeenCalledTimes(1);
+    expect(kioskApi.ping).toHaveBeenCalledTimes(1);
 
     // Once the pending poll settles, polling resumes.
     hanging.error({ status: 0 });
     vi.advanceTimersByTime(1_000);
-    expect(kioskApi.latestNfcEvent).toHaveBeenCalledTimes(2);
+    expect(kioskApi.ping).toHaveBeenCalledTimes(2);
   });
 
   it('queues immediately without a request while the outage is already known', () => {
@@ -661,38 +658,6 @@ describe('ClockPage offline behaviour', () => {
     expect(enqueueKiosk.mock.calls[0][0]).toMatchObject({ employeeId: 'max', pin: '1234', action: 'start' });
     expect(component.isOffline()).toBe(true);
     expect(component.isBusy()).toBe(false);
-  });
-
-  it('fills the card cache from an ONLINE NFC event so a later OFFLINE scan can identify it', () => {
-    // Online phase: the terminal polls successfully and sees an NFC event.
-    const fixture = createComponent();
-    const component = fixture.componentInstance;
-
-    latestNfcValue = {
-      event: {
-        eventId: 'ev-nfc-cache-1',
-        occurredAt: new Date().toISOString(),
-        terminalId: 'term-1',
-        cardId: '04ab', // lowercase on purpose: cache must normalize
-        employee: session.employee,
-        status,
-        message: 'NFC-Karte erkannt.',
-        success: true,
-      },
-    };
-    vi.advanceTimersByTime(1_000);
-
-    expect(component.isUnlocked()).toBe(true);
-    const cached = JSON.parse(window.localStorage.getItem('stempeluhr.employee-card-cache.v1') ?? '{}');
-    expect(cached['04AB']).toEqual(session.employee);
-
-    // Offline phase (fresh boot simulation): only the cached mapping exists.
-    failPolls = true;
-    localScanValue = { cardId: '04ABCD', scannedAt: new Date().toISOString(), consumed: false };
-    vi.advanceTimersByTime(1_000);
-
-    expect(component.selectedEmployee()?.id).toBe('max');
-    expect(component.isUnlocked()).toBe(true);
   });
 
   it('shows an honest unknown-status badge instead of "ausgestempelt" after an offline card login', () => {

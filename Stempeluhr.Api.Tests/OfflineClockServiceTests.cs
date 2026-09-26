@@ -185,123 +185,6 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
-    public async Task NfcToggle_BuffersWholeTimeline_OnTransientFailure()
-    {
-        var (service, kimai) = CreateService();
-        kimai.FailNextStatusCalls = 2;
-
-        var result = await service.SyncAsync(
-        [
-            new OfflineNfcClockEventDto("n1", "04AB", "term", T08),
-            new OfflineNfcClockEventDto("n2", "04AB", "term", T12),
-        ]);
-
-        Assert.Equal(0, result.Accepted);
-        Assert.Equal(2, result.Buffered);
-
-        await service.FlushOutboxAsync();
-
-        // Both scans toggled in order: start at 08:00, stop at 12:00.
-        Assert.Equal(2, kimai.Operations.Count);
-        Assert.Equal("start", kimai.Operations[0].Kind);
-        Assert.Equal(T08, kimai.Operations[0].At);
-        Assert.Equal("stop", kimai.Operations[1].Kind);
-        Assert.Equal(T12, kimai.Operations[1].At);
-    }
-
-    [Fact]
-    public async Task NfcBatch_IsQueuedBehindNfcBacklog_WhenKimaiStillDown()
-    {
-        var (service, kimai) = CreateService();
-
-        // Kimai down: the first scan lands in the outbox (processing +
-        // trailing flush fail).
-        kimai.FailNextStatusCalls = 2;
-        await service.SyncAsync([new OfflineNfcClockEventDto("n1", "04AB", "term", T08)]);
-        Assert.Empty(kimai.Operations);
-
-        // Second batch while Kimai is STILL down: its leading flush must fail
-        // so the backlog survives - then the new scan has to be queued BEHIND
-        // it, never applied ahead of the earlier one.
-        kimai.FailNextStatusCalls = 1;
-        var second = await service.SyncAsync([new OfflineNfcClockEventDto("n2", "04AB", "term", T12)]);
-
-        Assert.Equal(0, second.Accepted);
-        Assert.Equal(1, second.Buffered);
-        Assert.Equal("buffered", second.Results.Single().Status);
-
-        // The trailing flush of this very request applies everything in
-        // scan order once the fake recovers.
-        Assert.Equal(2, kimai.Operations.Count);
-        Assert.Equal("start", kimai.Operations[0].Kind);
-        Assert.Equal(T08, kimai.Operations[0].At);
-        Assert.Equal("stop", kimai.Operations[1].Kind);
-        Assert.Equal(T12, kimai.Operations[1].At);
-        Assert.False(kimai.IsRunning);
-    }
-
-    [Fact]
-    public async Task MixedNfcAndKioskBacklog_ReplaysInEventOrder_AcrossBothQueues()    {
-        var (service, kimai) = CreateService();
-
-        // During the outage a kiosk START @08:00 lands in the kiosk outbox.
-        kimai.FailNextStatusCalls = 2;
-        await service.SyncKioskAsync([Kiosk("k1", "start", T08)]);
-        Assert.Empty(kimai.Operations);
-
-        // Later the same employee scans his NFC card @12:00; Kimai is still
-        // down (leading flush fails), so the toggle is queued into the NFC
-        // outbox while the start waits in the kiosk outbox.
-        kimai.FailNextStatusCalls = 1;
-        var second = await service.SyncAsync([new OfflineNfcClockEventDto("n1", "04AB", "term", T12)]);
-        Assert.Equal(1, second.Buffered);
-
-        // Recovery: the flush must replay strictly by event time ACROSS both
-        // queues. Draining NFC-first would apply the toggle against the
-        // not-yet-started state, derive "start" at 12:00 and turn the kiosk
-        // start@08:00 into a "Lief bereits" no-op - losing the real stamp.
-        await service.FlushOutboxAsync();
-
-        Assert.Equal(2, kimai.Operations.Count);
-        Assert.Equal("start", kimai.Operations[0].Kind);
-        Assert.Equal(T08, kimai.Operations[0].At);
-        Assert.Equal("stop", kimai.Operations[1].Kind);
-        Assert.Equal(T12, kimai.Operations[1].At);
-        Assert.False(kimai.IsRunning);
-    }
-
-    [Fact]
-    public async Task NfcMultiCardBatch_BehindBacklog_ReplaysInGlobalScanOrder()
-    {
-        var (service, kimai) = CreateService();
-        // Keep Kimai down for the whole REQUEST: one failing status per card
-        // group plus the request's trailing flush. The leading flush costs
-        // nothing here (the outboxes are still empty), and the explicit
-        // FlushOutboxAsync below then runs against a recovered fake.
-        kimai.FailNextStatusCalls = 3;
-
-        var result = await service.SyncAsync(
-        [
-            new OfflineNfcClockEventDto("n1", "04AB", "term", T08),
-            new OfflineNfcClockEventDto("n2", "04AB", "term", T12),
-            new OfflineNfcClockEventDto("n3", "04CD", "term", T10),
-        ]);
-
-        Assert.Equal(0, result.Accepted);
-        Assert.Equal(3, result.Buffered);
-
-        await service.FlushOutboxAsync();
-
-        // Global scan order across ALL cards (08 < 10 < 12), not flattened
-        // group-by-group ([08, 12] then [10]) - the outbox lists must stay
-        // individually chronological for the head-comparison merge.
-        Assert.Equal(3, kimai.Operations.Count);
-        Assert.Equal(("start", T08), kimai.Operations[0]);
-        Assert.Equal(("stop", T10), kimai.Operations[1]);
-        Assert.Equal(("start", T12), kimai.Operations[2]);
-    }
-
-    [Fact]
     public async Task PauseEnd_TransientFailureAfterPauseStop_ResumesWorkOnRetry()
     {
         var (service, kimai) = CreateService();
@@ -728,12 +611,7 @@ public sealed class OfflineClockServiceTests
     ///
     /// Simplification to keep in mind when reading multi-employee assertions:
     /// the timesheet state is GLOBAL across all employees (one shared active
-    /// timesheet), unlike real Kimai where each employee has their own. In
-    /// NfcMultiCardBatch_BehindBacklog_ReplaysInGlobalScanOrder this is why
-    /// anna's scan@10:00 derives a "stop" after max's start@08:00 - in
-    /// production it would be an independent per-employee toggle. The test
-    /// pins the DRAIN ORDER (the timestamps); the action kinds merely follow
-    /// from this shared-state simplification.
+    /// timesheet), unlike real Kimai where each employee has their own.
     /// </summary>
     private sealed class FakeKimaiClient : IKimaiClient
     {
