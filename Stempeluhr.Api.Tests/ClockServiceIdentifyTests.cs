@@ -100,9 +100,8 @@ public sealed class ClockServiceIdentifyTests
 
         public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) =>
             Task.FromResult<string?>("Europe/Berlin");
-        public Task StartAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) { LastStamped = true; throw new NotSupportedException(); }
-        public Task StartAtAsync(RuntimeSettings s, EmployeeSettings e, int p, int a, DateTimeOffset d, CancellationToken ct = default) { LastStamped = true; throw new NotSupportedException(); }
-        public Task StartPauseAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) { LastStamped = true; throw new NotSupportedException(); }
+        public Task StartAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget t, CancellationToken ct = default) { LastStamped = true; throw new NotSupportedException(); }
+        public Task StartAtAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget t, DateTimeOffset d, CancellationToken ct = default) { LastStamped = true; throw new NotSupportedException(); }
         public Task StopAsync(RuntimeSettings s, EmployeeSettings e, int id, CancellationToken ct = default) { LastStamped = true; throw new NotSupportedException(); }
         public Task StopAtAsync(RuntimeSettings s, EmployeeSettings e, int id, DateTimeOffset d, CancellationToken ct = default) { LastStamped = true; throw new NotSupportedException(); }
         public Task<KimaiRecentTimesheetDto?> GetLatestStoppedTimesheetAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => throw new NotSupportedException();

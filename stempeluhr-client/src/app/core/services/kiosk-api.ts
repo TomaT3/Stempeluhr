@@ -28,9 +28,10 @@ export class KioskApi {
     return this.http.post<KioskEmployeeSession>('/api/kiosk/pin-login', { pin }).pipe(timeout(REQUEST_TIMEOUT_MS));
   }
 
-  clock(employeeId: string, pin: string, action: ClockAction, nfcCardId: string | null = null) {
+  /** `taskId` nur bei 'switch': Ziel-Tätigkeit, null = zurück zur Standard-Tätigkeit. */
+  clock(employeeId: string, pin: string, action: ClockAction, nfcCardId: string | null = null, taskId: string | null = null) {
     return this.http
-      .post<ClockStatus>('/api/kiosk/clock', { employeeId, pin, action, nfcCardId })
+      .post<ClockStatus>('/api/kiosk/clock', { employeeId, pin, action, nfcCardId, taskId })
       .pipe(timeout(REQUEST_TIMEOUT_MS));
   }
 

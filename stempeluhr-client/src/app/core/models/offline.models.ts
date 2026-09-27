@@ -1,8 +1,10 @@
+import { ClockAction } from './kiosk.models';
+
 export interface OfflineKioskClockEvent {
   eventId: string;
   employeeId: string;
   pin?: string | null;
-  action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd';
+  action: ClockAction;
   performedAt: string;
   /**
    * Card id of the NFC session that unlocked the terminal: the live path
@@ -12,6 +14,11 @@ export interface OfflineKioskClockEvent {
    * opened by PIN login.
    */
   nfcCardId?: string | null;
+  /**
+   * Target of a 'switch' action (null = back to the default task). Queues
+   * written by older clients simply lack it.
+   */
+  taskId?: string | null;
   /**
    * Display name of the employee, ONLY so a refused stamp can name the person
    * who has to be repaired in Kimai. The API ignores the extra field; it is
@@ -53,7 +60,7 @@ export interface RejectedOfflineStamp {
   /** Reason the server reported, shown to whoever has to fix it. */
   message: string;
   /** Only kiosk events carry an action; reader-token events do not. */
-  action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd' | null;
+  action: ClockAction | null;
   /**
    * Set when somebody pressed "Alle erledigt". Acknowledged records are only
    * hidden from the kiosk notice - they stay in storage, because the time may

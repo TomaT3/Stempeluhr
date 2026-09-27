@@ -30,6 +30,46 @@ public sealed class AdminService(
             .Any(group => group.Count() > 1);
     }
 
+    public string? ValidateTasks(RuntimeSettings settings)
+    {
+        foreach (var employee in settings.Employees)
+        {
+            var tasks = employee.Tasks ?? [];
+            var name = string.IsNullOrWhiteSpace(employee.DisplayName) ? "Mitarbeiter" : employee.DisplayName;
+            if (tasks.Any(task => string.IsNullOrWhiteSpace(task.Label)))
+            {
+                return $"{name}: Jede weitere Taetigkeit braucht eine Bezeichnung.";
+            }
+
+            if (tasks.Any(task => task.ProjectId is null || task.ActivityId is null))
+            {
+                return $"{name}: Jede weitere Taetigkeit braucht Projekt und Aktivitaet.";
+            }
+
+            if (settings.PauseActivityId is not null && tasks.Any(task => task.ActivityId == settings.PauseActivityId))
+            {
+                return $"{name}: Die Pausen-Aktivitaet kann keine weitere Taetigkeit sein.";
+            }
+
+            // The status maps the running sheet back to a task by
+            // project + activity - duplicates would make that ambiguous.
+            if (tasks.GroupBy(task => (task.ProjectId, task.ActivityId)).Any(group => group.Count() > 1)
+                || tasks.Select(task => task.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != tasks.Length)
+            {
+                return $"{name}: Weitere Taetigkeiten muessen eindeutig sein.";
+            }
+
+            var standard = WorkTargetResolver.ResolveDefault(settings, employee);
+            if (standard is not null
+                && tasks.Any(task => task.ProjectId == standard.ProjectId && task.ActivityId == standard.ActivityId))
+            {
+                return $"{name}: Eine weitere Taetigkeit entspricht der Standard-Taetigkeit.";
+            }
+        }
+
+        return null;
+    }
+
     private async Task<AdminEmployeeStatusDto> GetEmployeeStatusAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
@@ -56,7 +96,8 @@ public sealed class AdminService(
                 status.DurationSeconds,
                 status.State,
                 status.StateText,
-                true);
+                true,
+                status.ActiveTaskLabel);
         }
         catch
         {

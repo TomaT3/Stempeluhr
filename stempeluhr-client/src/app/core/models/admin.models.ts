@@ -7,6 +7,8 @@ export interface AdminEmployeeStatus {
   state: 'clockedOut' | 'working' | 'paused';
   stateText: string;
   isAvailable: boolean;
+  /** Laufende weitere Tätigkeit (null = Standard-Tätigkeit, Pause oder aus). */
+  activeTaskLabel?: string | null;
 }
 
 export interface AdminSettings {
@@ -35,6 +37,16 @@ export interface AdminEmployee {
   tags: string[];
   billable: boolean;
   isEnabled: boolean;
+  /** Weitere Tätigkeiten (andere Kunden), am Kiosk ohne Ausstempeln wählbar. */
+  tasks: AdminEmployeeTask[];
+}
+
+export interface AdminEmployeeTask {
+  id: string;
+  label: string;
+  projectId: number | null;
+  activityId: number | null;
+  billable: boolean;
 }
 
 export interface KimaiActivity {

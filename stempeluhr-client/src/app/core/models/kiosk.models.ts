@@ -5,6 +5,12 @@ export interface Employee {
   color: string;
   imageUrl: string | null;
   requiresPin: boolean;
+  /**
+   * Weitere Tätigkeiten (z. B. Arbeit für andere Kunden), auf die während der
+   * Arbeitszeit gewechselt werden kann. Fehlt bei Einträgen aus älteren
+   * Offline-Caches - dann gibt es keinen Wechselknopf.
+   */
+  tasks?: EmployeeTask[];
 }
 
 export interface ClockStatus {
@@ -14,6 +20,9 @@ export interface ClockStatus {
   durationSeconds: number;
   state: 'clockedOut' | 'working' | 'paused';
   stateText: string;
+  /** Laufende weitere Tätigkeit; null/fehlend = Standard-Tätigkeit (oder Pause/aus). */
+  activeTaskId?: string | null;
+  activeTaskLabel?: string | null;
 }
 
 export interface KioskEmployeeSession {
@@ -50,4 +59,9 @@ export interface HealthStatus {
   settingsConfigured: boolean;
 }
 
-export type ClockAction = 'start' | 'stop' | 'pauseStart' | 'pauseEnd';
+export interface EmployeeTask {
+  id: string;
+  label: string;
+}
+
+export type ClockAction = 'start' | 'stop' | 'pauseStart' | 'pauseEnd' | 'switch';

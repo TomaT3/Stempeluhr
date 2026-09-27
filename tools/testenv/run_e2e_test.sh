@@ -69,7 +69,8 @@ cat > "$WORK/settings.json" <<EOF
   "pauseActivityId": 2,
   "employees": [
     { "id": "test-max",  "displayName": "Max Mustermann", "pin": "1234", "nfcCardId": "04A2B3C4",
-      "apiToken": "test-token", "projectId": 1, "activityId": 1 },
+      "apiToken": "test-token", "projectId": 1, "activityId": 1,
+      "tasks": [ { "id": "kx", "label": "Kunde X", "projectId": 5, "activityId": 6 } ] },
     { "id": "test-anna", "displayName": "Anna Beispiel",  "pin": "4321", "nfcCardId": "04D5E6F7",
       "apiToken": "test-token", "projectId": 1, "activityId": 1 }
   ]
@@ -125,6 +126,49 @@ assert_status '"clockedOut"' "$R" "Zustand nach Ausstempeln"
 
 BOOKINGS=$(curl -s "$KIMAI_URL/_bookings")
 echo "$BOOKINGS" | grep -q '"activity": 2' && ok "Pause wurde mit Pause-Aktivität gebucht" || bad "Keine Pause-Aktivität im Kimai-Log"
+
+# ------------------------------------------------- Test 1a: Tätigkeitswechsel
+say "Test 1a: Tätigkeitswechsel (Max: Start → Kunde X → Pause → Fortsetzen auf Kunde X → zurück → Stop)"
+
+sync_max() { # event-suffix action performedAt [taskId]
+  local task=""
+  [[ -n "${4:-}" ]] && task=",\"taskId\":\"$4\""
+  post_sync "{\"events\":[{\"eventId\":\"${RUN}-$1\",\"employeeId\":\"test-max\",\"pin\":\"1234\",\"action\":\"$2\",\"performedAt\":\"$3\"$task}]}"
+}
+login_max() {
+  curl -s -m 15 -X POST "$API_URL/api/kiosk/pin-login" -H 'Content-Type: application/json' -d '{"pin":"1234"}'
+}
+
+R=$(login_max)
+assert_status '"tasks":\[{"id":"kx","label":"Kunde X"}\]' "$R" "Kiosk erhält die Tätigkeiten des Mitarbeiters"
+
+R=$(sync_max task-1 start 2026-08-24T08:00:00+02:00)
+assert_status '"applied"' "$R" "Einstempeln"
+R=$(sync_max task-2 switch 2026-08-24T10:00:00+02:00 kx)
+assert_status 'Wechsel zu Kunde X' "$R" "Wechsel zu Kunde X nachgetragen"
+assert_status '"activeTaskId":"kx"' "$(login_max)" "Status zeigt Kunde X"
+R=$(sync_max task-3 switch 2026-08-24T10:00:00+02:00 kx)
+assert_status 'Lief bereits' "$R" "Doppelter Wechsel wird zum No-op"
+
+R=$(sync_max task-4 pauseStart 2026-08-24T12:00:00+02:00)
+assert_status '"paused"' "$R" "Pause während Kunde X"
+R=$(sync_max task-5 pauseEnd 2026-08-24T12:30:00+02:00)
+assert_status '"working"' "$R" "Pausenende"
+assert_status '"activeTaskId":"kx"' "$(login_max)" "Nach der Pause läuft wieder Kunde X"
+
+HTTP=$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "$API_URL/api/kiosk/clock" -H 'Content-Type: application/json' \
+  -d '{"employeeId":"test-max","pin":"1234","action":"switch","taskId":"gibt-es-nicht"}')
+[ "$HTTP" = "400" ] && ok "Live-Wechsel auf unbekannte Tätigkeit -> 400" || bad "Unbekannte Tätigkeit erwartet 400, war $HTTP"
+
+R=$(sync_max task-6 switch 2026-08-24T14:00:00+02:00)
+assert_status 'Standard-Taetigkeit' "$R" "Wechsel zurück zur Standard-Tätigkeit"
+assert_status '"activeTaskId":null' "$(login_max)" "Status zeigt wieder die Standard-Tätigkeit"
+R=$(sync_max task-7 stop 2026-08-24T17:00:00+02:00)
+assert_status '"clockedOut"' "$R" "Ausstempeln"
+
+BOOKINGS=$(curl -s "$KIMAI_URL/_bookings")
+KX=$(echo "$BOOKINGS" | grep -o '"project": 5' | wc -l)
+[ "$KX" -ge 2 ] && ok "Kunde X zweimal gebucht (vor und nach der Pause, $KX Einträge)" || bad "Erwartet 2 Buchungen auf Projekt 5, war $KX"
 
 # ------------------------------------------------- Test 1b: Stundenübersicht
 say "Test 1b: Stundenübersicht (Max stempelt heute 2h -> /api/kiosk/hours)"

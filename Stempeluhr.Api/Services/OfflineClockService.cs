@@ -234,7 +234,7 @@ public sealed class OfflineClockService(
         var employee = ResolveKioskEmployee(settings, entry);
 
         var action = NormalizeKioskAction(entry.Action);
-        return await ApplyActionAsync(settings, employee, action, entry.PerformedAt, cancellationToken);
+        return await ApplyActionAsync(settings, employee, action, entry.TaskId, entry.PerformedAt, cancellationToken);
     }
 
     /// <summary>
@@ -281,6 +281,7 @@ public sealed class OfflineClockService(
             : string.Equals(action, "stop", StringComparison.OrdinalIgnoreCase) ? "stop"
             : string.Equals(action, "pauseStart", StringComparison.OrdinalIgnoreCase) ? "pauseStart"
             : string.Equals(action, "pauseEnd", StringComparison.OrdinalIgnoreCase) ? "pauseEnd"
+            : string.Equals(action, "switch", StringComparison.OrdinalIgnoreCase) ? "switch"
             : throw new InvalidOperationException($"Unbekannte Aktion: {action}");
     }
 
@@ -293,6 +294,7 @@ public sealed class OfflineClockService(
         RuntimeSettings settings,
         EmployeeSettings employee,
         string action,
+        string? taskId,
         DateTimeOffset timestamp,
         CancellationToken cancellationToken)
     {
@@ -306,14 +308,7 @@ public sealed class OfflineClockService(
                     return ("Lief bereits - kein Nachtrag noetig.", status.State);
                 }
 
-                var projectId = employee.ProjectId
-                    ?? settings.DefaultProjectId
-                    ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
-                var activityId = employee.ActivityId
-                    ?? settings.DefaultActivityId
-                    ?? throw new InvalidOperationException("Aktivitaet muss konfiguriert sein.");
-
-                await kimai.StartAtAsync(settings, employee, projectId, activityId, timestamp, cancellationToken);
+                await kimai.StartAtAsync(settings, employee, RequireDefaultTarget(settings, employee), timestamp, cancellationToken);
                 return ($"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}", "working");
 
             case "stop":
@@ -355,10 +350,8 @@ public sealed class OfflineClockService(
                     return ("Lief nicht - Pause nicht nachtragbar.", status.State);
                 }
 
-                if (settings.PauseActivityId is null)
-                {
-                    throw new InvalidOperationException("Pausen-Aktivitaet muss konfiguriert sein.");
-                }
+                var pause = WorkTargetResolver.ResolvePause(settings, employee)
+                    ?? throw new InvalidOperationException("Projekt und Pausen-Aktivitaet muessen konfiguriert sein.");
 
                 // Same replay-vs-live race as the stop case: pausing a sheet
                 // that began AFTER the event would backdate its end to before
@@ -379,11 +372,7 @@ public sealed class OfflineClockService(
                 // stop+start; the alternative (compensating restart of the work
                 // timesheet) would risk double-applying on ambiguous failures.
                 await kimai.StopAtAsync(settings, employee, pauseStopId, timestamp, cancellationToken);
-                var pauseProject = employee.ProjectId
-                    ?? settings.DefaultProjectId
-                    ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
-                await kimai.StartAtAsync(
-                    settings, employee, pauseProject, settings.PauseActivityId.Value, timestamp, cancellationToken);
+                await kimai.StartAtAsync(settings, employee, pause, timestamp, cancellationToken);
                 return ($"Nachgetragen: Pausenbeginn {timestamp.ToLocalTime():HH:mm}", "paused");
 
             case "pauseEnd":
@@ -400,15 +389,16 @@ public sealed class OfflineClockService(
                         return (ObsoleteEventMessage, status.State);
                     }
 
-                    var resumeProject = employee.ProjectId
-                        ?? settings.DefaultProjectId
-                        ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
-                    var resumeActivity = employee.ActivityId
-                        ?? settings.DefaultActivityId
-                        ?? throw new InvalidOperationException("Aktivitaet muss konfiguriert sein.");
+                    RequireDefaultTarget(settings, employee);
+
+                    // Resume the task the pause interrupted (live parity,
+                    // ClockService.EndPauseAsync): read BEFORE stopping the
+                    // pause, while that sheet is still the latest stopped one.
+                    var resume = WorkTargetResolver.ResolveResume(
+                        settings, employee, await GetTimesheetBeforePauseAsync(settings, employee, cancellationToken))!;
 
                     await kimai.StopAtAsync(settings, employee, endPauseId, timestamp, cancellationToken);
-                    await kimai.StartAtAsync(settings, employee, resumeProject, resumeActivity, timestamp, cancellationToken);
+                    await kimai.StartAtAsync(settings, employee, resume, timestamp, cancellationToken);
                     return ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
                 }
 
@@ -430,7 +420,7 @@ public sealed class OfflineClockService(
                     // interrupted attempt leaves behind: the latest STOPPED
                     // timesheet is a PAUSE timesheet whose end matches this
                     // event's timestamp (StopAt wrote it right before failing).
-                    if (!await IsInterruptedPauseEndAsync(settings, employee, timestamp, cancellationToken))
+                    if (!await IsInterruptedTransitionAsync(settings, employee, timestamp, stoppedPause: true, cancellationToken))
                     {
                         logger.LogWarning(
                             "Offline pauseEnd at {Timestamp}: no pause running and no matching interrupted pause stop - not resuming work",
@@ -442,18 +432,16 @@ public sealed class OfflineClockService(
                         "Offline pauseEnd at {Timestamp}: completing an interrupted pause end by resuming work",
                         timestamp);
 
-                    var restartProject = employee.ProjectId
-                        ?? settings.DefaultProjectId
-                        ?? throw new InvalidOperationException("Projekt muss konfiguriert sein.");
-                    var restartActivity = employee.ActivityId
-                        ?? settings.DefaultActivityId
-                        ?? throw new InvalidOperationException("Aktivitaet muss konfiguriert sein.");
-
-                    await kimai.StartAtAsync(settings, employee, restartProject, restartActivity, timestamp, cancellationToken);
+                    // The sheet before the pause is no longer the latest
+                    // stopped one (the pause is) - resume the default task.
+                    await kimai.StartAtAsync(settings, employee, RequireDefaultTarget(settings, employee), timestamp, cancellationToken);
                     return ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
                 }
 
                 return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
+
+            case "switch":
+                return await ApplySwitchAsync(settings, employee, status, taskId, timestamp, cancellationToken);
 
             default:
                 throw new InvalidOperationException($"Unbekannte Aktion: {action}");
@@ -461,22 +449,126 @@ public sealed class OfflineClockService(
     }
 
     /// <summary>
-    /// True when the Kimai state matches an interrupted pauseEnd transaction:
-    /// the latest stopped timesheet is a PAUSE timesheet that ended at this
-    /// event's timestamp - exactly what StopAt(pause, timestamp) writes in the
-    /// successful first step before the resume-start fails transiently. The
-    /// small tolerance only absorbs timestamp rounding; anything further away
-    /// (a later live stop, another terminal's action) must NOT trigger a
-    /// phantom resume. A transient failure of the lookup itself propagates to
-    /// the caller, so the event buffers and retries as usual.
+    /// Task switch: stop the running work sheet, continue on the target task
+    /// from the event's timestamp on. Every branch can become a no-op against
+    /// the current Kimai state (already on the target, paused, clocked out,
+    /// sheet newer than the event), so a switch that was applied live AND
+    /// queued never books twice.
     /// </summary>
-    private async Task<bool> IsInterruptedPauseEndAsync(
+    private async Task<(string Message, string State)> ApplySwitchAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
+        ClockStatusDto status,
+        string? taskId,
         DateTimeOffset timestamp,
         CancellationToken cancellationToken)
     {
-        if (settings.PauseActivityId is null)
+        if (status.State == "paused")
+        {
+            return ("In Pause - Wechsel nicht nachtragbar.", status.State);
+        }
+
+        var target = WorkTargetResolver.Resolve(settings, employee, taskId);
+
+        if (!status.IsRunning || status.ActiveTimesheetId is not int switchStopId)
+        {
+            // Partial-application recovery, same reasoning as pauseEnd: a
+            // previous replay stopped the work sheet but failed transiently
+            // on the start. Only resume when the latest stopped sheet is a
+            // WORK sheet that ended exactly at this event - never after a
+            // live stop.
+            if (target is not null
+                && await IsInterruptedTransitionAsync(settings, employee, timestamp, stoppedPause: false, cancellationToken))
+            {
+                await kimai.StartAtAsync(settings, employee, target, timestamp, cancellationToken);
+                return (SwitchAppliedMessage(target, timestamp), "working");
+            }
+
+            return ("Lief nicht - Wechsel nicht nachtragbar.", status.State);
+        }
+
+        if (target is null)
+        {
+            // Task deleted in the admin area while the event waited: nothing
+            // to switch to - reject so the kiosk reports the missing time.
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(taskId)
+                ? "Projekt und Aktivitaet muessen konfiguriert sein."
+                : "Taetigkeit nicht mehr vorhanden.");
+        }
+
+        if (WorkTargetResolver.IsRunningOn(status, target))
+        {
+            return ("Lief bereits - kein Nachtrag noetig.", status.State);
+        }
+
+        // Same replay-vs-live race as stop/pauseStart: a sheet that began
+        // AFTER the event cannot be its source.
+        if (IsSheetNewerThanEvent(status.StartedAt, timestamp))
+        {
+            logger.LogWarning(
+                "Offline switch at {Timestamp}: work timesheet started at {StartedAt} - after the event; obsolete no-op",
+                timestamp, status.StartedAt);
+            return (ObsoleteEventMessage, status.State);
+        }
+
+        await kimai.StopAtAsync(settings, employee, switchStopId, timestamp, cancellationToken);
+        await kimai.StartAtAsync(settings, employee, target, timestamp, cancellationToken);
+        return (SwitchAppliedMessage(target, timestamp), "working");
+    }
+
+    private static string SwitchAppliedMessage(KimaiTimesheetTarget target, DateTimeOffset timestamp)
+    {
+        return $"Nachgetragen: Wechsel zu {WorkTargetResolver.DisplayName(target)} {timestamp.ToLocalTime():HH:mm}";
+    }
+
+    private static KimaiTimesheetTarget RequireDefaultTarget(RuntimeSettings settings, EmployeeSettings employee)
+    {
+        return WorkTargetResolver.ResolveDefault(settings, employee)
+            ?? throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.");
+    }
+
+    /// <summary>
+    /// Latest stopped timesheet while a pause runs = the sheet the pause
+    /// interrupted. Transient failures propagate (the event buffers); a
+    /// permanent Kimai answer only costs the task choice (default task).
+    /// </summary>
+    private async Task<KimaiRecentTimesheetDto?> GetTimesheetBeforePauseAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await kimai.GetLatestStoppedTimesheetAsync(settings, employee, cancellationToken);
+        }
+        catch (KimaiApiException ex) when (!IsRetryable(ex))
+        {
+            logger.LogWarning(ex, "Offline pauseEnd: timesheet before the pause could not be read - resuming the default task");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// True when the Kimai state matches an interrupted two-step transaction
+    /// (pauseEnd: <paramref name="stoppedPause"/> true, switch: false): the
+    /// latest stopped timesheet is a PAUSE (resp. WORK) timesheet that ended
+    /// at this event's timestamp - exactly what StopAt(sheet, timestamp)
+    /// writes in the successful first step before the following start fails
+    /// transiently. The small tolerance only absorbs timestamp rounding;
+    /// anything further away (a later live stop, another terminal's action)
+    /// must NOT trigger a phantom start. A transient failure of the lookup
+    /// itself propagates to the caller, so the event buffers and retries as
+    /// usual.
+    /// </summary>
+    private async Task<bool> IsInterruptedTransitionAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        DateTimeOffset timestamp,
+        bool stoppedPause,
+        CancellationToken cancellationToken)
+    {
+        var what = stoppedPause ? "pauseEnd" : "switch";
+        if (stoppedPause && settings.PauseActivityId is null)
         {
             // Without a configured pause activity a stopped timesheet cannot
             // be identified as a pause - stay conservative (no-op + loud log).
@@ -485,7 +577,7 @@ public sealed class OfflineClockService(
 
         var latest = await kimai.GetLatestStoppedTimesheetAsync(settings, employee, cancellationToken);
         if (latest is not { ActivityId: int activityId, EndedAt: DateTimeOffset ended }
-            || activityId != settings.PauseActivityId)
+            || (activityId == settings.PauseActivityId) != stoppedPause)
         {
             return false;
         }
@@ -493,18 +585,18 @@ public sealed class OfflineClockService(
         var differenceSeconds = Math.Abs((ended - timestamp).TotalSeconds);
         if (differenceSeconds > settings.PauseEndRecoveryToleranceSeconds)
         {
-            // A live stop or another terminal's action ended the pause - the
+            // A live stop or another terminal's action ended the sheet - the
             // gap is too large for this to be our interrupted transaction.
             // Log the difference so a misconfigured tolerance is visible.
             logger.LogWarning(
-                "Offline pauseEnd at {Timestamp}: latest pause stop {Ended} is {DifferenceSeconds:N0}s away (tolerance {Tolerance}s) - not resuming work",
-                timestamp, ended, differenceSeconds, settings.PauseEndRecoveryToleranceSeconds);
+                "Offline {What} at {Timestamp}: latest stop {Ended} is {DifferenceSeconds:N0}s away (tolerance {Tolerance}s) - not resuming work",
+                what, timestamp, ended, differenceSeconds, settings.PauseEndRecoveryToleranceSeconds);
             return false;
         }
 
         logger.LogWarning(
-            "Offline pauseEnd at {Timestamp}: matching interrupted pause stop {Ended} (difference {DifferenceSeconds:N0}s) - resuming work",
-            timestamp, ended, differenceSeconds);
+            "Offline {What} at {Timestamp}: matching interrupted stop {Ended} (difference {DifferenceSeconds:N0}s) - resuming work",
+            what, timestamp, ended, differenceSeconds);
         return true;
     }
 

@@ -7,10 +7,13 @@ public interface ITelegramNotifier
     /// Wird fire-and-forget aus dem ClockService aufgerufen: wirft nie, Fehler
     /// werden nur geloggt (Stempeln darf nie an Telegram hängen). Ohne
     /// Konfiguration (Token/Chat-ID) ist der Aufruf ein No-op.
+    /// <paramref name="taskLabel"/> nennt beim Tätigkeitswechsel das Ziel
+    /// (null = zurück zur Standard-Tätigkeit).
     /// </summary>
     Task SendStampNotificationAsync(
         string employeeName,
         string action,
         DateTimeOffset stampUtc,
-        TimeZoneInfo timeZone);
+        TimeZoneInfo timeZone,
+        string? taskLabel = null);
 }

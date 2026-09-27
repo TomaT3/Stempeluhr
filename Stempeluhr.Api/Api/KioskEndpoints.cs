@@ -42,7 +42,7 @@ public static class KioskEndpoints
             return status.Result switch
             {
                 ClockActionResult.Unauthorized => Results.Unauthorized(),
-                ClockActionResult.BadRequest => Results.BadRequest(new { message = "Unbekannte Stempelaktion." }),
+                ClockActionResult.BadRequest => Results.BadRequest(new { message = "Unbekannte Stempelaktion oder Taetigkeit." }),
                 _ => Results.Ok(status.Status)
             };
         });

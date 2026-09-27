@@ -129,8 +129,15 @@ class Handler(BaseHTTPRequestHandler):
                     t for t in TIMESHEETS
                     if (begin_q is None or to_local_naive(t["begin"]) >= begin_q)
                     and (end_q is None or to_local_naive(t["begin"]) <= end_q)
+                    # state=stopped: nur beendete Timesheets (letzter gestoppter
+                    # Eintrag für Pausenende/Nachtrag).
+                    and (query.get("state") != "stopped" or t.get("end") is not None)
                 ]
-                filtered.sort(key=lambda t: to_local_naive(t["begin"]))
+                order_by = "end" if query.get("orderBy") == "end" else "begin"
+                filtered.sort(
+                    key=lambda t: to_local_naive(t[order_by]) if t.get(order_by) else datetime.min,
+                    reverse=query.get("order") == "DESC",
+                )
                 start = (page - 1) * size
                 self._send(200, [to_list_dto(t) for t in filtered[start:start + size]])
             return

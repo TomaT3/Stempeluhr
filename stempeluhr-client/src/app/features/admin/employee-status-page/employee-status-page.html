@@ -44,6 +44,12 @@
               [available]="status.isAvailable" />
           </div>
           <dl class="status-details">
+            @if (status.activeTaskLabel) {
+              <div>
+                <dt>Tätigkeit</dt>
+                <dd>{{ status.activeTaskLabel }}</dd>
+              </div>
+            }
             <div>
               <dt>Seit</dt>
               <dd>{{ status.startedAt ? (status.startedAt | date: 'dd.MM.yyyy HH:mm') : '-' }}</dd>

@@ -241,6 +241,56 @@
                 abrechenbar
               </label>
             </div>
+
+            <!-- Weitere Taetigkeiten: Arbeit fuer andere Kunden, auf die am Kiosk
+                 ohne Ausstempeln gewechselt wird (Projekt + Aktivitaet in Kimai). -->
+            <div class="task-admin">
+              <h3>Weitere Tätigkeiten</h3>
+              @for (task of employee.tasks; track task.id; let taskIndex = $index) {
+                <div class="form-grid task-admin-row">
+                  <label>
+                    Bezeichnung
+                    <input [value]="task.label" (input)="updateEmployeeTask(index, taskIndex, { label: $any($event.target).value })" placeholder="z. B. Kunde X">
+                  </label>
+                  <label>
+                    Projekt
+                    <select (change)="updateEmployeeTask(index, taskIndex, { projectId: toNumber($any($event.target).value) })">
+                      <option value="" [selected]="task.projectId === null">Bitte waehlen</option>
+                      @if (task.projectId !== null && !hasKimaiProject(task.projectId)) {
+                        <option [value]="task.projectId" selected>{{ missingProjectLabel(task.projectId) }}</option>
+                      }
+                      @for (project of kimaiProjects(); track project.id) {
+                        <option [value]="project.id" [selected]="task.projectId === project.id">{{ projectOptionLabel(project) }}</option>
+                      }
+                    </select>
+                  </label>
+                  <label>
+                    Aktivitaet
+                    <select (change)="updateEmployeeTask(index, taskIndex, { activityId: toNumber($any($event.target).value) })">
+                      <option value="" [selected]="task.activityId === null">Bitte waehlen</option>
+                      @if (task.activityId !== null && !hasKimaiActivity(task.activityId)) {
+                        <option [value]="task.activityId" selected>{{ missingActivityLabel(task.activityId) }}</option>
+                      }
+                      @for (activity of kimaiActivities(); track activity.id) {
+                        <option [value]="activity.id" [selected]="task.activityId === activity.id">{{ activityOptionLabel(activity) }}</option>
+                      }
+                    </select>
+                  </label>
+                  <div class="task-admin-actions">
+                    <label class="toggle">
+                      <input type="checkbox" [checked]="task.billable" (change)="updateEmployeeTask(index, taskIndex, { billable: $any($event.target).checked })">
+                      abrechenbar
+                    </label>
+                    <button type="button" class="danger" (click)="removeEmployeeTask(index, taskIndex)">Entfernen</button>
+                  </div>
+                </div>
+              } @empty {
+                <p class="task-admin-hint">Keine – am Kiosk gibt es dann keinen Knopf „Tätigkeit wechseln“.</p>
+              }
+              <div class="image-actions">
+                <button type="button" (click)="addEmployeeTask(index)">Tätigkeit hinzufügen</button>
+              </div>
+            </div>
           </article>
         }
       </section>

@@ -4,7 +4,7 @@ import { SwUpdate } from '@angular/service-worker';
 import { Subscription, finalize, timeout } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
-import { ClockStatus, Employee, HoursOverview } from '../../core/models/kiosk.models';
+import { ClockAction, ClockStatus, Employee, EmployeeTask, HoursOverview } from '../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../core/models/offline.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
@@ -42,12 +42,14 @@ const HEALTH_TIMEOUT_MS = 10_000;
 
 /** A stamp as captured at button press (see sendClockAction). */
 interface PendingStamp {
-  action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd';
+  action: ClockAction;
   performedAt: string;
   employeeId: string;
   employeeName: string;
   pin: string;
   nfcCardId: string | null;
+  /** Target of a 'switch' (null = default task); frozen with the identity. */
+  task: EmployeeTask | null;
 }
 
 @Directive()
@@ -104,6 +106,15 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** Stundenübersicht des angemeldeten Mitarbeiters (Heute/Woche/Monat, Netto). */
   readonly hoursOverview = signal<HoursOverview | null>(null);
+
+  /** Weitere Tätigkeiten des angemeldeten Mitarbeiters (leer = kein Wechselknopf). */
+  readonly employeeTasks = computed(() => this.selectedEmployee()?.tasks ?? []);
+
+  /**
+   * Tätigkeitsauswahl offen. Gehört zur Sitzung: jeder Identitätswechsel,
+   * back() und jede abgeschickte Aktion schließt sie.
+   */
+  readonly taskPickerOpen = signal(false);
 
   private resetTimer: number | null = null;
   /** Erreichbarkeits-Poll des Kiosks (nur mit terminalId). */
@@ -360,6 +371,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.kioskApi.pinLogin(pin).subscribe({
       next: session => {
         this.selectedEmployee.set(session.employee);
+        this.taskPickerOpen.set(false);
         this.clockState.setStatus(session.status);
         this.clockState.setEmployeeMode(true);
         this.isUnlocked.set(true);
@@ -443,6 +455,22 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.sendClockAction('pauseEnd');
   }
 
+  openTaskPicker(): void {
+    if (this.isBusy() || this.employeeTasks().length === 0) {
+      return;
+    }
+    this.taskPickerOpen.set(true);
+  }
+
+  closeTaskPicker(): void {
+    this.taskPickerOpen.set(false);
+  }
+
+  /** Wechselt ohne Ausstempeln auf eine andere Tätigkeit (null = Standard). */
+  switchTask(taskId: string | null): void {
+    this.sendClockAction('switch', taskId);
+  }
+
   back(): void {
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
@@ -458,6 +486,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.message.set('');
     this.isBusy.set(false);
     this.hoursOverview.set(null);
+    this.taskPickerOpen.set(false);
     this.pendingResetOnRecovery = false;
   }
 
@@ -480,6 +509,8 @@ export abstract class ClockWorkflow implements OnDestroy {
         return 'Pausenbeginn';
       case 'pauseEnd':
         return 'Pausenende';
+      case 'switch':
+        return 'Tätigkeitswechsel';
       default:
         return 'Stempel';
     }
@@ -715,6 +746,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     status?: ClockStatus | null,
   ): void {
     this.selectedEmployee.set(employee);
+    this.taskPickerOpen.set(false);
     this.clockState.setEmployeeMode(true);
     if (status) {
       this.applyObservedStatus(employee.id, status);
@@ -750,8 +782,9 @@ export abstract class ClockWorkflow implements OnDestroy {
     rememberObservedStatus(employeeId, status);
   }
 
-  private sendClockAction(action: 'start' | 'stop' | 'pauseStart' | 'pauseEnd'): void {
+  private sendClockAction(action: ClockAction, taskId: string | null = null): void {
     this.isBusy.set(true);
+    this.taskPickerOpen.set(false);
     // Capture the stamp time AND the acting identity SYNCHRONOUSLY at button
     // press: a request reports its failure only after up to its timeout - and
     // in between a new scan (handleLocalScan), a back() or another unlock may
@@ -766,6 +799,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       employeeName: this.selectedEmployee()?.displayName ?? '',
       pin: this.pin(),
       nfcCardId: this.nfcCardId,
+      task: taskId === null ? null : (this.employeeTasks().find(task => task.id === taskId) ?? { id: taskId, label: taskId }),
     };
 
     // Known outage: queue right away instead of letting the employee wait
@@ -776,7 +810,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
 
-    this.kioskApi.clock(stamp.employeeId, stamp.pin, action, stamp.nfcCardId).subscribe({
+    this.kioskApi.clock(stamp.employeeId, stamp.pin, action, stamp.nfcCardId, stamp.task?.id ?? null).subscribe({
       next: status => {
         this.isOffline.set(false);
         this.clockState.setStatus(status);
@@ -825,6 +859,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       // Live-path parity: a session unlocked by NFC touch has NO pin - the
       // replay resolves the employee via the card instead.
       nfcCardId: stamp.nfcCardId,
+      taskId: stamp.task?.id ?? null,
       employeeName: stamp.employeeName,
     });
     this.isOffline.set(true);
@@ -832,7 +867,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     // pre-action status on screen: after an offline Einstempeln the kiosk
     // then offers Pause/Ausstempeln instead of another Einstempeln (which
     // would queue a second, redundant start).
-    const projected = projectClockStatus(this.clockState.status(), stamp.action, stamp.performedAt);
+    const projected = projectClockStatus(this.clockState.status(), stamp.action, stamp.performedAt, stamp.task);
     this.clockState.setStatus(withOfflineLabel(projected, 'projected', stamp.performedAt));
     if (stamp.employeeId) {
       rememberProjectedStatus(stamp.employeeId, projected);

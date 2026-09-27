@@ -23,6 +23,7 @@ public sealed class KimaiClientTests
     private static RuntimeSettings Settings => new() { BaseUrl = "http://kimai.test" };
 
     private static EmployeeSettings Employee => new() { Id = "max", ApiToken = "token" };
+    private static readonly KimaiTimesheetTarget Target = new(1, 1, "Stempeluhr", true, null, null);
 
     [Fact]
     public async Task BeginBackdate_FallbackRetriesTransientPatchFailures()
@@ -35,7 +36,7 @@ public sealed class KimaiClientTests
             Resp(HttpStatusCode.OK, "{}"));                     // PATCH begin -> success
         var client = CreateClient(handler);
 
-        await client.StartAtAsync(Settings, Employee, 1, 1, T08);
+        await client.StartAtAsync(Settings, Employee, Target, T08);
 
         Assert.Equal(
         [
@@ -65,7 +66,7 @@ public sealed class KimaiClientTests
         // Pin the concrete transient exception type: a permanent error here
         // would be classified as "rejected" and lose the stamp instead.
         var thrown = await Assert.ThrowsAnyAsync<KimaiApiException>(
-            () => client.StartAtAsync(Settings, Employee, 1, 1, T08));
+            () => client.StartAtAsync(Settings, Employee, Target, T08));
         Assert.Equal(HttpStatusCode.BadGateway, thrown.StatusCode);
 
         // The last request must be the compensating stop of the misdated

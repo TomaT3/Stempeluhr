@@ -409,4 +409,76 @@ describe('TerminalPage', () => {
     expect(fixture.nativeElement.textContent).toContain('Status unbekannt');
     expect(fixture.nativeElement.textContent).not.toContain('(offline)');
   });
+
+  describe('task switch', () => {
+    const working: ClockStatus = {
+      isRunning: true,
+      activeTimesheetId: 5,
+      startedAt: '2026-09-27T06:00:00Z',
+      durationSeconds: 0,
+      state: 'working',
+      stateText: 'Eingestempelt',
+      activeTaskId: null,
+      activeTaskLabel: null,
+    };
+
+    function unlockWorking(fixture: ComponentFixture<TerminalPage>, tasks = [{ id: 'kx', label: 'Kunde X' }]): void {
+      const component = fixture.componentInstance;
+      ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+      pinLoginResult.next({ employee: { ...session.employee, tasks }, status: working });
+      fixture.detectChanges();
+    }
+
+    it('offers no switch button to employees without further tasks', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockWorking(fixture, []);
+
+      expect(fixture.nativeElement.querySelector('.action-button.pause')).not.toBeNull();
+      expect(fixture.nativeElement.querySelector('.action-button.switch')).toBeNull();
+    });
+
+    it('opens the picker in place of the stamp buttons and switches live', () => {
+      clockImpl.mockImplementation(() => of({ ...working, activeTaskId: 'kx', activeTaskLabel: 'Kunde X', stateText: 'Wechsel zu Kunde X' }));
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockWorking(fixture);
+
+      (fixture.nativeElement.querySelector('.action-button.switch') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      const options = [...fixture.nativeElement.querySelectorAll('.task-button')] as HTMLButtonElement[];
+      expect(options.map(option => option.textContent?.trim())).toEqual(['Standard-Tätigkeit', 'Kunde X']);
+      // The running task (default) cannot be chosen again.
+      expect(options[0].disabled).toBe(true);
+      expect(fixture.nativeElement.querySelector('.action-button.stop')).toBeNull();
+
+      options[1].click();
+      fixture.detectChanges();
+
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx');
+      expect(fixture.componentInstance.taskPickerOpen()).toBe(false);
+      expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
+    });
+
+    it('closes the picker when the session ends', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockWorking(fixture);
+      fixture.componentInstance.openTaskPicker();
+
+      fixture.componentInstance.back();
+
+      expect(fixture.componentInstance.taskPickerOpen()).toBe(false);
+    });
+
+    it('queues an offline switch with its target task and shows it as current', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockWorking(fixture);
+
+      fixture.componentInstance.switchTask('kx');
+      fixture.detectChanges();
+
+      expect(enqueueKiosk).toHaveBeenCalledWith(expect.objectContaining({ action: 'switch', taskId: 'kx' }));
+      expect(fixture.componentInstance.clockState.status()?.activeTaskId).toBe('kx');
+      expect(fixture.componentInstance.clockState.isWorking()).toBe(true);
+    });
+  });
 });

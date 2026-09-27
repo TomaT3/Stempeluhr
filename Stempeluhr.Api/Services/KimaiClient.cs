@@ -30,6 +30,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             : 0;
         var activityId = GetId(current, "activity");
         var isPaused = settings.PauseActivityId is not null && activityId == settings.PauseActivityId;
+        var task = isPaused ? null : WorkTargetResolver.MatchTask(employee, GetId(current, "project"), activityId);
 
         return new ClockStatusDto(
             true,
@@ -37,47 +38,27 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             startedAt,
             durationSeconds,
             isPaused ? "paused" : "working",
-            isPaused ? "In Pause" : "Eingestempelt");
+            isPaused ? "In Pause" : "Eingestempelt",
+            task?.Id,
+            task?.Label);
     }
 
-    public Task StartAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default)
+    public Task StartAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        KimaiTimesheetTarget target,
+        CancellationToken cancellationToken = default)
     {
-        var projectId = employee.ProjectId ?? settings.DefaultProjectId;
-        var activityId = employee.ActivityId ?? settings.DefaultActivityId;
-
-        if (projectId is null || activityId is null)
+        var body = new
         {
-            throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.");
-        }
+            project = target.ProjectId,
+            activity = target.ActivityId,
+            description = target.Description,
+            tags = employee.Tags.Length == 0 ? null : string.Join(",", employee.Tags),
+            billable = target.Billable
+        };
 
-        return StartTimesheetAsync(
-            settings,
-            employee,
-            projectId.Value,
-            activityId.Value,
-            string.IsNullOrWhiteSpace(employee.Description) ? "Stempeluhr" : employee.Description,
-            employee.Billable,
-            cancellationToken);
-    }
-
-    public Task StartPauseAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default)
-    {
-        var projectId = employee.ProjectId ?? settings.DefaultProjectId;
-        var activityId = settings.PauseActivityId;
-
-        if (projectId is null || activityId is null)
-        {
-            throw new InvalidOperationException("Projekt und Pausen-Aktivitaet muessen konfiguriert sein.");
-        }
-
-        return StartTimesheetAsync(
-            settings,
-            employee,
-            projectId.Value,
-            activityId.Value,
-            "Pause",
-            false,
-            cancellationToken);
+        return SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Post, "api/timesheets?full=true", body, cancellationToken);
     }
 
     public Task StopAsync(
@@ -92,18 +73,17 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
     public async Task StartAtAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
-        int projectId,
-        int activityId,
+        KimaiTimesheetTarget target,
         DateTimeOffset startedAt,
         CancellationToken cancellationToken = default)
     {
         var body = new
         {
-            project = projectId,
-            activity = activityId,
-            description = string.IsNullOrWhiteSpace(employee.Description) ? "Stempeluhr" : employee.Description,
+            project = target.ProjectId,
+            activity = target.ActivityId,
+            description = target.Description,
             tags = employee.Tags.Length == 0 ? null : string.Join(",", employee.Tags),
-            billable = employee.Billable,
+            billable = target.Billable,
             // Kimai expects ISO 8601; with ?full=true the begin date is accepted on create.
             begin = startedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz")
         };
@@ -119,7 +99,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             var created = await SendAsync<JsonElement>(
                 settings.BaseUrl, employee.ApiToken, HttpMethod.Post,
                 "api/timesheets?full=true",
-                new { project = projectId, activity = activityId, description = body.description, tags = body.tags, billable = body.billable },
+                new { project = body.project, activity = body.activity, description = body.description, tags = body.tags, billable = body.billable },
                 cancellationToken);
 
             if (created.ValueKind is JsonValueKind.Object && created.TryGetProperty("id", out var idProperty) && idProperty.ValueKind == JsonValueKind.Number)
@@ -290,7 +270,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             endedAt = parsed;
         }
 
-        return new KimaiRecentTimesheetDto(activityId, endedAt);
+        return new KimaiRecentTimesheetDto(activityId, endedAt, GetId(entry, "project"));
     }
 
     /// <inheritdoc />
@@ -453,27 +433,6 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         return JsonSerializer.Deserialize<T>(json, JsonOptions)
             ?? throw new InvalidOperationException("Kimai returned an empty response.");
-    }
-
-    private Task StartTimesheetAsync(
-        RuntimeSettings settings,
-        EmployeeSettings employee,
-        int projectId,
-        int activityId,
-        string description,
-        bool billable,
-        CancellationToken cancellationToken)
-    {
-        var body = new
-        {
-            project = projectId,
-            activity = activityId,
-            description,
-            tags = employee.Tags.Length == 0 ? null : string.Join(",", employee.Tags),
-            billable
-        };
-
-        return SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Post, "api/timesheets?full=true", body, cancellationToken);
     }
 
     private static KimaiUserDto ParseKimaiUser(JsonElement user)

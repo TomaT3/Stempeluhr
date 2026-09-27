@@ -42,7 +42,8 @@ Browser erhält nur, was er zur Bedienung braucht.
    ihren lokalen Cache bzw. online über `/api/kiosk/identify` auf.
    **Ein Scan bucht nie.**
 2. **Stempeln:** Der gewählte Knopf ruft `/api/kiosk/clock` auf; die API
-   bucht in Kimai (Pause = Wechsel auf die Pause-Aktivität).
+   bucht in Kimai (Pause = Wechsel auf die Pause-Aktivität, Tätigkeitswechsel
+   = Wechsel auf Projekt/Aktivität einer weiteren Tätigkeit, siehe unten).
 3. **Offline:** Scheitert der Aufruf (kein Netz, Timeout nach 8 s, Server-
    oder Kimai-Fehler) oder ist der Ausfall schon bekannt, landet die Aktion mit
    echtem Zeitstempel in der Offline-Queue des Browsers.
@@ -110,14 +111,35 @@ eingebunden und gesichert werden.
   Eine neue Karte am Terminal auflegen; im Admin-Bereich erscheint sie unter
   „Letzte Karten-ID“ und lässt sich per „Letzte NFC-Karte zuweisen“ übernehmen.
 - Standard-Projekt, Standard-Aktivität und Pause-Aktivität
+- Pro Mitarbeiter optional **weitere Tätigkeiten** (Bezeichnung, Projekt,
+  Aktivität, abrechenbar), z. B. Arbeit für andere Kunden
 
 Secrets werden in Admin-Antworten nie zurückgegeben.
+
+### Weitere Tätigkeiten (Tätigkeitswechsel)
+
+Wer weitere Tätigkeiten hat, sieht eingestempelt am Kiosk zusätzlich
+„Tätigkeit wechseln“. Der Wechsel stempelt nicht aus: Das laufende Timesheet
+endet und ein neues beginnt im selben Moment auf Projekt/Aktivität der
+gewählten Tätigkeit (wie bei der Pause). Die Arbeitszeit bleibt lückenlos, in
+Kimai lässt sich die Zeit pro Kunde auswerten, und die Stundenübersicht zählt
+alles außer Pause. Nach einer Pause läuft die Tätigkeit von vor der Pause
+weiter; Einstempeln startet immer die Standard-Tätigkeit. Offline gewählte
+Wechsel werden wie alle Stempel nachgetragen.
+
+Voraussetzungen in Kimai: Kunde und Projekt (ggf. eigene Aktivität) anlegen
+und dem Kimai-Benutzer des Mitarbeiters Zugriff darauf geben (Team). Ohne
+Zugriff lehnt Kimai den Wechsel ab („Kimai konnte nicht speichern“). Jede
+Tätigkeit braucht ein eigenes Paar aus Projekt und Aktivität, das sich von der
+Standard-Tätigkeit und der Pause unterscheidet – daran erkennt die Stempeluhr,
+welche Tätigkeit gerade läuft.
 
 ### Telegram-Benachrichtigung (optional)
 
 Bei jedem echten Live-Stempel (nicht bei No-ops und nicht beim Offline-
 Nachtrag) schickt die API eine Nachricht wie
-`🟢 Anna Mustermann · eingestempelt um 08:12` in eine Telegram-Gruppe.
+`🟢 Anna Mustermann · eingestempelt um 08:12` in eine Telegram-Gruppe
+(Tätigkeitswechsel: `🔄 Anna Mustermann · wechselt zu Kunde X um 10:15`).
 
 1. Bei @BotFather `/newbot` ausführen, Token kopieren.
 2. Private Gruppe anlegen, Bot hinzufügen und zum Admin machen.

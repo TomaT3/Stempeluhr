@@ -60,6 +60,11 @@ public static class AdminEndpoints
                 return Results.Conflict(new { message = "NFC-Karten muessen eindeutig sein." });
             }
 
+            if (adminService.ValidateTasks(settings) is { } taskError)
+            {
+                return Results.BadRequest(new { message = taskError });
+            }
+
             await settingsStore.SaveAsync(settings, cancellationToken);
 
             return Results.Ok(AdminSettingsDto.FromSettings(settings));

@@ -23,7 +23,8 @@ public sealed class TelegramNotifier(
         string employeeName,
         string action,
         DateTimeOffset stampUtc,
-        TimeZoneInfo timeZone)
+        TimeZoneInfo timeZone,
+        string? taskLabel = null)
     {
         try
         {
@@ -33,7 +34,7 @@ public sealed class TelegramNotifier(
                 return;
             }
 
-            var text = TelegramMessageFactory.Build(employeeName, action, stampUtc, timeZone);
+            var text = TelegramMessageFactory.Build(employeeName, action, stampUtc, timeZone, taskLabel);
 
             // using: Client nach dem Send zurückgeben; die gepoolten Handler
             // gehören der Factory und überleben den Dispose.

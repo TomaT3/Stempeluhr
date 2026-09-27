@@ -76,7 +76,11 @@ public sealed class EmployeeService : IEmployeeService
             Initials(employee.DisplayName),
             employee.Color,
             employee.ImageUrl,
-            !string.IsNullOrWhiteSpace(employee.Pin));
+            !string.IsNullOrWhiteSpace(employee.Pin),
+            (employee.Tasks ?? [])
+                .Where(task => task.ProjectId is not null && task.ActivityId is not null)
+                .Select(task => new EmployeeTaskDto(task.Id, task.Label))
+                .ToArray());
     }
 
     private static string Initials(string name)

@@ -1,18 +1,31 @@
 import { computed, Injectable, signal } from '@angular/core';
 
-import { ClockAction, ClockStatus } from '../models/kiosk.models';
+import { ClockAction, ClockStatus, EmployeeTask } from '../models/kiosk.models';
 
 /**
  * State a locally queued OFFLINE action leads to. The wording mirrors the
  * server's own stateText values (ClockService) so the kiosk does not switch
- * vocabulary between online and offline.
+ * vocabulary between online and offline. `task` is the target of a 'switch'
+ * (null = back to the default task).
  */
 export function projectClockStatus(
   current: ClockStatus | null,
   action: ClockAction,
   performedAt: string,
+  task: EmployeeTask | null = null,
 ): ClockStatus {
   switch (action) {
+    case 'switch':
+      return {
+        isRunning: true,
+        activeTimesheetId: current?.activeTimesheetId ?? null,
+        startedAt: performedAt,
+        durationSeconds: 0,
+        state: 'working',
+        stateText: task ? `Wechsel zu ${task.label}` : 'Zurück zur Standard-Tätigkeit',
+        activeTaskId: task?.id ?? null,
+        activeTaskLabel: task?.label ?? null,
+      };
     case 'start':
     case 'pauseEnd':
       return {

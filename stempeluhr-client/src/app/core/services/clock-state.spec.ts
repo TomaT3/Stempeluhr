@@ -31,6 +31,20 @@ describe('projectClockStatus', () => {
     expect(resumed.startedAt).toBe(at);
   });
 
+  it('turns a queued task switch into working on that task - and back', () => {
+    const working = projectClockStatus(idle, 'start', at);
+
+    const onTask = projectClockStatus(working, 'switch', at, { id: 'kx', label: 'Kunde X' });
+    expect(onTask.state).toBe('working');
+    expect(onTask.activeTaskId).toBe('kx');
+    expect(onTask.activeTaskLabel).toBe('Kunde X');
+    expect(onTask.stateText).toBe('Wechsel zu Kunde X');
+
+    const back = projectClockStatus(onTask, 'switch', at, null);
+    expect(back.state).toBe('working');
+    expect(back.activeTaskId).toBeNull();
+  });
+
   it('turns a queued stop into a clocked-out status', () => {
     const stopped = projectClockStatus({ ...idle, state: 'working', isRunning: true }, 'stop', at);
 

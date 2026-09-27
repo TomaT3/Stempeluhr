@@ -68,6 +68,10 @@
         [running]="clockStatus.state === 'working'"
         [paused]="clockStatus.state === 'paused'" />
 
+      @if (clockState.isWorking() && employeeTasks().length > 0) {
+        <p class="task-label">Tätigkeit: {{ clockStatus.activeTaskLabel || 'Standard-Tätigkeit' }}</p>
+      }
+
       <dl class="time-info" [class.single]="!clockStatus.isRunning" aria-label="Zeitinformationen">
         @if (clockState.isWorking()) {
           <div>
@@ -110,6 +114,36 @@
             <span class="stamp-label">Ausstempeln</span>
           </button>
         </div>
+
+        @if (employeeTasks().length > 0) {
+          @if (taskPickerOpen()) {
+            <div class="task-picker" role="group" aria-label="Tätigkeit wählen">
+              <button
+                class="task-button"
+                type="button"
+                [class.active]="!clockStatus.activeTaskId"
+                [disabled]="isBusy() || !clockStatus.activeTaskId"
+                (click)="switchTask(null)">
+                Standard-Tätigkeit
+              </button>
+              @for (task of employeeTasks(); track task.id) {
+                <button
+                  class="task-button"
+                  type="button"
+                  [class.active]="clockStatus.activeTaskId === task.id"
+                  [disabled]="isBusy() || clockStatus.activeTaskId === task.id"
+                  (click)="switchTask(task.id)">
+                  {{ task.label }}
+                </button>
+              }
+              <button class="task-button cancel" type="button" (click)="closeTaskPicker()">Abbrechen</button>
+            </div>
+          } @else {
+            <button class="task-switch-button" type="button" (click)="openTaskPicker()" [disabled]="isBusy()">
+              <span aria-hidden="true">⇄</span> Tätigkeit wechseln
+            </button>
+          }
+        }
       } @else if (clockState.isPaused()) {
         <div class="stamp-actions">
           <button class="stamp-button start" type="button" (click)="endPause()" [disabled]="isBusy()">

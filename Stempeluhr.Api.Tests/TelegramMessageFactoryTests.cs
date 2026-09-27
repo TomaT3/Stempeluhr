@@ -58,6 +58,26 @@ public sealed class TelegramMessageFactoryTests
     }
 
     [Fact]
+    public void Build_SwitchToTask_NamesTheTask()
+    {
+        var stamp = new DateTimeOffset(2026, 7, 1, 8, 15, 0, TimeSpan.Zero); // CEST → 10:15
+
+        var text = TelegramMessageFactory.Build("Max Mustermann", "switch", stamp, Berlin, "Kunde X");
+
+        Assert.Equal("🔄 Max Mustermann · wechselt zu Kunde X um 10:15", text);
+    }
+
+    [Fact]
+    public void Build_SwitchBackToDefault_SaysSo()
+    {
+        var stamp = new DateTimeOffset(2026, 7, 1, 8, 15, 0, TimeSpan.Zero);
+
+        var text = TelegramMessageFactory.Build("Max Mustermann", "switch", stamp, Berlin);
+
+        Assert.Equal("🔄 Max Mustermann · zurück zur Standard-Tätigkeit um 10:15", text);
+    }
+
+    [Fact]
     public void Build_UnknownAction_Throws()
     {
         var stamp = new DateTimeOffset(2026, 7, 1, 6, 0, 0, TimeSpan.Zero);

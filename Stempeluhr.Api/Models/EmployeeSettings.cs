@@ -16,4 +16,20 @@ public sealed class EmployeeSettings
     public string[] Tags { get; init; } = [];
     public bool Billable { get; init; } = true;
     public bool IsEnabled { get; init; } = true;
+
+    /// <summary>
+    /// Weitere Tätigkeiten (z. B. Arbeit für andere Kunden), auf die der
+    /// Mitarbeiter während der Arbeitszeit wechseln kann, ohne auszustempeln.
+    /// Die Standard-Tätigkeit ergibt sich weiter aus ProjectId/ActivityId.
+    /// </summary>
+    public EmployeeTaskSettings[] Tasks { get; init; } = [];
+}
+
+public sealed class EmployeeTaskSettings
+{
+    public string Id { get; init; } = Guid.NewGuid().ToString("N");
+    public string Label { get; init; } = string.Empty;
+    public int? ProjectId { get; init; }
+    public int? ActivityId { get; init; }
+    public bool Billable { get; init; } = true;
 }

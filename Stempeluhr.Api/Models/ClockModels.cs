@@ -4,7 +4,11 @@ public sealed record ClockRequest(string EmployeeId, string? Pin);
 
 public sealed record KioskPinLoginRequest(string? Pin);
 
-public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action, string? NfcCardId);
+/// <summary>
+/// One kiosk action. <paramref name="TaskId"/> is only used by the "switch"
+/// action: the task to switch to (null/empty = back to the default task).
+/// </summary>
+public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action, string? NfcCardId, string? TaskId = null);
 
 /// <summary>
 /// Card identification request from the kiosk browser: resolves a scanned
@@ -24,6 +28,8 @@ public sealed record NfcClockRequest(string? CardId, string? Action, string? Ter
 /// backdating. <paramref name="NfcCardId"/> optionally carries the card that
 /// unlocked the kiosk session (live-path parity: actions of an NFC-unlocked
 /// session replay without a PIN - the card must map to the same employee).
+/// <paramref name="TaskId"/> is the target of a "switch" action (null/empty =
+/// default task); queues from older clients simply lack it.
 /// </summary>
 public sealed record OfflineKioskClockEventDto(
     string EventId,
@@ -31,7 +37,8 @@ public sealed record OfflineKioskClockEventDto(
     string? Pin,
     string Action,
     DateTimeOffset PerformedAt,
-    string? NfcCardId = null);
+    string? NfcCardId = null,
+    string? TaskId = null);
 
 public sealed record OfflineKioskSyncRequest(IReadOnlyList<OfflineKioskClockEventDto>? Events);
 
@@ -41,7 +48,11 @@ public sealed record EmployeeDto(
     string Initials,
     string Color,
     string? ImageUrl,
-    bool RequiresPin);
+    bool RequiresPin,
+    IReadOnlyList<EmployeeTaskDto>? Tasks = null);
+
+/// <summary>Weitere Tätigkeit für die Auswahl am Kiosk (nur Anzeige-Daten).</summary>
+public sealed record EmployeeTaskDto(string Id, string Label);
 
 public sealed record KioskEmployeeSessionDto(EmployeeDto Employee, ClockStatusDto Status);
 
@@ -69,13 +80,20 @@ public sealed record OfflineSyncEventResultDto(
     string? Message,
     string? State = null);
 
+/// <summary>
+/// Stempelstatus. <see cref="ActiveTaskId"/>/<see cref="ActiveTaskLabel"/>
+/// nennen die weitere Tätigkeit, auf der gerade gearbeitet wird (null =
+/// Standard-Tätigkeit, Pause oder nicht eingestempelt).
+/// </summary>
 public sealed record ClockStatusDto(
     bool IsRunning,
     int? ActiveTimesheetId,
     string? StartedAt,
     int DurationSeconds,
     string State,
-    string StateText);
+    string StateText,
+    string? ActiveTaskId = null,
+    string? ActiveTaskLabel = null);
 
 public enum ClockActionResult
 {
