@@ -7,6 +7,9 @@ namespace Stempeluhr.Api.Services;
 /// </summary>
 public static class TelegramMessageFactory
 {
+    /// <summary>Haupttätigkeit ohne eigene Bezeichnung.</summary>
+    public const string DefaultTaskName = "Standard-Tätigkeit";
+
     /// <summary>
     /// Aktionen entsprechen den Clock-Aktionen aus <c>KioskClockRequest.Action</c>.
     /// <paramref name="taskLabel"/> gilt für "start" (Tätigkeit, null = ohne
@@ -28,7 +31,7 @@ public static class TelegramMessageFactory
             "pausestart" => ("🟡", "Pause"),
             "pauseend" => ("🟢", "Pause beendet"),
             "switch" => ("🔄", string.IsNullOrWhiteSpace(taskLabel)
-                ? "zurück zur Standard-Tätigkeit"
+                ? $"zurück zur {DefaultTaskName}"
                 : $"wechselt zu {taskLabel}"),
             _ => throw new ArgumentException($"Unbekannte Stempelaktion: {action}", nameof(action))
         };

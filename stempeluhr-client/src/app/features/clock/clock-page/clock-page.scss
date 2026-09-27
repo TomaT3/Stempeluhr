@@ -231,7 +231,8 @@ h2 {
   font-size: clamp(1.35rem, 2.7vw, 2.35rem);
 }
 
-.stamp-button.start {
+.stamp-button.start,
+.task-button.start-task {
   background: linear-gradient(180deg, #199968, var(--color-success));
 }
 
@@ -304,7 +305,6 @@ h2 {
   gap: 14px;
   min-height: 72px;
   border-color: transparent;
-  background: linear-gradient(180deg, #199968, var(--color-success));
   color: #fff;
 }
 

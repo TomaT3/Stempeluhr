@@ -132,10 +132,10 @@ alles außer Pause. Nach einer Pause läuft die Tätigkeit von vor der Pause
 weiter. Offline gewählte Tätigkeiten werden wie alle Stempel nachgetragen;
 ist die Tätigkeit eines offline gestempelten Einstempelns inzwischen
 gelöscht, bucht der Nachtrag auf die Haupttätigkeit, damit keine Arbeitszeit
-verloren geht. Lässt sich ein Wechsel nicht
-eindeutig nachtragen (z. B. weil kurz danach an einem anderen Terminal
-ausgestempelt wurde), meldet der Kiosk ihn als abgelehnt, statt eine Buchung
-zu raten.
+verloren geht, und vermerkt das in der Beschreibung des Timesheets. Lässt
+sich ein Wechsel nicht eindeutig nachtragen (z. B. weil kurz danach an einem
+anderen Terminal ausgestempelt wurde), meldet der Kiosk ihn als abgelehnt,
+statt eine Buchung zu raten.
 
 Die Dauer im Statusfeld zählt nur den laufenden Abschnitt (z. B. „Kunde X
 seit 10:15“) und beginnt nach Wechsel oder Pausenende neu; die Tagessumme

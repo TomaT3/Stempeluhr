@@ -124,10 +124,18 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clockState.status()?.activeTaskLabel || (this.onDefaultTask() ? this.defaultTaskLabel() : 'Arbeit'));
 
   /**
-   * Tätigkeitsauswahl offen. Gehört zur Sitzung: jeder Identitätswechsel,
-   * back() und jede abgeschickte Aktion schließt sie.
+   * Tätigkeitswechsel-Auswahl offen (nur während der Arbeit). Gehört zur
+   * Sitzung: jeder Identitätswechsel, back() und jede abgeschickte Aktion
+   * schließt sie.
    */
   readonly taskPickerOpen = signal(false);
+
+  /**
+   * „Einstempeln“ bei unbekanntem Status gedrückt. Bewusst getrennt von
+   * taskPickerOpen: kommt der Status danach als „working“ an, darf daraus
+   * nie die Wechsel-Auswahl werden (ein Tipp buchte sonst einen Wechsel).
+   */
+  private readonly startChoiceOpen = signal(false);
 
   /**
    * Einstempeln mit Tätigkeitswahl: Ausgestempelt steht die Auswahl sofort
@@ -138,7 +146,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (this.employeeTasks().length === 0 || this.clockState.isWorking() || this.clockState.isPaused()) {
       return false;
     }
-    return this.clockState.status() !== null || this.taskPickerOpen();
+    return this.clockState.status() !== null || this.startChoiceOpen();
   });
 
   private resetTimer: number | null = null;
@@ -160,6 +168,12 @@ export abstract class ClockWorkflow implements OnDestroy {
    */
   private pendingRecoveryFlush = false;
   private nfcCardId: string | null = null;
+  /**
+   * Stille Status-Nachfrage nach einem Kartenscan aus dem Cache. Wird bei
+   * jedem Identitätswechsel und jeder Aktion abgebrochen: eine späte Antwort
+   * gehört dann nicht mehr zu dieser Sitzung bzw. ist älter als die der Aktion.
+   */
+  private identifyRefresh: Subscription | null = null;
   /** Unsubscribes the offline-queue recovery listener (see constructor). */
   private recoveryUnsubscribe: (() => void) | null = null;
   /**
@@ -396,7 +410,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.kioskApi.pinLogin(pin).subscribe({
       next: session => {
         this.selectedEmployee.set(session.employee);
-        this.taskPickerOpen.set(false);
+        this.resetSessionChoices();
         this.clockState.setStatus(session.status);
         this.clockState.setEmployeeMode(true);
         this.isUnlocked.set(true);
@@ -464,8 +478,9 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.audioFeedback.playBeeps(1);
   }
 
-  start(): void {
-    this.sendClockAction('start');
+  /** Stempelt ein (null = Haupttätigkeit). */
+  start(taskId: string | null = null): void {
+    this.sendClockAction('start', taskId);
   }
 
   stop(): void {
@@ -480,22 +495,24 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.sendClockAction('pauseEnd');
   }
 
-  /** Einstempeln-Knopf: mit weiteren Tätigkeiten erst die Auswahl zeigen. */
+  /** Einstempeln-Knopf bei unbekanntem Status: mit weiteren Tätigkeiten erst die Auswahl zeigen. */
   requestStart(): void {
-    if (this.employeeTasks().length > 0) {
-      this.openTaskPicker();
+    if (this.employeeTasks().length === 0) {
+      this.start();
       return;
     }
-    this.start();
+    if (!this.isBusy()) {
+      this.startChoiceOpen.set(true);
+    }
   }
 
-  /** Stempelt direkt auf eine Tätigkeit ein (null = Haupttätigkeit). */
-  startOnTask(taskId: string | null): void {
-    this.sendClockAction('start', taskId);
+  /** Zurück von der Einstempel-Auswahl zu Ein-/Ausstempeln (unbekannter Status). */
+  closeStartChoice(): void {
+    this.startChoiceOpen.set(false);
   }
 
   openTaskPicker(): void {
-    if (this.isBusy() || this.employeeTasks().length === 0) {
+    if (this.isBusy() || this.employeeTasks().length === 0 || !this.clockState.isWorking()) {
       return;
     }
     this.taskPickerOpen.set(true);
@@ -525,8 +542,16 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.message.set('');
     this.isBusy.set(false);
     this.hoursOverview.set(null);
-    this.taskPickerOpen.set(false);
+    this.resetSessionChoices();
     this.pendingResetOnRecovery = false;
+  }
+
+  /** Auswahlen und die stille Status-Nachfrage gehören zur Sitzung bzw. zum Stand vor einer Aktion. */
+  private resetSessionChoices(): void {
+    this.taskPickerOpen.set(false);
+    this.startChoiceOpen.set(false);
+    this.identifyRefresh?.unsubscribe();
+    this.identifyRefresh = null;
   }
 
   /**
@@ -587,6 +612,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       window.clearInterval(this.healthPollTimer);
     }
     this.healthCheck?.unsubscribe();
+    this.identifyRefresh?.unsubscribe();
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
     }
@@ -717,22 +743,40 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.localNfcScan.ack().subscribe();
 
     if (employee) {
-      this.applyOfflineIdentity(employee, normalized ?? cardId, null);
+      const sessionCardId = normalized ?? cardId;
+      this.applyOfflineIdentity(employee, sessionCardId, null);
       this.message.set(`${employee.displayName} - bitte Aktion waehlen.`);
       this.audioFeedback.playBeeps(1);
       // Seit der Local-Poll IMMER läuft, trifft der Cache-Pfad auch online
-      // zu - dort ist die API erreichbar, also den frischen Status still
-      // nachladen (der Cache kennt nur den letzten Stand). Fehler (429, Netz)
+      // zu - dort ist die API erreichbar, also Status UND Mitarbeiter still
+      // nachladen: der Cache kennt nur den letzten Stand, auch der Tätigkeiten
+      // (die Einstempel-Auswahl böte sonst gelöschte an). Fehler (429, Netz)
       // ignorieren: der Employee ist bereits freigeschaltet, der Status kommt
-      // mit der ersten Aktion.
+      // mit der ersten Aktion. Identitätswechsel und Aktionen brechen die
+      // Nachfrage ab (resetSessionChoices).
       if (!this.isOffline()) {
-        this.kioskApi.identify(normalized ?? cardId, this.terminalId ?? 'default').subscribe({
+        this.identifyRefresh = this.kioskApi.identify(sessionCardId, this.terminalId ?? 'default').subscribe({
           next: event => {
-            if (event.success && event.status) {
-              this.applyObservedStatus(event.employee?.id ?? employee.id, event.status);
+            this.identifyRefresh = null;
+            if (!event.success) {
+              return;
+            }
+            const current = event.employee ?? employee;
+            if (event.employee) {
+              rememberEmployeeCard(event.cardId ?? sessionCardId, event.employee);
+              this.selectedEmployee.set(event.employee);
+              if (event.employee.id !== employee.id) {
+                // Karte inzwischen umgehängt: nie den alten Namen stehen lassen.
+                this.message.set(`${event.employee.displayName} - bitte Aktion waehlen.`);
+              }
+            }
+            if (event.status) {
+              this.applyObservedStatus(current.id, event.status);
             }
           },
-          error: () => {},
+          error: () => {
+            this.identifyRefresh = null;
+          },
         });
       }
       return;
@@ -785,7 +829,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     status?: ClockStatus | null,
   ): void {
     this.selectedEmployee.set(employee);
-    this.taskPickerOpen.set(false);
+    this.resetSessionChoices();
     this.clockState.setEmployeeMode(true);
     if (status) {
       this.applyObservedStatus(employee.id, status);
@@ -819,11 +863,17 @@ export abstract class ClockWorkflow implements OnDestroy {
   private applyObservedStatus(employeeId: string, status: ClockStatus): void {
     this.clockState.setStatus(status);
     rememberObservedStatus(employeeId, status);
+    // Der Status ist jetzt bekannt: die Einstempel-Auswahl für den
+    // unbekannten Status ist erledigt, und gewechselt wird nur bei Arbeit.
+    this.startChoiceOpen.set(false);
+    if (status.state !== 'working') {
+      this.taskPickerOpen.set(false);
+    }
   }
 
   private sendClockAction(action: ClockAction, taskId: string | null = null): void {
     this.isBusy.set(true);
-    this.taskPickerOpen.set(false);
+    this.resetSessionChoices();
     // Capture the stamp time AND the acting identity SYNCHRONOUSLY at button
     // press: a request reports its failure only after up to its timeout - and
     // in between a new scan (handleLocalScan), a back() or another unlock may

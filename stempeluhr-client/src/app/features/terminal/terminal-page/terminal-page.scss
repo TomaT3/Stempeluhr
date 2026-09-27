@@ -340,9 +340,11 @@ p {
   color: var(--color-muted);
 }
 
-/* Einstempeln auf eine Tätigkeit: Titel, Liste, ggf. Abbrechen. */
+/* Einstempeln auf eine Tätigkeit: Titel und Liste. Abbrechen (nur bei
+   unbekanntem Status) bekommt eine implizite Zeile - ohne ihn kostet keine
+   leere Zeile samt Abstand Platz bei 800x480. */
 .action-panel.start-choice {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .start-choice-title {
@@ -357,7 +359,6 @@ p {
   align-items: center;
   gap: 12px;
   border-color: transparent;
-  background: linear-gradient(180deg, #199968, var(--color-success));
   color: #fff;
 }
 
@@ -375,7 +376,8 @@ p {
   overflow-wrap: anywhere;
 }
 
-.action-button.start {
+.action-button.start,
+.task-button.start-task {
   background: linear-gradient(180deg, #199968, var(--color-success));
 }
 

@@ -544,16 +544,18 @@ public sealed class OfflineClockServiceTests
     public async Task Start_OnDeletedTask_KeepsTheWorkingTimeOnTheDefaultTask()
     {
         // Rejecting would lose the whole time until the next stamp: book the
-        // default task instead and say so in the replay message.
+        // default task instead. Nobody reads the replay message of an applied
+        // event, so the note goes onto the timesheet itself.
         var (service, kimai, logger) = CreateServiceWithLogger();
 
         var result = await service.SyncKioskAsync([StartOn("e1", "gone", T08)]);
 
         var single = Assert.Single(result.Results);
         Assert.Equal("applied", single.Status);
-        Assert.Contains("nicht mehr vorhanden", single.Message);
+        Assert.Contains("gelöscht", single.Message);
         var target = Assert.Single(kimai.StartedTargets);
         Assert.Equal((7, 9), (target.ProjectId, target.ActivityId));
+        Assert.Contains("gelöscht", target.Description);
         Assert.Contains(logger.Messages, message => message.Contains("no longer exists"));
     }
 

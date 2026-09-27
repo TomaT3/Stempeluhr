@@ -607,7 +607,7 @@ describe('TerminalPage', () => {
       const fixture = TestBed.createComponent(TerminalPage);
       unlockClockedOut(fixture);
 
-      fixture.componentInstance.startOnTask('kx');
+      fixture.componentInstance.start('kx');
       fixture.detectChanges();
 
       expect(enqueueKiosk).toHaveBeenCalledWith(expect.objectContaining({ action: 'start', taskId: 'kx' }));
@@ -640,6 +640,92 @@ describe('TerminalPage', () => {
       expect(startOptions(fixture)).toEqual([]);
       expect(fixture.nativeElement.querySelector('.action-button.start')).not.toBeNull();
       expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
+    });
+
+    describe('with a cached card while online', () => {
+      let identify$: Subject<NfcClockEvent>;
+
+      function identifyEvent(overrides: Partial<NfcClockEvent>): NfcClockEvent {
+        return {
+          eventId: 'e1',
+          occurredAt: new Date().toISOString(),
+          terminalId: 'term-1',
+          cardId: '04ABCD',
+          employee: { ...session.employee, tasks },
+          status,
+          message: 'NFC-Karte erkannt.',
+          success: true,
+          ...overrides,
+        };
+      }
+
+      /** Scans the cached card; the server's identify answer stays pending in identify$. */
+      function scanCachedCard(cachedTasks = tasks): ComponentFixture<TerminalPage> {
+        window.localStorage.setItem(
+          'stempeluhr.employee-card-cache.v1',
+          JSON.stringify({ '04ABCD': { ...session.employee, tasks: cachedTasks } }),
+        );
+        identify$ = new Subject<NfcClockEvent>();
+        vi.mocked(TestBed.inject(KioskApi).identify).mockImplementation(() => identify$);
+        localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+
+        const fixture = TestBed.createComponent(TerminalPage);
+        vi.advanceTimersByTime(1_000);
+        fixture.detectChanges();
+        return fixture;
+      }
+
+      it('never turns the open start choice into the switch picker when the status arrives as working', () => {
+        const fixture = scanCachedCard();
+        (fixture.nativeElement.querySelector('.action-button.start') as HTMLButtonElement).click();
+        fixture.detectChanges();
+        expect(startOptions(fixture).length).toBe(2);
+
+        identify$.next(identifyEvent({
+          status: { ...status, isRunning: true, activeTimesheetId: 5, state: 'working', stateText: 'Eingestempelt', activeIsDefaultTask: true },
+        }));
+        fixture.detectChanges();
+
+        // A tap on "Kunde X" would book a switch here - the working buttons come instead.
+        expect(fixture.componentInstance.taskPickerOpen()).toBe(false);
+        expect(fixture.nativeElement.querySelectorAll('.task-button').length).toBe(0);
+        expect(fixture.nativeElement.querySelector('.action-button.switch')).not.toBeNull();
+        expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
+      });
+
+      it('keeps offering the start choice when the status arrives as clocked out', () => {
+        const fixture = scanCachedCard();
+        (fixture.nativeElement.querySelector('.action-button.start') as HTMLButtonElement).click();
+
+        identify$.next(identifyEvent({}));
+        fixture.detectChanges();
+
+        expect(startOptions(fixture).length).toBe(2);
+        // Known status: there is no Ein-/Ausstempeln to go back to.
+        expect(fixture.nativeElement.querySelector('.task-cancel')).toBeNull();
+      });
+
+      it('offers the tasks the server knows now, not the ones cached with the card', () => {
+        const fixture = scanCachedCard([{ id: 'gone', label: 'Gelöscht' }]);
+
+        identify$.next(identifyEvent({ employee: { ...session.employee, tasks: [{ id: 'ky', label: 'Kunde Y' }] } }));
+        fixture.detectChanges();
+
+        expect(startOptions(fixture).map(option => option.textContent?.trim())).toEqual(['Standard-Tätigkeit', 'Kunde Y']);
+        const cache = JSON.parse(window.localStorage.getItem('stempeluhr.employee-card-cache.v1') ?? '{}');
+        expect(cache['04ABCD'].tasks).toEqual([{ id: 'ky', label: 'Kunde Y' }]);
+      });
+
+      it('drops an identify answer that arrives after the session ended', () => {
+        const fixture = scanCachedCard();
+        fixture.componentInstance.back();
+
+        identify$.next(identifyEvent({}));
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.selectedEmployee()).toBeNull();
+        expect(fixture.componentInstance.clockState.status()).toBeNull();
+      });
     });
   });
 });

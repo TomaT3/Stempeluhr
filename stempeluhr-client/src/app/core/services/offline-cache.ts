@@ -92,7 +92,12 @@ export function resolveEmployeeByCard(cardId: string | null | undefined): Employ
   return normalized ? readEmployeeCardCache()[normalized] ?? null : null;
 }
 
-/** Remembers a card -> employee pair seen while ONLINE for later offline use. */
+/**
+ * Remembers a card -> employee pair seen while ONLINE for later offline use.
+ * The whole entry counts, not just the name: tasks and the default task label
+ * change in the admin area, and a cached card must not keep offering a
+ * deleted task (or hide a new one) forever.
+ */
 export function rememberEmployeeCard(cardId: string | null | undefined, employee: Employee): void {
   const normalized = normalizeCardId(cardId);
   if (!normalized) {
@@ -100,12 +105,7 @@ export function rememberEmployeeCard(cardId: string | null | undefined, employee
   }
 
   const cache = readEmployeeCardCache();
-  const existing = cache[normalized];
-  if (
-    existing?.id === employee.id
-    && existing.displayName === employee.displayName
-    && existing.initials === employee.initials
-  ) {
+  if (JSON.stringify(cache[normalized]) === JSON.stringify(employee)) {
     return;
   }
 

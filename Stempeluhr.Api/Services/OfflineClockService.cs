@@ -321,7 +321,7 @@ public sealed class OfflineClockService(
                 var startTarget = ResolveStartTarget(settings, employee, taskId);
                 await kimai.StartAtAsync(settings, employee, startTarget, timestamp, cancellationToken);
                 return (startTarget.TaskId is null && !string.IsNullOrWhiteSpace(taskId)
-                    ? $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm} (Taetigkeit nicht mehr vorhanden - {WorkTargetResolver.DisplayName(startTarget)})"
+                    ? $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm} ({DeletedTaskNote})"
                     : $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}", "working");
 
             case "stop":
@@ -620,25 +620,23 @@ public sealed class OfflineClockService(
     /// Tätigkeit eines nachgetragenen Einstempelns. Anders als beim Wechsel
     /// (dort läuft die bisherige Arbeit weiter) ginge mit einer Ablehnung die
     /// ganze Arbeitszeit bis zum nächsten Stempel verloren. Ist die Tätigkeit
-    /// inzwischen gelöscht, wird deshalb auf die Haupttätigkeit gebucht - laut
-    /// geloggt und in der Nachtrags-Meldung vermerkt.
+    /// inzwischen gelöscht, wird deshalb auf die Haupttätigkeit gebucht. Die
+    /// Nachtrags-Meldung sieht am Kiosk niemand - der Vermerk steht deshalb in
+    /// der Beschreibung des Timesheets, also dort, wo die Zeit pro Kunde
+    /// ausgewertet und korrigiert wird.
     /// </summary>
     private KimaiTimesheetTarget ResolveStartTarget(RuntimeSettings settings, EmployeeSettings employee, string? taskId)
     {
-        if (string.IsNullOrWhiteSpace(taskId))
+        if (WorkTargetResolver.Resolve(settings, employee, taskId) is { } target)
         {
-            return RequireDefaultTarget(settings, employee);
+            return target;
         }
 
-        if (WorkTargetResolver.ResolveTask(employee, taskId) is { } task)
-        {
-            return task;
-        }
-
+        var fallback = RequireDefaultTarget(settings, employee);
         logger.LogWarning(
             "Offline start on task {TaskId}: task no longer exists - booking the default task instead",
             taskId);
-        return RequireDefaultTarget(settings, employee);
+        return fallback with { Description = $"{fallback.Description} ({DeletedTaskNote})" };
     }
 
     private static KimaiTimesheetTarget RequireDefaultTarget(RuntimeSettings settings, EmployeeSettings employee)
@@ -731,6 +729,10 @@ public sealed class OfflineClockService(
 
     private const string ObsoleteEventMessage =
         "Veraltet - das aktive Timesheet wurde erst nach diesem Ereignis gestartet.";
+
+    /// <summary>Vermerk für ein nachgetragenes Einstempeln, dessen Tätigkeit gelöscht war.</summary>
+    private const string DeletedTaskNote =
+        "offline gewählte Tätigkeit war beim Nachtrag gelöscht - auf die Haupttätigkeit gebucht";
 
     /// <summary>
     /// Tolerance for <see cref="IsSheetNewerThanEvent"/>; same clock-skew

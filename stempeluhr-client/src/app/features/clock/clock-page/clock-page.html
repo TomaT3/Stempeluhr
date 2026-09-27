@@ -210,18 +210,18 @@
 <ng-template #startChoice>
   <div class="task-picker start-choice" role="group" aria-labelledby="start-choice-title">
     <p class="start-choice-title" id="start-choice-title">Einstempeln auf</p>
-    <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="startOnTask(null)">
+    <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="start(null)">
       <span class="stamp-icon play" aria-hidden="true"></span>
       <span>{{ defaultTaskLabel() }}</span>
     </button>
     @for (task of employeeTasks(); track task.id) {
-      <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="startOnTask(task.id)">
+      <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="start(task.id)">
         <span class="stamp-icon play" aria-hidden="true"></span>
         <span>{{ task.label }}</span>
       </button>
     }
     @if (!clockState.status()) {
-      <button class="task-button cancel" type="button" (click)="closeTaskPicker()">Abbrechen</button>
+      <button class="task-button cancel" type="button" (click)="closeStartChoice()">Abbrechen</button>
     }
   </div>
 </ng-template>

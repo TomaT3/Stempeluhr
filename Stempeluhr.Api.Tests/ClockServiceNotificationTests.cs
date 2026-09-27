@@ -364,8 +364,9 @@ public sealed class ClockServiceNotificationTests
 
         var target = Assert.Single(kimai.StartedTargets);
         Assert.Equal((1, 2), (target.ProjectId, target.ActivityId));
-        // With further tasks the message says which one - here the default.
-        Assert.Equal("Standard-Taetigkeit", Assert.Single(notifier.TaskLabels));
+        // With further tasks the message says which one - here the default,
+        // spelled like the switch message ("zurück zur Standard-Tätigkeit").
+        Assert.Equal("Standard-Tätigkeit", Assert.Single(notifier.TaskLabels));
     }
 
     [Fact]
@@ -381,7 +382,7 @@ public sealed class ClockServiceNotificationTests
     }
 
     [Fact]
-    public async Task Start_UnknownTask_IsBadRequest()
+    public async Task Start_UnknownTaskWhenClockedOut_IsBadRequest()
     {
         var (service, kimai, notifier) = Create(SettingsWithTask());
         kimai.EnqueueStatus(ClockedOut);
@@ -389,6 +390,24 @@ public sealed class ClockServiceNotificationTests
         var response = await service.ClockAsync(new KioskClockRequest("max", "1234", "start", null, "gone"));
 
         Assert.Equal(ClockActionResult.BadRequest, response.Result);
+        Assert.Empty(kimai.StartedTargets);
+        Assert.Empty(notifier.Calls);
+    }
+
+    [Theory]
+    [InlineData("working", "Schon eingestempelt")]
+    [InlineData("paused", "Aktuell in Pause")]
+    public async Task Start_UnknownTaskWhileRunning_IsTheUsualNoOp(string state, string stateText)
+    {
+        // A stale task list (task deleted meanwhile) must not turn the double
+        // tap or the second terminal into an error: running beats the task.
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(state == "paused" ? Paused : Working);
+
+        var response = await service.ClockAsync(new KioskClockRequest("max", "1234", "start", null, "gone"));
+
+        Assert.Equal(ClockActionResult.Success, response.Result);
+        Assert.Equal(stateText, response.Status!.StateText);
         Assert.Empty(kimai.StartedTargets);
         Assert.Empty(notifier.Calls);
     }

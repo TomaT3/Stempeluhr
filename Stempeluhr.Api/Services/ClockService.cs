@@ -76,8 +76,7 @@ public sealed class ClockService(
         var context = FindEmployee(request);
         return context is null
             ? null
-            : await StartClockAsync(
-                context.Settings, context.Employee, WorkTargetResolver.ResolveDefault(context.Settings, context.Employee), cancellationToken);
+            : (await StartClockAsync(context.Settings, context.Employee, null, cancellationToken)).Status;
     }
 
     public async Task<ClockStatusDto?> StopAsync(ClockRequest request, CancellationToken cancellationToken = default)
@@ -98,17 +97,7 @@ public sealed class ClockService(
 
         if (string.Equals(request.Action, "start", StringComparison.OrdinalIgnoreCase))
         {
-            // Wie beim Wechsel: eine unbekannte Tätigkeit ist ein Fehler, nie
-            // ein stilles Einstempeln auf etwas anderes.
-            var target = WorkTargetResolver.Resolve(context.Settings, context.Employee, request.TaskId);
-            if (target is null && !string.IsNullOrWhiteSpace(request.TaskId))
-            {
-                return new ClockActionResponse(ClockActionResult.BadRequest, null);
-            }
-
-            return new ClockActionResponse(
-                ClockActionResult.Success,
-                await StartClockAsync(context.Settings, context.Employee, target, cancellationToken));
+            return await StartClockAsync(context.Settings, context.Employee, request.TaskId, cancellationToken);
         }
 
         if (string.Equals(request.Action, "stop", StringComparison.OrdinalIgnoreCase))
@@ -204,36 +193,44 @@ public sealed class ClockService(
     }
 
     /// <summary>
-    /// Einstempeln auf <paramref name="target"/> (null = Haupttätigkeit nicht
-    /// konfiguriert). Läuft schon etwas, bleibt es ein No-op - auch wenn es
-    /// eine andere Tätigkeit ist: dafür gibt es den Wechsel.
+    /// Einstempeln auf <paramref name="taskId"/> (leer = Haupttätigkeit).
+    /// Läuft schon etwas, bleibt es ein No-op - welche Tätigkeit auch genannt
+    /// ist: dafür gibt es den Wechsel. Erst danach ist eine unbekannte
+    /// Tätigkeit ein Fehler, nie ein stilles Einstempeln auf etwas anderes.
     /// </summary>
-    private async Task<ClockStatusDto> StartClockAsync(
+    private async Task<ClockActionResponse> StartClockAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
-        KimaiTimesheetTarget? target,
+        string? taskId,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         if (running.IsRunning)
         {
-            return running with
+            return new ClockActionResponse(ClockActionResult.Success, running with
             {
                 StateText = running.State == "paused" ? "Aktuell in Pause" : "Schon eingestempelt"
-            };
+            });
         }
 
+        var target = WorkTargetResolver.Resolve(settings, employee, taskId);
         if (target is null)
         {
-            throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.");
+            return string.IsNullOrWhiteSpace(taskId)
+                ? throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.")
+                : new ClockActionResponse(ClockActionResult.BadRequest, null);
         }
 
         await kimai.StartAsync(settings, employee, target, cancellationToken);
         // Nur mit weiteren Tätigkeiten sagt der Name etwas aus - sonst bleibt
         // die Nachricht wie bisher.
-        NotifyTransition(settings, employee, "start", employee.Tasks is { Length: > 0 } ? WorkTargetResolver.DisplayName(target) : null);
+        NotifyTransition(
+            settings,
+            employee,
+            "start",
+            employee.Tasks is { Length: > 0 } ? target.Label ?? TelegramMessageFactory.DefaultTaskName : null);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
-        return status with { StateText = "Eingestempelt" };
+        return new ClockActionResponse(ClockActionResult.Success, status with { StateText = "Eingestempelt" });
     }
 
     private async Task<ClockStatusDto> StopClockAsync(

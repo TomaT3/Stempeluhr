@@ -70,6 +70,14 @@ describe('offline-cache', () => {
       expect(normalizeCardId('  ')).toBeNull();
     });
 
+    it('refreshes a remembered card when only the tasks changed', () => {
+      rememberEmployeeCard('04ABCD', { ...employee, tasks: [{ id: 'kx', label: 'Kunde X' }] });
+      rememberEmployeeCard('04ABCD', { ...employee, tasks: [{ id: 'ky', label: 'Kunde Y' }], defaultTaskLabel: 'Büro' });
+
+      expect(resolveEmployeeByCard('04ABCD')?.tasks).toEqual([{ id: 'ky', label: 'Kunde Y' }]);
+      expect(resolveEmployeeByCard('04ABCD')?.defaultTaskLabel).toBe('Büro');
+    });
+
     it('does not remember a card id that normalizes to nothing', () => {
       rememberEmployeeCard('----', employee);
 
