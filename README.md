@@ -120,17 +120,24 @@ Secrets werden in Admin-Antworten nie zurückgegeben.
 
 ### Weitere Tätigkeiten (Tätigkeitswechsel)
 
-Wer weitere Tätigkeiten hat, sieht eingestempelt am Kiosk zusätzlich
-„Tätigkeit wechseln“. Der Wechsel stempelt nicht aus: Das laufende Timesheet
+Wer weitere Tätigkeiten hat, wählt sie schon beim Einstempeln: Statt eines
+einzelnen Knopfes zeigt der Kiosk „Einstempeln auf“ mit Haupttätigkeit und
+weiteren Tätigkeiten (ein Tipp bucht; bei unbekanntem Offline-Status öffnet
+„Einstempeln“ diese Auswahl). Eingestempelt gibt es zusätzlich „Tätigkeit
+wechseln“. Der Wechsel stempelt nicht aus: Das laufende Timesheet
 endet und ein neues beginnt im selben Moment auf Projekt/Aktivität der
 gewählten Tätigkeit (wie bei der Pause). Die Arbeitszeit bleibt lückenlos, in
 Kimai lässt sich die Zeit pro Kunde auswerten, und die Stundenübersicht zählt
 alles außer Pause. Nach einer Pause läuft die Tätigkeit von vor der Pause
-weiter; Einstempeln startet immer die Haupttätigkeit. Offline gewählte
-Wechsel werden wie alle Stempel nachgetragen. Lässt sich ein Wechsel nicht
-eindeutig nachtragen (z. B. weil kurz danach an einem anderen Terminal
-ausgestempelt wurde), meldet der Kiosk ihn als abgelehnt, statt eine Buchung
-zu raten.
+weiter. Offline gewählte Tätigkeiten werden wie alle Stempel nachgetragen;
+ist die Tätigkeit eines offline gestempelten Einstempelns inzwischen
+gelöscht, bucht der Nachtrag auf die Haupttätigkeit, damit keine Arbeitszeit
+verloren geht, und vermerkt das in der Beschreibung des Timesheets. Läuft
+beim Nachtrag schon eine andere Tätigkeit, bleibt das Einstempeln wie immer
+ein No-op; die verworfene Wahl steht dann im API-Log. Lässt
+sich ein Wechsel nicht eindeutig nachtragen (z. B. weil kurz danach an einem
+anderen Terminal ausgestempelt wurde), meldet der Kiosk ihn als abgelehnt,
+statt eine Buchung zu raten.
 
 Die Dauer im Statusfeld zählt nur den laufenden Abschnitt (z. B. „Kunde X
 seit 10:15“) und beginnt nach Wechsel oder Pausenende neu; die Tagessumme
@@ -151,7 +158,9 @@ einer Tätigkeit), bleibt der Wechsel zu jeder Tätigkeit möglich.
 Bei jedem echten Live-Stempel (nicht bei No-ops und nicht beim Offline-
 Nachtrag) schickt die API eine Nachricht wie
 `🟢 Anna Mustermann · eingestempelt um 08:12` in eine Telegram-Gruppe
-(Tätigkeitswechsel: `🔄 Anna Mustermann · wechselt zu Kunde X um 10:15`).
+(Tätigkeitswechsel: `🔄 Anna Mustermann · wechselt zu Kunde X um 10:15`;
+mit weiteren Tätigkeiten nennt auch das Einstempeln die Tätigkeit:
+`🟢 Anna Mustermann · eingestempelt auf Kunde X um 08:12`).
 
 1. Bei @BotFather `/newbot` ausführen, Token kopieren.
 2. Private Gruppe anlegen, Bot hinzufügen und zum Admin machen.

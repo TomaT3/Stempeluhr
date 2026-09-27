@@ -315,11 +315,22 @@ public sealed class OfflineClockService(
             case "start":
                 if (status.IsRunning)
                 {
+                    if (DropsTaskChoice(settings, employee, taskId, status))
+                    {
+                        logger.LogWarning(
+                            "Offline start on task {TaskId} replayed while another task was running - the task choice is dropped",
+                            string.IsNullOrWhiteSpace(taskId) ? "(default)" : taskId);
+                        return ("Lief bereits auf einer anderen Taetigkeit - kein Nachtrag noetig.", status.State);
+                    }
+
                     return ("Lief bereits - kein Nachtrag noetig.", status.State);
                 }
 
-                await kimai.StartAtAsync(settings, employee, RequireDefaultTarget(settings, employee), timestamp, cancellationToken);
-                return ($"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}", "working");
+                var (startTarget, fellBack) = ResolveStartTarget(settings, employee, taskId);
+                await kimai.StartAtAsync(settings, employee, startTarget, timestamp, cancellationToken);
+                return (fellBack
+                    ? $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm} ({DeletedTaskNote})"
+                    : $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}", "working");
 
             case "stop":
                 if (!status.IsRunning || status.ActiveTimesheetId is not int stopId)
@@ -613,6 +624,44 @@ public sealed class OfflineClockService(
         return $"Nachgetragen: Wechsel zu {WorkTargetResolver.DisplayName(target)} {timestamp.ToLocalTime():HH:mm}";
     }
 
+    /// <summary>
+    /// Tätigkeit eines nachgetragenen Einstempelns. Anders als beim Wechsel
+    /// (dort läuft die bisherige Arbeit weiter) ginge mit einer Ablehnung die
+    /// ganze Arbeitszeit bis zum nächsten Stempel verloren. Ist die Tätigkeit
+    /// inzwischen gelöscht, wird deshalb auf die Haupttätigkeit gebucht. Die
+    /// Nachtrags-Meldung sieht am Kiosk niemand - der Vermerk steht deshalb in
+    /// der Beschreibung des Timesheets, also dort, wo die Zeit pro Kunde
+    /// ausgewertet und korrigiert wird.
+    /// </summary>
+    private (KimaiTimesheetTarget Target, bool FellBack) ResolveStartTarget(RuntimeSettings settings, EmployeeSettings employee, string? taskId)
+    {
+        if (WorkTargetResolver.Resolve(settings, employee, taskId) is { } target)
+        {
+            return (target, false);
+        }
+
+        var fallback = RequireDefaultTarget(settings, employee);
+        logger.LogWarning(
+            "Offline start on task {TaskId}: task no longer exists - booking the default task instead",
+            taskId);
+        return (fallback with { Description = $"{fallback.Description} ({DeletedTaskNote})" }, true);
+    }
+
+    /// <summary>
+    /// Ein nachgetragenes Einstempeln bleibt bei laufender Arbeit ein No-op.
+    /// Mit weiteren Tätigkeiten war die Tätigkeit aber eine Wahl: läuft eine
+    /// andere (etwa seit einem Stempel an einem anderen Terminal), geht sie
+    /// verloren - der Aufrufer loggt das, damit sich die Zeit pro Kunde
+    /// korrigieren lässt.
+    /// </summary>
+    private static bool DropsTaskChoice(RuntimeSettings settings, EmployeeSettings employee, string? taskId, ClockStatusDto running)
+    {
+        return employee.Tasks is { Length: > 0 }
+            && running.State == "working"
+            && !(WorkTargetResolver.Resolve(settings, employee, taskId) is { } target
+                && WorkTargetResolver.IsRunningOn(running, target));
+    }
+
     private static KimaiTimesheetTarget RequireDefaultTarget(RuntimeSettings settings, EmployeeSettings employee)
     {
         return WorkTargetResolver.ResolveDefault(settings, employee)
@@ -703,6 +752,10 @@ public sealed class OfflineClockService(
 
     private const string ObsoleteEventMessage =
         "Veraltet - das aktive Timesheet wurde erst nach diesem Ereignis gestartet.";
+
+    /// <summary>Vermerk für ein nachgetragenes Einstempeln, dessen Tätigkeit gelöscht war.</summary>
+    private const string DeletedTaskNote =
+        "offline gewählte Tätigkeit war beim Nachtrag gelöscht - auf die Haupttätigkeit gebucht";
 
     /// <summary>
     /// Tolerance for <see cref="IsSheetNewerThanEvent"/>; same clock-skew

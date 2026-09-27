@@ -171,34 +171,66 @@ BOOKINGS=$(curl -s "$KIMAI_URL/_bookings")
 KX=$(echo "$BOOKINGS" | grep -o '"project": 5' | wc -l)
 [ "$KX" -ge 2 ] && ok "Kunde X zweimal gebucht (vor und nach der Pause, $KX Einträge)" || bad "Erwartet 2 Buchungen auf Projekt 5, war $KX"
 
-# ------------------------------------------------- Test 1b: Stundenübersicht
-say "Test 1b: Stundenübersicht (Max stempelt heute 2h -> /api/kiosk/hours)"
+R=$(sync_max task-8 start 2026-08-25T08:00:00+02:00 kx)
+assert_status 'Nachgetragen: Einstempeln' "$R" "Einstempeln direkt auf Kunde X nachgetragen"
+assert_status '"activeTaskId":"kx"' "$(login_max)" "Status zeigt Kunde X ab dem Einstempeln"
+START_UNKNOWN='{"employeeId":"test-max","pin":"1234","action":"start","taskId":"gibt-es-nicht"}'
+R=$(curl -s -m 15 -X POST "$API_URL/api/kiosk/clock" -H 'Content-Type: application/json' -d "$START_UNKNOWN")
+assert_status 'Schon eingestempelt' "$R" "Live-Einstempeln auf unbekannte Tätigkeit bei laufender Arbeit bleibt No-op"
+R=$(sync_max task-9 stop 2026-08-25T12:00:00+02:00)
+assert_status '"clockedOut"' "$R" "Ausstempeln nach Einstempeln auf Kunde X"
+HTTP=$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "$API_URL/api/kiosk/clock" -H 'Content-Type: application/json' -d "$START_UNKNOWN")
+[ "$HTTP" = "400" ] && ok "Live-Einstempeln auf unbekannte Tätigkeit -> 400" || bad "Unbekannte Tätigkeit erwartet 400, war $HTTP"
 
-START_ISO=$(date -d '2 hours ago' +%Y-%m-%dT%H:%M:%S%:z)
-STOP_ISO=$(date +%Y-%m-%dT%H:%M:%S%:z)
+R=$(sync_max task-10 start 2026-08-26T08:00:00+02:00 gibt-es-nicht)
+assert_status 'Nachgetragen: Einstempeln' "$R" "Offline-Einstempeln auf gelöschte Tätigkeit wird nachgetragen"
+assert_status '"activeIsDefaultTask":true' "$(login_max)" "... und läuft auf der Haupttätigkeit"
+# Umlaute kommen JSON-escaped an - nur der ASCII-Anfang des Vermerks.
+assert_status 'offline gew' "$(curl -s "$KIMAI_URL/_bookings")" "... mit Vermerk im Timesheet"
+R=$(sync_max task-11 stop 2026-08-26T12:00:00+02:00)
+assert_status '"clockedOut"' "$R" "Ausstempeln nach dem Nachtrag auf die Haupttätigkeit"
+
+# ------------------------------------------------- Test 1b: Stundenübersicht
+say "Test 1b: Stundenübersicht (Max stempelt heute bis zu 2h -> /api/kiosk/hours)"
+
+# Die Übersicht zählt eine Buchung zum Tag ihres Beginns, in der Zeitzone des
+# Kimai-Benutzers (Fake: Europe/Berlin). "Vor 2 h" läge zwischen 00:00 und
+# 02:00 im Vortag (montags in der Vorwoche) - dann beginnt die Buchung kurz
+# nach Mitternacht und ist entsprechend kürzer. Um Mitternacht selbst warten,
+# bis der Tag sicher gewechselt hat.
+while [[ "$(TZ=Europe/Berlin date +%H%M)" > "2357" || "$(TZ=Europe/Berlin date +%H%M)" < "0002" ]]; do
+  sleep 20
+done
+NOW_S=$(date +%s)
+MIDNIGHT_S=$(TZ=Europe/Berlin date -d "$(TZ=Europe/Berlin date -d "@$NOW_S" +%F) 00:00" +%s)
+START_S=$(( NOW_S - 7200 > MIDNIGHT_S + 60 ? NOW_S - 7200 : MIDNIGHT_S + 60 ))
+HOURS_S=$(( NOW_S - START_S ))
+START_ISO=$(date -d "@$START_S" +%Y-%m-%dT%H:%M:%S%:z)
+STOP_ISO=$(date -d "@$NOW_S" +%Y-%m-%dT%H:%M:%S%:z)
 
 R=$(post_sync "{\"events\":[{\"eventId\":\"${RUN}-hours-1\",\"employeeId\":\"test-max\",\"pin\":\"1234\",\"action\":\"start\",\"performedAt\":\"$START_ISO\"}]}")
-assert_status '"applied"' "$R" "Stundenübersicht: Start vor 2h"
+assert_status '"applied"' "$R" "Stundenübersicht: Start heute ($START_ISO)"
 
 R=$(post_sync "{\"events\":[{\"eventId\":\"${RUN}-hours-2\",\"employeeId\":\"test-max\",\"pin\":\"1234\",\"action\":\"stop\",\"performedAt\":\"$STOP_ISO\"}]}")
 assert_status '"applied"' "$R" "Stundenübersicht: Stop jetzt"
 
 R=$(curl -s -m 15 -X POST "$API_URL/api/kiosk/hours" -H 'Content-Type: application/json' -d '{"pin":"1234"}')
-assert_status '"todaySeconds":7200' "$R" "Stundenübersicht: Heute = 7200s (2h Netto)"
+assert_status "\"todaySeconds\":${HOURS_S}," "$R" "Stundenübersicht: Heute = ${HOURS_S}s (Netto)"
 assert_status '"todayPauseSeconds":0' "$R" "Stundenübersicht: Pause heute = 0"
 WEEK=$(echo "$R" | grep -oP '"weekSeconds":\K[0-9]+' || true)
-if [[ -n "$WEEK" ]] && [ "$WEEK" -ge 7200 ]; then
-  ok "Stundenübersicht: Woche >= 7200s (war $WEEK)"
+if [[ -n "$WEEK" ]] && [ "$WEEK" -ge "$HOURS_S" ]; then
+  ok "Stundenübersicht: Woche >= ${HOURS_S}s (war $WEEK)"
 else
-  bad "Stundenübersicht: Woche erwartet >= 7200, war: $R"
+  bad "Stundenübersicht: Woche erwartet >= ${HOURS_S}, war: $R"
 fi
 MONTH=$(echo "$R" | grep -oP '"monthSeconds":\K[0-9]+' || true)
 # Monat ist laufzeitabhängig (Backdate-Events vom 23.08. liegen je nach
-# Ausführmonat im Zeitraum) - heute 2h müssen auf jeden Fall enthalten sein.
-if [[ -n "$MONTH" ]] && [ "$MONTH" -ge 7200 ]; then
-  ok "Stundenübersicht: Monat >= 7200s (war $MONTH)"
+# Ausführmonat im Zeitraum) - die Buchung von heute muss auf jeden Fall
+# enthalten sein.
+if [[ -n "$MONTH" ]] && [ "$MONTH" -ge "$HOURS_S" ]; then
+  ok "Stundenübersicht: Monat >= ${HOURS_S}s (war $MONTH)"
 else
-  bad "Stundenübersicht: Monat erwartet >= 7200, war: $R"
+  bad "Stundenübersicht: Monat erwartet >= ${HOURS_S}, war: $R"
 fi
 
 HTTP=$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "$API_URL/api/kiosk/hours" -H 'Content-Type: application/json' -d '{"pin":"9999"}')

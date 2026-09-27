@@ -5,8 +5,9 @@ import { ClockAction, ClockStatus, EmployeeTask } from '../models/kiosk.models';
 /**
  * State a locally queued OFFLINE action leads to. The wording mirrors the
  * server's own stateText values (ClockService) so the kiosk does not switch
- * vocabulary between online and offline. `task` is the target of a 'switch'
- * (null = back to the default task, named `defaultTaskLabel` if configured).
+ * vocabulary between online and offline. `task` is the task of a 'start' or
+ * the target of a 'switch' (null = the default task, named
+ * `defaultTaskLabel` if configured).
  */
 export function projectClockStatus(
   current: ClockStatus | null,
@@ -30,7 +31,6 @@ export function projectClockStatus(
         activeIsDefaultTask: task === null,
       };
     case 'start':
-      // Einstempeln startet immer die Standard-Tätigkeit.
       return {
         isRunning: true,
         activeTimesheetId: current?.activeTimesheetId ?? null,
@@ -38,7 +38,9 @@ export function projectClockStatus(
         durationSeconds: 0,
         state: 'working',
         stateText: 'Eingestempelt',
-        activeIsDefaultTask: true,
+        activeTaskId: task?.id ?? null,
+        activeTaskLabel: task?.label ?? null,
+        activeIsDefaultTask: task === null,
       };
     case 'pauseEnd':
       // The server resumes the task from before the pause, which the kiosk

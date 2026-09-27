@@ -76,7 +76,7 @@ public sealed class ClockService(
         var context = FindEmployee(request);
         return context is null
             ? null
-            : await StartClockAsync(context.Settings, context.Employee, cancellationToken);
+            : (await StartClockAsync(context.Settings, context.Employee, null, cancellationToken)).Status;
     }
 
     public async Task<ClockStatusDto?> StopAsync(ClockRequest request, CancellationToken cancellationToken = default)
@@ -97,9 +97,7 @@ public sealed class ClockService(
 
         if (string.Equals(request.Action, "start", StringComparison.OrdinalIgnoreCase))
         {
-            return new ClockActionResponse(
-                ClockActionResult.Success,
-                await StartClockAsync(context.Settings, context.Employee, cancellationToken));
+            return await StartClockAsync(context.Settings, context.Employee, request.TaskId, cancellationToken);
         }
 
         if (string.Equals(request.Action, "stop", StringComparison.OrdinalIgnoreCase))
@@ -194,26 +192,45 @@ public sealed class ClockService(
             : null;
     }
 
-    private async Task<ClockStatusDto> StartClockAsync(
+    /// <summary>
+    /// Einstempeln auf <paramref name="taskId"/> (leer = Haupttätigkeit).
+    /// Läuft schon etwas, bleibt es ein No-op - welche Tätigkeit auch genannt
+    /// ist: dafür gibt es den Wechsel. Erst danach ist eine unbekannte
+    /// Tätigkeit ein Fehler, nie ein stilles Einstempeln auf etwas anderes.
+    /// </summary>
+    private async Task<ClockActionResponse> StartClockAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
+        string? taskId,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         if (running.IsRunning)
         {
-            return running with
+            return new ClockActionResponse(ClockActionResult.Success, running with
             {
                 StateText = running.State == "paused" ? "Aktuell in Pause" : "Schon eingestempelt"
-            };
+            });
         }
 
-        var target = WorkTargetResolver.ResolveDefault(settings, employee)
-            ?? throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.");
+        var target = WorkTargetResolver.Resolve(settings, employee, taskId);
+        if (target is null)
+        {
+            return string.IsNullOrWhiteSpace(taskId)
+                ? throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.")
+                : new ClockActionResponse(ClockActionResult.BadRequest, null);
+        }
+
         await kimai.StartAsync(settings, employee, target, cancellationToken);
-        NotifyTransition(settings, employee, "start");
+        // Nur mit weiteren Tätigkeiten sagt der Name etwas aus - sonst bleibt
+        // die Nachricht wie bisher.
+        NotifyTransition(
+            settings,
+            employee,
+            "start",
+            employee.Tasks is { Length: > 0 } ? target.Label ?? TelegramMessageFactory.DefaultTaskName : null);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
-        return status with { StateText = "Eingestempelt" };
+        return new ClockActionResponse(ClockActionResult.Success, status with { StateText = "Eingestempelt" });
     }
 
     private async Task<ClockStatusDto> StopClockAsync(

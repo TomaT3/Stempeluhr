@@ -231,7 +231,8 @@ h2 {
   font-size: clamp(1.35rem, 2.7vw, 2.35rem);
 }
 
-.stamp-button.start {
+.stamp-button.start,
+.task-button.start-task {
   background: linear-gradient(180deg, #199968, var(--color-success));
 }
 
@@ -289,6 +290,34 @@ h2 {
 
 .task-button:disabled {
   cursor: default;
+}
+
+.start-choice-title {
+  margin: 0;
+  color: var(--color-muted);
+  font-weight: 800;
+}
+
+.task-button.start-task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-height: 72px;
+  border-color: transparent;
+  color: #fff;
+}
+
+/* Kleines Dreieck: nur die Kanten verkleinern, sonst geht die Form verloren. */
+.task-button.start-task .stamp-icon.play {
+  border-top-width: 12px;
+  border-bottom-width: 12px;
+  border-left-width: 20px;
+}
+
+.task-button.start-task:disabled {
+  opacity: 0.64;
+  cursor: wait;
 }
 
 .stamp-button:active,

@@ -18,6 +18,16 @@ public sealed class TelegramMessageFactoryTests
     }
 
     [Fact]
+    public void Build_StartOnTask_NamesTheTask()
+    {
+        var stamp = new DateTimeOffset(2026, 7, 1, 6, 12, 0, TimeSpan.Zero); // CEST → 08:12
+
+        var text = TelegramMessageFactory.Build("Max Mustermann", "start", stamp, Berlin, "Kunde X");
+
+        Assert.Equal("🟢 Max Mustermann · eingestempelt auf Kunde X um 08:12", text);
+    }
+
+    [Fact]
     public void Build_Stop_ReturnsOutText()
     {
         var stamp = new DateTimeOffset(2026, 7, 1, 15, 3, 0, TimeSpan.Zero); // CEST → 17:03

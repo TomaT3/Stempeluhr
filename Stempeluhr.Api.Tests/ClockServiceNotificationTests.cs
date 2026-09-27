@@ -336,6 +336,99 @@ public sealed class ClockServiceNotificationTests
     }
 
     [Fact]
+    public async Task Start_OnTask_BooksTheTaskAndNamesIt()
+    {
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(WorkingOnTask);
+
+        var response = await service.ClockAsync(new KioskClockRequest("max", "1234", "start", null, "kx"));
+
+        Assert.Equal(ClockActionResult.Success, response.Result);
+        Assert.Equal("Eingestempelt", response.Status!.StateText);
+        Assert.Equal("kx", response.Status.ActiveTaskId);
+        var target = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((20, 21, "Kunde X", false), (target.ProjectId, target.ActivityId, target.Description, target.Billable));
+        Assert.Equal("start", Assert.Single(notifier.Calls).Action);
+        Assert.Equal("Kunde X", Assert.Single(notifier.TaskLabels));
+    }
+
+    [Fact]
+    public async Task Start_WithoutTask_BooksTheDefaultTask()
+    {
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(Working);
+
+        await service.ClockAsync(Request("start"));
+
+        var target = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((1, 2), (target.ProjectId, target.ActivityId));
+        // With further tasks the message says which one - here the default,
+        // spelled like the switch message ("zurück zur Standard-Tätigkeit").
+        Assert.Equal("Standard-Tätigkeit", Assert.Single(notifier.TaskLabels));
+    }
+
+    [Fact]
+    public async Task Start_WithoutFurtherTasks_KeepsThePlainMessage()
+    {
+        var (service, kimai, notifier) = Create();
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(Working);
+
+        await service.ClockAsync(Request("start"));
+
+        Assert.Null(Assert.Single(notifier.TaskLabels));
+    }
+
+    [Fact]
+    public async Task Start_UnknownTaskWhenClockedOut_IsBadRequest()
+    {
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(ClockedOut);
+
+        var response = await service.ClockAsync(new KioskClockRequest("max", "1234", "start", null, "gone"));
+
+        Assert.Equal(ClockActionResult.BadRequest, response.Result);
+        Assert.Empty(kimai.StartedTargets);
+        Assert.Empty(notifier.Calls);
+    }
+
+    [Theory]
+    [InlineData("working", "Schon eingestempelt")]
+    [InlineData("paused", "Aktuell in Pause")]
+    public async Task Start_UnknownTaskWhileRunning_IsTheUsualNoOp(string state, string stateText)
+    {
+        // A stale task list (task deleted meanwhile) must not turn the double
+        // tap or the second terminal into an error: running beats the task.
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(state == "paused" ? Paused : Working);
+
+        var response = await service.ClockAsync(new KioskClockRequest("max", "1234", "start", null, "gone"));
+
+        Assert.Equal(ClockActionResult.Success, response.Result);
+        Assert.Equal(stateText, response.Status!.StateText);
+        Assert.Empty(kimai.StartedTargets);
+        Assert.Empty(notifier.Calls);
+    }
+
+    [Fact]
+    public async Task Start_OnTaskWhileAlreadyWorking_IsSilentNoOp()
+    {
+        // Double tap or a second terminal: a running sheet is never replaced
+        // by a start - that is what the switch is for.
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(Working);
+
+        var response = await service.ClockAsync(new KioskClockRequest("max", "1234", "start", null, "kx"));
+
+        Assert.Equal("Schon eingestempelt", response.Status!.StateText);
+        Assert.Equal(0, kimai.StopCalls);
+        Assert.Empty(kimai.StartedTargets);
+        Assert.Empty(notifier.Calls);
+    }
+
+    [Fact]
     public async Task PauseEnd_ResumesTheTaskThatRanBeforeThePause()
     {
         var (service, kimai, _) = Create(SettingsWithTask());

@@ -1,4 +1,4 @@
-import { DatePipe } from '@angular/common';
+import { DatePipe, NgTemplateOutlet } from '@angular/common';
 import { Component, inject } from '@angular/core';
 
 import { ThemeService } from '../../../core/services/theme';
@@ -11,7 +11,7 @@ import { ClockWorkflow } from '../clock-workflow';
 
 @Component({
   selector: 'app-clock-page',
-  imports: [Avatar, DatePipe, DurationPipe, HoursOverviewCard, StatusBadge, VersionBadge],
+  imports: [Avatar, DatePipe, DurationPipe, HoursOverviewCard, NgTemplateOutlet, StatusBadge, VersionBadge],
   templateUrl: './clock-page.html',
   styleUrl: './clock-page.scss',
 })

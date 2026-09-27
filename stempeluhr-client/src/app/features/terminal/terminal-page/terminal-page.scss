@@ -286,9 +286,14 @@ p {
   line-height: 1;
 }
 
+/* contain: size - eine lange Auswahlliste darf die Zeile nicht strecken,
+   sonst wächst die Seite und Abbrechen samt Stundenkarte rutschen unter den
+   Rand (800x480 scrollt nicht). Ohne eigene Größe nimmt die Spalte die Höhe
+   der Zeile an, und nur die Liste scrollt. Einspaltig aufgehoben (unten). */
 .action-panel.picker {
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 10px;
+  contain: size;
 }
 
 .task-list {
@@ -340,6 +345,33 @@ p {
   color: var(--color-muted);
 }
 
+/* Einstempeln auf eine Tätigkeit: Titel und Liste. Abbrechen (nur bei
+   unbekanntem Status) bekommt eine implizite Zeile - ohne ihn kostet keine
+   leere Zeile samt Abstand Platz bei 800x480. */
+.action-panel.start-choice {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.start-choice-title {
+  margin: 0;
+  color: var(--color-muted);
+  font-weight: 800;
+}
+
+.task-button.start-task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border-color: transparent;
+  color: #fff;
+}
+
+/* Kleines Dreieck: nur die Kanten verkleinern, sonst geht die Form verloren. */
+.task-button.start-task .icon.play {
+  border-width: 10px 0 10px 16px;
+}
+
 .task-label {
   color: var(--color-text);
   font-size: clamp(0.9rem, 2vw, 1.05rem);
@@ -349,7 +381,8 @@ p {
   overflow-wrap: anywhere;
 }
 
-.action-button.start {
+.action-button.start,
+.task-button.start-task {
   background: linear-gradient(180deg, #199968, var(--color-success));
 }
 
@@ -474,7 +507,8 @@ app-hours-overview-card {
 }
 
 .keypad button:disabled,
-.action-button:disabled {
+.action-button:disabled,
+.task-button.start-task:disabled {
   opacity: 0.64;
   cursor: wait;
 }
@@ -497,6 +531,13 @@ app-hours-overview-card {
   .action-button.single {
     grid-column: 1 / -1;
     grid-row: auto;
+  }
+
+  /* Auswahllisten bleiben einspaltig: Titel, Liste und Abbrechen untereinander.
+     Hier in eigener Zeile braucht die Spalte ihre Größe wieder. */
+  .action-panel.picker {
+    grid-template-columns: minmax(0, 1fr);
+    contain: none;
   }
 }
 

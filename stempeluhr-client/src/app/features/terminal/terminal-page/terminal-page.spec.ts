@@ -548,4 +548,231 @@ describe('TerminalPage', () => {
       expect(fixture.componentInstance.clockState.isWorking()).toBe(true);
     });
   });
+
+  describe('clock in on a task', () => {
+    const tasks = [{ id: 'kx', label: 'Kunde X' }];
+
+    function unlockClockedOut(fixture: ComponentFixture<TerminalPage>, employeeTasks = tasks): void {
+      const component = fixture.componentInstance;
+      ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+      pinLoginResult.next({ employee: { ...session.employee, tasks: employeeTasks, defaultTaskLabel: 'Büro' }, status });
+      fixture.detectChanges();
+    }
+
+    function startOptions(fixture: ComponentFixture<TerminalPage>): HTMLButtonElement[] {
+      return [...fixture.nativeElement.querySelectorAll('.task-button.start-task')] as HTMLButtonElement[];
+    }
+
+    it('keeps the single Einstempeln button without further tasks', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockClockedOut(fixture, []);
+
+      expect(fixture.nativeElement.querySelector('.action-button.start.single')).not.toBeNull();
+      expect(startOptions(fixture)).toEqual([]);
+    });
+
+    it('shows the task choice right away and clocks in on the chosen task with one tap', () => {
+      clockImpl.mockImplementation(() => of({
+        ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt',
+        startedAt: '2026-09-27T06:00:00Z', activeTaskId: 'kx', activeTaskLabel: 'Kunde X',
+      }));
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockClockedOut(fixture);
+
+      expect(fixture.nativeElement.querySelector('.action-button.start')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.start-choice-title')?.textContent).toContain('Einstempeln auf');
+      const options = startOptions(fixture);
+      expect(options.map(option => option.textContent?.trim())).toEqual(['Büro', 'Kunde X']);
+      // Clocked out there is nothing to go back to: no Abbrechen.
+      expect(fixture.nativeElement.querySelector('.task-cancel')).toBeNull();
+
+      options[1].click();
+      fixture.detectChanges();
+
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx');
+      expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
+    });
+
+    it('clocks in on the main task without a task id', () => {
+      clockImpl.mockImplementation(() => of({ ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt' }));
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockClockedOut(fixture);
+
+      startOptions(fixture)[0].click();
+
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, null);
+    });
+
+    it('queues an offline clock-in with its task and shows that task as running', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockClockedOut(fixture);
+
+      fixture.componentInstance.start('kx');
+      fixture.detectChanges();
+
+      expect(enqueueKiosk).toHaveBeenCalledWith(expect.objectContaining({ action: 'start', taskId: 'kx' }));
+      expect(fixture.componentInstance.clockState.status()?.activeTaskId).toBe('kx');
+      expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
+    });
+
+    it('opens the choice from Einstempeln while the status is unknown - and back to both directions', () => {
+      window.localStorage.setItem(
+        'stempeluhr.employee-card-cache.v1',
+        JSON.stringify({ '04ABCD': { ...session.employee, tasks } }),
+      );
+      failPolls = true;
+      localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+
+      const fixture = TestBed.createComponent(TerminalPage);
+      vi.advanceTimersByTime(1_000);
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
+      (fixture.nativeElement.querySelector('.action-button.start') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(startOptions(fixture).length).toBe(2);
+      expect(enqueueKiosk).not.toHaveBeenCalled();
+
+      (fixture.nativeElement.querySelector('.task-cancel') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(startOptions(fixture)).toEqual([]);
+      expect(fixture.nativeElement.querySelector('.action-button.start')).not.toBeNull();
+      expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
+    });
+
+    describe('with a cached card while online', () => {
+      let identify$: Subject<NfcClockEvent>;
+
+      function identifyEvent(overrides: Partial<NfcClockEvent>): NfcClockEvent {
+        return {
+          eventId: 'e1',
+          occurredAt: new Date().toISOString(),
+          terminalId: 'term-1',
+          cardId: '04ABCD',
+          employee: { ...session.employee, tasks },
+          status,
+          message: 'NFC-Karte erkannt.',
+          success: true,
+          ...overrides,
+        };
+      }
+
+      /** Scans the cached card; the server's identify answer stays pending in identify$. */
+      function scanCachedCard(cachedTasks = tasks): ComponentFixture<TerminalPage> {
+        window.localStorage.setItem(
+          'stempeluhr.employee-card-cache.v1',
+          JSON.stringify({ '04ABCD': { ...session.employee, tasks: cachedTasks } }),
+        );
+        identify$ = new Subject<NfcClockEvent>();
+        vi.mocked(TestBed.inject(KioskApi).identify).mockImplementation(() => identify$);
+        localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+
+        const fixture = TestBed.createComponent(TerminalPage);
+        vi.advanceTimersByTime(1_000);
+        fixture.detectChanges();
+        return fixture;
+      }
+
+      it('never turns the open start choice into the switch picker when the status arrives as working', () => {
+        const fixture = scanCachedCard();
+        (fixture.nativeElement.querySelector('.action-button.start') as HTMLButtonElement).click();
+        fixture.detectChanges();
+        expect(startOptions(fixture).length).toBe(2);
+
+        identify$.next(identifyEvent({
+          status: { ...status, isRunning: true, activeTimesheetId: 5, state: 'working', stateText: 'Eingestempelt', activeIsDefaultTask: true },
+        }));
+        fixture.detectChanges();
+
+        // A tap on "Kunde X" would book a switch here - the working buttons come instead.
+        expect(fixture.componentInstance.taskPickerOpen()).toBe(false);
+        expect(fixture.nativeElement.querySelectorAll('.task-button').length).toBe(0);
+        expect(fixture.nativeElement.querySelector('.action-button.switch')).not.toBeNull();
+        expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
+      });
+
+      it('keeps offering the start choice when the status arrives as clocked out', () => {
+        const fixture = scanCachedCard();
+        (fixture.nativeElement.querySelector('.action-button.start') as HTMLButtonElement).click();
+
+        identify$.next(identifyEvent({}));
+        fixture.detectChanges();
+
+        expect(startOptions(fixture).length).toBe(2);
+        // Known status: there is no Ein-/Ausstempeln to go back to.
+        expect(fixture.nativeElement.querySelector('.task-cancel')).toBeNull();
+      });
+
+      it('offers the tasks the server knows now, not the ones cached with the card', () => {
+        const fixture = scanCachedCard([{ id: 'gone', label: 'Gelöscht' }]);
+
+        identify$.next(identifyEvent({ employee: { ...session.employee, tasks: [{ id: 'ky', label: 'Kunde Y' }] } }));
+        fixture.detectChanges();
+
+        expect(startOptions(fixture).map(option => option.textContent?.trim())).toEqual(['Standard-Tätigkeit', 'Kunde Y']);
+        const cache = JSON.parse(window.localStorage.getItem('stempeluhr.employee-card-cache.v1') ?? '{}');
+        expect(cache['04ABCD'].tasks).toEqual([{ id: 'ky', label: 'Kunde Y' }]);
+      });
+
+      it('still refreshes the card cache when the employee acts before identify answers', () => {
+        const working: ClockStatus = {
+          ...status, isRunning: true, activeTimesheetId: 7, state: 'working', stateText: 'Eingestempelt', activeIsDefaultTask: true,
+        };
+        clockImpl.mockImplementation(() => of(working));
+        const fixture = scanCachedCard([{ id: 'gone', label: 'Gelöscht' }]);
+        fixture.componentInstance.start(null);
+
+        // The answer to the scan is older than the action's: only the card cache takes it.
+        identify$.next(identifyEvent({ employee: { ...session.employee, tasks: [{ id: 'ky', label: 'Kunde Y' }] } }));
+        fixture.detectChanges();
+
+        const cache = JSON.parse(window.localStorage.getItem('stempeluhr.employee-card-cache.v1') ?? '{}');
+        expect(cache['04ABCD'].tasks).toEqual([{ id: 'ky', label: 'Kunde Y' }]);
+        expect(fixture.componentInstance.clockState.status()?.state).toBe('working');
+        const statusCache = JSON.parse(window.localStorage.getItem('stempeluhr.employee-status-cache.v1') ?? '{}');
+        expect(statusCache['max'].status.state).toBe('working');
+      });
+
+      it('treats a card that now belongs to someone else as a new session', () => {
+        window.localStorage.setItem(
+          'stempeluhr.employee-status-cache.v1',
+          JSON.stringify({
+            max: {
+              status: { ...status, isRunning: true, activeTimesheetId: 5, state: 'working', stateText: 'Eingestempelt', activeIsDefaultTask: true },
+              observedAt: new Date().toISOString(),
+              origin: 'observed',
+            },
+          }),
+        );
+        const fixture = scanCachedCard();
+        fixture.componentInstance.openTaskPicker();
+        expect(fixture.componentInstance.taskPickerOpen()).toBe(true);
+
+        identify$.next(identifyEvent({
+          employee: { ...session.employee, id: 'anna', displayName: 'Anna', tasks },
+          status: null,
+        }));
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('anna');
+        expect(fixture.componentInstance.taskPickerOpen()).toBe(false);
+        // Nothing is known about Anna yet: never Max's status under her name.
+        expect(fixture.componentInstance.clockState.status()).toBeNull();
+        expect(fixture.componentInstance.message()).toContain('Anna');
+      });
+
+      it('drops an identify answer that arrives after the session ended', () => {
+        const fixture = scanCachedCard();
+        fixture.componentInstance.back();
+
+        identify$.next(identifyEvent({}));
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.selectedEmployee()).toBeNull();
+        expect(fixture.componentInstance.clockState.status()).toBeNull();
+      });
+    });
+  });
 });

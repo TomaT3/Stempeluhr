@@ -511,6 +511,74 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task Start_Replay_BooksTheChosenTask()
+    {
+        var (service, kimai) = CreateService();
+
+        var result = await service.SyncKioskAsync(
+        [
+            StartOn("e1", "kx", T08),
+            Kiosk("e2", "stop", T12),
+        ]);
+
+        Assert.Equal(2, result.Accepted);
+        Assert.Equal([("start", T08), ("stop", T12)], kimai.Operations);
+        var target = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((20, 21, "Kunde X"), (target.ProjectId, target.ActivityId, target.Description));
+    }
+
+    [Fact]
+    public async Task Start_OnTask_AppliedLiveAndQueued_IsNoOp()
+    {
+        var (service, kimai) = CreateService();
+        await service.SyncKioskAsync([StartOn("e1", "kx", T08)]);
+
+        var result = await service.SyncKioskAsync([StartOn("e2", "kx", T08)]);
+
+        Assert.Equal("applied", result.Results.Single().Status);
+        Assert.Contains("Lief bereits", result.Results.Single().Message);
+        Assert.DoesNotContain("anderen", result.Results.Single().Message);
+        Assert.Single(kimai.Operations);
+    }
+
+    [Fact]
+    public async Task Start_OnTask_WhileAnotherTaskRuns_IsNoOpButLogged()
+    {
+        // Clocked in on the main task at another terminal meanwhile: the
+        // replay must not switch (a start is no switch), but the lost choice
+        // has to be findable for whoever corrects the time per customer.
+        var (service, kimai, logger) = CreateServiceWithLogger();
+        await service.SyncKioskAsync([Kiosk("e1", "start", T08)]);
+
+        var result = await service.SyncKioskAsync([StartOn("e2", "kx", T10)]);
+
+        var single = Assert.Single(result.Results);
+        Assert.Equal("applied", single.Status);
+        Assert.Contains("Lief bereits auf einer anderen Taetigkeit", single.Message);
+        Assert.Single(kimai.Operations);
+        Assert.Contains(logger.Messages, message => message.Contains("task choice is dropped"));
+    }
+
+    [Fact]
+    public async Task Start_OnDeletedTask_KeepsTheWorkingTimeOnTheDefaultTask()
+    {
+        // Rejecting would lose the whole time until the next stamp: book the
+        // default task instead. Nobody reads the replay message of an applied
+        // event, so the note goes onto the timesheet itself.
+        var (service, kimai, logger) = CreateServiceWithLogger();
+
+        var result = await service.SyncKioskAsync([StartOn("e1", "gone", T08)]);
+
+        var single = Assert.Single(result.Results);
+        Assert.Equal("applied", single.Status);
+        Assert.Contains("gelöscht", single.Message);
+        var target = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((7, 9), (target.ProjectId, target.ActivityId));
+        Assert.Contains("gelöscht", target.Description);
+        Assert.Contains(logger.Messages, message => message.Contains("no longer exists"));
+    }
+
+    [Fact]
     public async Task Switch_AlreadyOnTarget_IsNoOp()
     {
         // The switch was applied live and ALSO queued (request timed out on
@@ -748,6 +816,9 @@ public sealed class OfflineClockServiceTests
 
     private static OfflineKioskClockEventDto Switch(string eventId, string? taskId, DateTimeOffset at) =>
         new(eventId, "max", "1234", "switch", at, null, taskId);
+
+    private static OfflineKioskClockEventDto StartOn(string eventId, string? taskId, DateTimeOffset at) =>
+        new(eventId, "max", "1234", "start", at, null, taskId);
 
     private static OfflineKioskClockEventDto Kiosk(string eventId, string action, DateTimeOffset at, string? pin = "1234") =>
         new(eventId, "max", pin, action, at);
