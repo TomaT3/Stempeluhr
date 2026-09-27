@@ -171,6 +171,14 @@ BOOKINGS=$(curl -s "$KIMAI_URL/_bookings")
 KX=$(echo "$BOOKINGS" | grep -o '"project": 5' | wc -l)
 [ "$KX" -ge 2 ] && ok "Kunde X zweimal gebucht (vor und nach der Pause, $KX Einträge)" || bad "Erwartet 2 Buchungen auf Projekt 5, war $KX"
 
+R=$(sync_max task-8 start 2026-08-25T08:00:00+02:00 kx)
+assert_status 'Nachgetragen: Einstempeln' "$R" "Einstempeln direkt auf Kunde X nachgetragen"
+assert_status '"activeTaskId":"kx"' "$(login_max)" "Status zeigt Kunde X ab dem Einstempeln"
+HTTP=$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "$API_URL/api/kiosk/clock" -H 'Content-Type: application/json'   -d '{"employeeId":"test-max","pin":"1234","action":"start","taskId":"gibt-es-nicht"}')
+[ "$HTTP" = "400" ] && ok "Live-Einstempeln auf unbekannte Tätigkeit -> 400" || bad "Unbekannte Tätigkeit erwartet 400, war $HTTP"
+R=$(sync_max task-9 stop 2026-08-25T12:00:00+02:00)
+assert_status '"clockedOut"' "$R" "Ausstempeln nach Einstempeln auf Kunde X"
+
 # ------------------------------------------------- Test 1b: Stundenübersicht
 say "Test 1b: Stundenübersicht (Max stempelt heute 2h -> /api/kiosk/hours)"
 

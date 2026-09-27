@@ -9,8 +9,8 @@ public static class TelegramMessageFactory
 {
     /// <summary>
     /// Aktionen entsprechen den Clock-Aktionen aus <c>KioskClockRequest.Action</c>.
-    /// <paramref name="taskLabel"/> ist nur beim Wechsel ("switch") relevant:
-    /// Ziel-Tätigkeit, null = zurück zur Standard-Tätigkeit.
+    /// <paramref name="taskLabel"/> gilt für "start" (Tätigkeit, null = ohne
+    /// Angabe) und "switch" (Ziel, null = zurück zur Standard-Tätigkeit).
     /// </summary>
     public static string Build(
         string employeeName,
@@ -21,7 +21,9 @@ public static class TelegramMessageFactory
     {
         var (emoji, label) = action.ToLowerInvariant() switch
         {
-            "start" => ("🟢", "eingestempelt"),
+            "start" => ("🟢", string.IsNullOrWhiteSpace(taskLabel)
+                ? "eingestempelt"
+                : $"eingestempelt auf {taskLabel}"),
             "stop" => ("🔴", "ausgestempelt"),
             "pausestart" => ("🟡", "Pause"),
             "pauseend" => ("🟢", "Pause beendet"),

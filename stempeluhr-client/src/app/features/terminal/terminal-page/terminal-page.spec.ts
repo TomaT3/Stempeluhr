@@ -548,4 +548,98 @@ describe('TerminalPage', () => {
       expect(fixture.componentInstance.clockState.isWorking()).toBe(true);
     });
   });
+
+  describe('clock in on a task', () => {
+    const tasks = [{ id: 'kx', label: 'Kunde X' }];
+
+    function unlockClockedOut(fixture: ComponentFixture<TerminalPage>, employeeTasks = tasks): void {
+      const component = fixture.componentInstance;
+      ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+      pinLoginResult.next({ employee: { ...session.employee, tasks: employeeTasks, defaultTaskLabel: 'Büro' }, status });
+      fixture.detectChanges();
+    }
+
+    function startOptions(fixture: ComponentFixture<TerminalPage>): HTMLButtonElement[] {
+      return [...fixture.nativeElement.querySelectorAll('.task-button.start-task')] as HTMLButtonElement[];
+    }
+
+    it('keeps the single Einstempeln button without further tasks', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockClockedOut(fixture, []);
+
+      expect(fixture.nativeElement.querySelector('.action-button.start.single')).not.toBeNull();
+      expect(startOptions(fixture)).toEqual([]);
+    });
+
+    it('shows the task choice right away and clocks in on the chosen task with one tap', () => {
+      clockImpl.mockImplementation(() => of({
+        ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt',
+        startedAt: '2026-09-27T06:00:00Z', activeTaskId: 'kx', activeTaskLabel: 'Kunde X',
+      }));
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockClockedOut(fixture);
+
+      expect(fixture.nativeElement.querySelector('.action-button.start')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.start-choice-title')?.textContent).toContain('Einstempeln auf');
+      const options = startOptions(fixture);
+      expect(options.map(option => option.textContent?.trim())).toEqual(['Büro', 'Kunde X']);
+      // Clocked out there is nothing to go back to: no Abbrechen.
+      expect(fixture.nativeElement.querySelector('.task-cancel')).toBeNull();
+
+      options[1].click();
+      fixture.detectChanges();
+
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx');
+      expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
+    });
+
+    it('clocks in on the main task without a task id', () => {
+      clockImpl.mockImplementation(() => of({ ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt' }));
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockClockedOut(fixture);
+
+      startOptions(fixture)[0].click();
+
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, null);
+    });
+
+    it('queues an offline clock-in with its task and shows that task as running', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockClockedOut(fixture);
+
+      fixture.componentInstance.startOnTask('kx');
+      fixture.detectChanges();
+
+      expect(enqueueKiosk).toHaveBeenCalledWith(expect.objectContaining({ action: 'start', taskId: 'kx' }));
+      expect(fixture.componentInstance.clockState.status()?.activeTaskId).toBe('kx');
+      expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
+    });
+
+    it('opens the choice from Einstempeln while the status is unknown - and back to both directions', () => {
+      window.localStorage.setItem(
+        'stempeluhr.employee-card-cache.v1',
+        JSON.stringify({ '04ABCD': { ...session.employee, tasks } }),
+      );
+      failPolls = true;
+      localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+
+      const fixture = TestBed.createComponent(TerminalPage);
+      vi.advanceTimersByTime(1_000);
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
+      (fixture.nativeElement.querySelector('.action-button.start') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(startOptions(fixture).length).toBe(2);
+      expect(enqueueKiosk).not.toHaveBeenCalled();
+
+      (fixture.nativeElement.querySelector('.task-cancel') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(startOptions(fixture)).toEqual([]);
+      expect(fixture.nativeElement.querySelector('.action-button.start')).not.toBeNull();
+      expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
+    });
+  });
 });

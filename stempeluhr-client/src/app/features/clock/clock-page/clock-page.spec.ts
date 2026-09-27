@@ -225,6 +225,24 @@ describe('ClockPage', () => {
     fixture.destroy();
   });
 
+  it('offers the task choice when clocking in and books the chosen task', () => {
+    const fixture = TestBed.createComponent(ClockPage);
+    const component = fixture.componentInstance;
+    ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+    pinLoginResult.next({ ...session, employee: { ...session.employee, tasks: [{ id: 'kx', label: 'Kunde X' }] } });
+    fixture.detectChanges();
+
+    // The plain Einstempeln button gives way to the choice (one tap per task).
+    expect(fixture.nativeElement.querySelector('.stamp-button.start')).toBeNull();
+    const options = [...fixture.nativeElement.querySelectorAll('.task-button.start-task')] as HTMLButtonElement[];
+    expect(options.map(option => option.textContent?.trim())).toEqual(['Standard-Tätigkeit', 'Kunde X']);
+
+    options[1].click();
+
+    const kioskApi = TestBed.inject(KioskApi) as unknown as { clock: ReturnType<typeof vi.fn> };
+    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx');
+  });
+
   it('keeps the hours card hidden before login and clears it on back()', () => {
     const fixture = TestBed.createComponent(ClockPage);
     const component = fixture.componentInstance;

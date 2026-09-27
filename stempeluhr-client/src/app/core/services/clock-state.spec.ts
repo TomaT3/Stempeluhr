@@ -39,6 +39,14 @@ describe('projectClockStatus', () => {
     expect(isOnDefaultTask(projectClockStatus(idle, 'start', at))).toBe(true);
   });
 
+  it('turns a queued start on a task into working on that task', () => {
+    const onTask = projectClockStatus(idle, 'start', at, { id: 'kx', label: 'Kunde X' });
+    expect(onTask.state).toBe('working');
+    expect(onTask.activeTaskId).toBe('kx');
+    expect(onTask.activeTaskLabel).toBe('Kunde X');
+    expect(isOnDefaultTask(onTask)).toBe(false);
+  });
+
   it('turns a queued task switch into working on that task - and back', () => {
     const working = projectClockStatus(idle, 'start', at);
 

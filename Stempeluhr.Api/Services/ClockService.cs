@@ -76,7 +76,8 @@ public sealed class ClockService(
         var context = FindEmployee(request);
         return context is null
             ? null
-            : await StartClockAsync(context.Settings, context.Employee, cancellationToken);
+            : await StartClockAsync(
+                context.Settings, context.Employee, WorkTargetResolver.ResolveDefault(context.Settings, context.Employee), cancellationToken);
     }
 
     public async Task<ClockStatusDto?> StopAsync(ClockRequest request, CancellationToken cancellationToken = default)
@@ -97,9 +98,17 @@ public sealed class ClockService(
 
         if (string.Equals(request.Action, "start", StringComparison.OrdinalIgnoreCase))
         {
+            // Wie beim Wechsel: eine unbekannte Tätigkeit ist ein Fehler, nie
+            // ein stilles Einstempeln auf etwas anderes.
+            var target = WorkTargetResolver.Resolve(context.Settings, context.Employee, request.TaskId);
+            if (target is null && !string.IsNullOrWhiteSpace(request.TaskId))
+            {
+                return new ClockActionResponse(ClockActionResult.BadRequest, null);
+            }
+
             return new ClockActionResponse(
                 ClockActionResult.Success,
-                await StartClockAsync(context.Settings, context.Employee, cancellationToken));
+                await StartClockAsync(context.Settings, context.Employee, target, cancellationToken));
         }
 
         if (string.Equals(request.Action, "stop", StringComparison.OrdinalIgnoreCase))
@@ -194,9 +203,15 @@ public sealed class ClockService(
             : null;
     }
 
+    /// <summary>
+    /// Einstempeln auf <paramref name="target"/> (null = Haupttätigkeit nicht
+    /// konfiguriert). Läuft schon etwas, bleibt es ein No-op - auch wenn es
+    /// eine andere Tätigkeit ist: dafür gibt es den Wechsel.
+    /// </summary>
     private async Task<ClockStatusDto> StartClockAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
+        KimaiTimesheetTarget? target,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
@@ -208,10 +223,15 @@ public sealed class ClockService(
             };
         }
 
-        var target = WorkTargetResolver.ResolveDefault(settings, employee)
-            ?? throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.");
+        if (target is null)
+        {
+            throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.");
+        }
+
         await kimai.StartAsync(settings, employee, target, cancellationToken);
-        NotifyTransition(settings, employee, "start");
+        // Nur mit weiteren Tätigkeiten sagt der Name etwas aus - sonst bleibt
+        // die Nachricht wie bisher.
+        NotifyTransition(settings, employee, "start", employee.Tasks is { Length: > 0 } ? WorkTargetResolver.DisplayName(target) : null);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
     }

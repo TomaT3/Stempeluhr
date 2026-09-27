@@ -97,6 +97,10 @@
         }
       </dl>
 
+      @if (startChoiceVisible()) {
+        <ng-container [ngTemplateOutlet]="startChoice" />
+      }
+
       @if (hoursOverview(); as hours) {
         <app-hours-overview-card [hours]="hours" />
       }
@@ -153,7 +157,7 @@
             <span class="stamp-label">Ausstempeln</span>
           </button>
         </div>
-      } @else {
+      } @else if (!startChoiceVisible()) {
         <button class="stamp-button start" type="button" (click)="start()" [disabled]="isBusy()">
           <span class="stamp-icon play"></span>
           <span class="stamp-label">Einstempeln</span>
@@ -176,17 +180,22 @@
       </dl>
 
       <!-- Status unbekannt: beide Richtungen anbieten, der Replay
-           validiert serverseitig (Doppelstempel wird dort erkannt). -->
-      <div class="stamp-actions">
-        <button class="stamp-button start" type="button" (click)="start()" [disabled]="isBusy()">
-          <span class="stamp-icon play"></span>
-          <span class="stamp-label">Einstempeln</span>
-        </button>
-        <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
-          <span class="stamp-icon square"></span>
-          <span class="stamp-label">Ausstempeln</span>
-        </button>
-      </div>
+           validiert serverseitig (Doppelstempel wird dort erkannt). Mit
+           weiteren Tätigkeiten öffnet Einstempeln erst die Auswahl. -->
+      @if (startChoiceVisible()) {
+        <ng-container [ngTemplateOutlet]="startChoice" />
+      } @else {
+        <div class="stamp-actions">
+          <button class="stamp-button start" type="button" (click)="requestStart()" [disabled]="isBusy()">
+            <span class="stamp-icon play"></span>
+            <span class="stamp-label">Einstempeln</span>
+          </button>
+          <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+            <span class="stamp-icon square"></span>
+            <span class="stamp-label">Ausstempeln</span>
+          </button>
+        </div>
+      }
     }
 
     @if (message()) {
@@ -194,5 +203,27 @@
     }
   </section>
 }
+
+<!-- Einstempeln mit weiteren Tätigkeiten: die Wahl steht an Stelle des
+     Einstempeln-Knopfs, ein Tipp bucht. Vor der Stundenkarte, damit sie auch
+     auf dem Handy ohne Scrollen zu sehen ist. -->
+<ng-template #startChoice>
+  <div class="task-picker start-choice" role="group" aria-labelledby="start-choice-title">
+    <p class="start-choice-title" id="start-choice-title">Einstempeln auf</p>
+    <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="startOnTask(null)">
+      <span class="stamp-icon play" aria-hidden="true"></span>
+      <span>{{ defaultTaskLabel() }}</span>
+    </button>
+    @for (task of employeeTasks(); track task.id) {
+      <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="startOnTask(task.id)">
+        <span class="stamp-icon play" aria-hidden="true"></span>
+        <span>{{ task.label }}</span>
+      </button>
+    }
+    @if (!clockState.status()) {
+      <button class="task-button cancel" type="button" (click)="closeTaskPicker()">Abbrechen</button>
+    }
+  </div>
+</ng-template>
 
 <app-version-badge />

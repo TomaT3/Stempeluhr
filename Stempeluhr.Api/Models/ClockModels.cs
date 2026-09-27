@@ -5,8 +5,9 @@ public sealed record ClockRequest(string EmployeeId, string? Pin);
 public sealed record KioskPinLoginRequest(string? Pin);
 
 /// <summary>
-/// One kiosk action. <paramref name="TaskId"/> is only used by the "switch"
-/// action: the task to switch to (null/empty = back to the default task).
+/// One kiosk action. <paramref name="TaskId"/> is only used by "start" and
+/// "switch": the task to clock in on resp. switch to (null/empty = the
+/// default task).
 /// </summary>
 public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action, string? NfcCardId, string? TaskId = null);
 
@@ -28,8 +29,9 @@ public sealed record NfcClockRequest(string? CardId, string? Action, string? Ter
 /// backdating. <paramref name="NfcCardId"/> optionally carries the card that
 /// unlocked the kiosk session (live-path parity: actions of an NFC-unlocked
 /// session replay without a PIN - the card must map to the same employee).
-/// <paramref name="TaskId"/> is the target of a "switch" action (null/empty =
-/// default task); queues from older clients simply lack it.
+/// <paramref name="TaskId"/> is the task of a "start" or the target of a
+/// "switch" (null/empty = default task); queues from older clients simply
+/// lack it.
 /// </summary>
 public sealed record OfflineKioskClockEventDto(
     string EventId,

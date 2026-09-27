@@ -15,7 +15,7 @@ export interface OfflineKioskClockEvent {
    */
   nfcCardId?: string | null;
   /**
-   * Target of a 'switch' action (null = back to the default task). Queues
+   * Task of a 'start' or target of a 'switch' (null = default task). Queues
    * written by older clients simply lack it.
    */
   taskId?: string | null;

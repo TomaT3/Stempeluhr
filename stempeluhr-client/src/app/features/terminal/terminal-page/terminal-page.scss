@@ -340,6 +340,32 @@ p {
   color: var(--color-muted);
 }
 
+/* Einstempeln auf eine Tätigkeit: Titel, Liste, ggf. Abbrechen. */
+.action-panel.start-choice {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.start-choice-title {
+  margin: 0;
+  color: var(--color-muted);
+  font-weight: 800;
+}
+
+.task-button.start-task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border-color: transparent;
+  background: linear-gradient(180deg, #199968, var(--color-success));
+  color: #fff;
+}
+
+/* Kleines Dreieck: nur die Kanten verkleinern, sonst geht die Form verloren. */
+.task-button.start-task .icon.play {
+  border-width: 10px 0 10px 16px;
+}
+
 .task-label {
   color: var(--color-text);
   font-size: clamp(0.9rem, 2vw, 1.05rem);
@@ -474,7 +500,8 @@ app-hours-overview-card {
 }
 
 .keypad button:disabled,
-.action-button:disabled {
+.action-button:disabled,
+.task-button.start-task:disabled {
   opacity: 0.64;
   cursor: wait;
 }
@@ -497,6 +524,11 @@ app-hours-overview-card {
   .action-button.single {
     grid-column: 1 / -1;
     grid-row: auto;
+  }
+
+  /* Auswahllisten bleiben einspaltig: Titel, Liste und Abbrechen untereinander. */
+  .action-panel.picker {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

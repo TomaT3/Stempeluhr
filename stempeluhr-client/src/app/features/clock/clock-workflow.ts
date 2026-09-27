@@ -48,7 +48,7 @@ interface PendingStamp {
   employeeName: string;
   pin: string;
   nfcCardId: string | null;
-  /** Target of a 'switch' (null = default task); frozen with the identity. */
+  /** Task of a 'start' or target of a 'switch' (null = default task); frozen with the identity. */
   task: EmployeeTask | null;
 }
 
@@ -128,6 +128,18 @@ export abstract class ClockWorkflow implements OnDestroy {
    * back() und jede abgeschickte Aktion schließt sie.
    */
   readonly taskPickerOpen = signal(false);
+
+  /**
+   * Einstempeln mit Tätigkeitswahl: Ausgestempelt steht die Auswahl sofort
+   * da (ein Tipp bucht), bei unbekanntem Status erst nach „Einstempeln“ -
+   * dort muss daneben auch „Ausstempeln“ Platz haben.
+   */
+  readonly startChoiceVisible = computed(() => {
+    if (this.employeeTasks().length === 0 || this.clockState.isWorking() || this.clockState.isPaused()) {
+      return false;
+    }
+    return this.clockState.status() !== null || this.taskPickerOpen();
+  });
 
   private resetTimer: number | null = null;
   /** Erreichbarkeits-Poll des Kiosks (nur mit terminalId). */
@@ -466,6 +478,20 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   endPause(): void {
     this.sendClockAction('pauseEnd');
+  }
+
+  /** Einstempeln-Knopf: mit weiteren Tätigkeiten erst die Auswahl zeigen. */
+  requestStart(): void {
+    if (this.employeeTasks().length > 0) {
+      this.openTaskPicker();
+      return;
+    }
+    this.start();
+  }
+
+  /** Stempelt direkt auf eine Tätigkeit ein (null = Haupttätigkeit). */
+  startOnTask(taskId: string | null): void {
+    this.sendClockAction('start', taskId);
   }
 
   openTaskPicker(): void {

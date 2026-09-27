@@ -318,8 +318,11 @@ public sealed class OfflineClockService(
                     return ("Lief bereits - kein Nachtrag noetig.", status.State);
                 }
 
-                await kimai.StartAtAsync(settings, employee, RequireDefaultTarget(settings, employee), timestamp, cancellationToken);
-                return ($"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}", "working");
+                var startTarget = ResolveStartTarget(settings, employee, taskId);
+                await kimai.StartAtAsync(settings, employee, startTarget, timestamp, cancellationToken);
+                return (startTarget.TaskId is null && !string.IsNullOrWhiteSpace(taskId)
+                    ? $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm} (Taetigkeit nicht mehr vorhanden - {WorkTargetResolver.DisplayName(startTarget)})"
+                    : $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}", "working");
 
             case "stop":
                 if (!status.IsRunning || status.ActiveTimesheetId is not int stopId)
@@ -611,6 +614,31 @@ public sealed class OfflineClockService(
     private static string SwitchAppliedMessage(KimaiTimesheetTarget target, DateTimeOffset timestamp)
     {
         return $"Nachgetragen: Wechsel zu {WorkTargetResolver.DisplayName(target)} {timestamp.ToLocalTime():HH:mm}";
+    }
+
+    /// <summary>
+    /// Tätigkeit eines nachgetragenen Einstempelns. Anders als beim Wechsel
+    /// (dort läuft die bisherige Arbeit weiter) ginge mit einer Ablehnung die
+    /// ganze Arbeitszeit bis zum nächsten Stempel verloren. Ist die Tätigkeit
+    /// inzwischen gelöscht, wird deshalb auf die Haupttätigkeit gebucht - laut
+    /// geloggt und in der Nachtrags-Meldung vermerkt.
+    /// </summary>
+    private KimaiTimesheetTarget ResolveStartTarget(RuntimeSettings settings, EmployeeSettings employee, string? taskId)
+    {
+        if (string.IsNullOrWhiteSpace(taskId))
+        {
+            return RequireDefaultTarget(settings, employee);
+        }
+
+        if (WorkTargetResolver.ResolveTask(employee, taskId) is { } task)
+        {
+            return task;
+        }
+
+        logger.LogWarning(
+            "Offline start on task {TaskId}: task no longer exists - booking the default task instead",
+            taskId);
+        return RequireDefaultTarget(settings, employee);
     }
 
     private static KimaiTimesheetTarget RequireDefaultTarget(RuntimeSettings settings, EmployeeSettings employee)
