@@ -163,6 +163,7 @@ HTTP=$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "$API_URL/api/kiosk/
 R=$(sync_max task-6 switch 2026-08-24T14:00:00+02:00)
 assert_status 'Standard-Taetigkeit' "$R" "Wechsel zurück zur Standard-Tätigkeit"
 assert_status '"activeTaskId":null' "$(login_max)" "Status zeigt wieder die Standard-Tätigkeit"
+assert_status '"activeIsDefaultTask":true' "$(login_max)" "Status erkennt die Standard-Tätigkeit"
 R=$(sync_max task-7 stop 2026-08-24T17:00:00+02:00)
 assert_status '"clockedOut"' "$R" "Ausstempeln"
 

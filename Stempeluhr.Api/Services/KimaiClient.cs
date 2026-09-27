@@ -30,7 +30,9 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             : 0;
         var activityId = GetId(current, "activity");
         var isPaused = settings.PauseActivityId is not null && activityId == settings.PauseActivityId;
-        var task = isPaused ? null : WorkTargetResolver.MatchTask(employee, GetId(current, "project"), activityId);
+        var projectId = GetId(current, "project");
+        var task = isPaused ? null : WorkTargetResolver.MatchTask(employee, projectId, activityId);
+        var onDefault = !isPaused && task is null && WorkTargetResolver.IsDefault(settings, employee, projectId, activityId);
 
         return new ClockStatusDto(
             true,
@@ -40,7 +42,8 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             isPaused ? "paused" : "working",
             isPaused ? "In Pause" : "Eingestempelt",
             task?.Id,
-            task?.Label);
+            task?.Label,
+            onDefault);
     }
 
     public Task StartAsync(
@@ -238,9 +241,10 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
     }
 
     /// <inheritdoc />
-    public async Task<KimaiRecentTimesheetDto?> GetLatestStoppedTimesheetAsync(
+    public async Task<IReadOnlyList<KimaiRecentTimesheetDto>> GetRecentStoppedTimesheetsAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
+        int count,
         CancellationToken cancellationToken = default)
     {
         // state=stopped excludes running and already-exported/closed entries;
@@ -248,29 +252,28 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         // (every employee has their own API token), so another employee's sheet
         // can never satisfy the interrupted-pauseEnd check. user=me would be
         // more explicit but Kimai rejects it with 400 (requirements: \d+|all).
-        var latest = await SendAsync<JsonElement[]>(
+        var entries = await SendAsync<JsonElement[]>(
             settings.BaseUrl,
             employee.ApiToken,
             HttpMethod.Get,
-            "api/timesheets?size=1&orderBy=end&order=DESC&state=stopped",
+            $"api/timesheets?size={Math.Max(1, count)}&orderBy=end&order=DESC&state=stopped",
             null,
             cancellationToken);
 
-        var entry = latest.FirstOrDefault();
-        if (entry.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
-        {
-            return null;
-        }
+        return entries
+            .Where(entry => entry.ValueKind == JsonValueKind.Object)
+            .Select(entry =>
+            {
+                DateTimeOffset? endedAt = null;
+                if (entry.TryGetProperty("end", out var end) && end.ValueKind == JsonValueKind.String
+                    && DateTimeOffset.TryParse(end.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+                {
+                    endedAt = parsed;
+                }
 
-        var activityId = GetId(entry, "activity");
-        DateTimeOffset? endedAt = null;
-        if (entry.TryGetProperty("end", out var end) && end.ValueKind == JsonValueKind.String
-            && DateTimeOffset.TryParse(end.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
-        {
-            endedAt = parsed;
-        }
-
-        return new KimaiRecentTimesheetDto(activityId, endedAt, GetId(entry, "project"));
+                return new KimaiRecentTimesheetDto(GetId(entry, "activity"), endedAt, GetId(entry, "project"));
+            })
+            .ToList();
     }
 
     /// <inheritdoc />

@@ -119,8 +119,8 @@
               <button
                 class="task-button"
                 type="button"
-                [class.active]="!clockStatus.activeTaskId"
-                [disabled]="isBusy() || !clockStatus.activeTaskId"
+                [class.active]="onDefaultTask()"
+                [disabled]="isBusy() || onDefaultTask()"
                 (click)="switchTask(null)">
                 {{ defaultTaskLabel() }}
               </button>

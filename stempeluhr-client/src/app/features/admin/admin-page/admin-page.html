@@ -277,10 +277,10 @@
                     Aktivitaet
                     <select (change)="updateEmployeeTask(index, taskIndex, { activityId: toNumber($any($event.target).value) })">
                       <option value="" [selected]="task.activityId === null">Bitte waehlen</option>
-                      @if (task.activityId !== null && !hasKimaiActivity(task.activityId)) {
+                      @if (task.activityId !== null && !hasActivityForProject(task.activityId, task.projectId)) {
                         <option [value]="task.activityId" selected>{{ missingActivityLabel(task.activityId) }}</option>
                       }
-                      @for (activity of kimaiActivities(); track activity.id) {
+                      @for (activity of activitiesForProject(task.projectId); track activity.id) {
                         <option [value]="activity.id" [selected]="task.activityId === activity.id">{{ activityOptionLabel(activity) }}</option>
                       }
                     </select>

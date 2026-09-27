@@ -263,8 +263,36 @@ export class AdminPage implements OnDestroy {
     }
 
     this.updateEmployee(index, {
-      tasks: (employee.tasks ?? []).map((task, i) => (i === taskIndex ? { ...task, ...patch } : task)),
+      tasks: (employee.tasks ?? []).map((task, i) => {
+        if (i !== taskIndex) {
+          return task;
+        }
+
+        const updated = { ...task, ...patch };
+        // A project-bound activity of another project would make Kimai
+        // reject the start AFTER the switch already stopped the running sheet.
+        return this.isActivityAllowedForProject(updated.activityId, updated.projectId)
+          ? updated
+          : { ...updated, activityId: null };
+      }),
     });
+  }
+
+  /** Aktivitäten, die Kimai für dieses Projekt akzeptiert: globale plus die des Projekts. */
+  activitiesForProject(projectId: number | null): KimaiActivity[] {
+    return projectId === null
+      ? this.kimaiActivities()
+      : this.kimaiActivities().filter(activity => activity.projectId === null || activity.projectId === projectId);
+  }
+
+  hasActivityForProject(activityId: number | null, projectId: number | null): boolean {
+    return activityId !== null && this.activitiesForProject(projectId).some(activity => activity.id === activityId);
+  }
+
+  private isActivityAllowedForProject(activityId: number | null, projectId: number | null): boolean {
+    // Unknown activities (list not loaded) stay untouched.
+    const activity = this.kimaiActivities().find(candidate => candidate.id === activityId);
+    return !activity || projectId === null || activity.projectId === null || activity.projectId === projectId;
   }
 
   removeEmployeeTask(index: number, taskIndex: number): void {

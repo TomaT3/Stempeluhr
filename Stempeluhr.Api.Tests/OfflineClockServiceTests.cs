@@ -591,6 +591,128 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task Switch_ClockOutElsewhereRightAfterQueuedSwitch_IsRejectedWithoutPhantomStart()
+    {
+        // Terminal A queued "switch to Kunde X" at 10:00:00; 20 s later the
+        // employee clocked out on terminal B. Kimai then looks exactly like a
+        // half-done switch (latest stopped = work sheet ending at the event),
+        // but this server never stopped it - resuming would book Kunde X
+        // until the next morning.
+        var (service, kimai) = CreateService();
+        await service.SyncKioskAsync([Kiosk("e1", "start", T08)]);
+        kimai.SimulateLiveStop(T10.AddSeconds(20));
+        var before = kimai.Operations.Count;
+
+        var result = await service.SyncKioskAsync([Switch("e2", "kx", T10)]);
+
+        var single = Assert.Single(result.Results);
+        Assert.Equal("rejected", single.Status);
+        Assert.Contains("nicht eindeutig", single.Message);
+        Assert.Equal(before, kimai.Operations.Count);
+        Assert.False(kimai.IsRunning);
+    }
+
+    [Fact]
+    public async Task Switch_AppliedLiveThenStoppedNearEvent_IsNoOp()
+    {
+        // The switch reached Kimai live (the kiosk queued it anyway after a
+        // timeout), then the employee clocked out within the tolerance: the
+        // stopped sheet already ran on the target - nothing is missing.
+        var (service, kimai) = CreateService();
+        await service.SyncKioskAsync([Kiosk("e1", "start", T08), Switch("e2", "kx", T10)]);
+        kimai.SimulateLiveStop(T10.AddSeconds(20));
+        var before = kimai.Operations.Count;
+
+        var result = await service.SyncKioskAsync([Switch("e3", "kx", T10)]);
+
+        Assert.Equal("applied", result.Results.Single().Status);
+        Assert.Contains("nicht nachtragbar", result.Results.Single().Message);
+        Assert.Equal(before, kimai.Operations.Count);
+    }
+
+    [Fact]
+    public async Task Switch_RecoveryFailingAgain_StillResumesOnTheNextRetry()
+    {
+        var (service, kimai) = CreateService();
+        await service.SyncKioskAsync([Kiosk("e1", "start", T08)]);
+
+        // Start fails in the batch AND in the recovery of the trailing flush:
+        // the marker of the interrupted switch must survive both.
+        kimai.FailNextStartCalls = 2;
+        await service.SyncKioskAsync([Switch("e2", "kx", T10)]);
+        Assert.False(kimai.IsRunning);
+
+        await service.FlushOutboxAsync();
+
+        Assert.Equal([("start", T08), ("stop", T10), ("start", T10)], kimai.Operations);
+        Assert.Equal((20, 21), (kimai.StartedTargets[^1].ProjectId, kimai.StartedTargets[^1].ActivityId));
+    }
+
+    [Fact]
+    public async Task Switch_InterruptedAfterStop_TaskDeletedBeforeRetry_IsDroppedLoudly()
+    {
+        var (service, kimai, logger, settings) = CreateServiceWithSettings();
+        await service.SyncKioskAsync([Kiosk("e1", "start", T08)]);
+
+        // Start fails in the batch AND in the trailing flush: the event stays
+        // buffered while the employee is already stopped at 10:00.
+        kimai.FailNextStartCalls = 2;
+        await service.SyncKioskAsync([Switch("e2", "kx", T10)]);
+        Assert.False(kimai.IsRunning);
+
+        // Admin removes the task before the next retry.
+        settings.Employees[0].Tasks[0] = new EmployeeTaskSettings { Id = "kx", Label = "Kunde X" };
+        await service.FlushOutboxAsync();
+
+        Assert.Equal([("start", T08), ("stop", T10)], kimai.Operations);
+        Assert.Contains(logger.Messages, m => m.Contains("dropping kiosk event e2"));
+    }
+
+    [Fact]
+    public async Task Switch_ToDefault_WhileOnUnknownSheet_Applies()
+    {
+        // A sheet that matches no task (deleted task, booking from the Kimai
+        // UI) is NOT the default task: switching back must still happen.
+        var (service, kimai) = CreateService();
+        kimai.SimulateLiveStart(T08);
+
+        var result = await service.SyncKioskAsync([Switch("e1", null, T10)]);
+
+        Assert.Equal("applied", result.Results.Single().Status);
+        Assert.Equal([("start", T08), ("stop", T10), ("start", T10)], kimai.Operations);
+        Assert.Equal((7, 9), (kimai.StartedTargets[^1].ProjectId, kimai.StartedTargets[^1].ActivityId));
+    }
+
+    [Fact]
+    public async Task Switch_ToDefault_WhileOnDefault_IsNoOp()
+    {
+        var (service, kimai) = CreateService();
+        await service.SyncKioskAsync([Kiosk("e1", "start", T08)]);
+
+        var result = await service.SyncKioskAsync([Switch("e2", null, T10)]);
+
+        Assert.Contains("Lief bereits", result.Results.Single().Message);
+        Assert.Single(kimai.Operations);
+    }
+
+    [Fact]
+    public async Task PauseEnd_InterruptedAfterPauseStop_ResumesTaskThatRanBeforeThePause()
+    {
+        var (service, kimai) = CreateService();
+        await service.SyncKioskAsync([Kiosk("e1", "start", T08), Switch("e2", "kx", T10), Kiosk("e3", "pauseStart", T12)]);
+
+        // The resume-start fails after the pause stop; the trailing flush
+        // completes the interrupted pause end.
+        kimai.FailNextStartCalls = 1;
+        await service.SyncKioskAsync([Kiosk("e4", "pauseEnd", T1230)]);
+
+        Assert.Equal(("start", T1230), kimai.Operations[^1]);
+        Assert.Equal((20, 21), (kimai.StartedTargets[^1].ProjectId, kimai.StartedTargets[^1].ActivityId));
+        Assert.True(kimai.IsRunning);
+        Assert.False(kimai.ActiveIsPause);
+    }
+
+    [Fact]
     public async Task PauseEnd_Replay_ResumesTaskThatRanBeforeThePause()
     {
         var (service, kimai) = CreateService();
@@ -638,6 +760,12 @@ public sealed class OfflineClockServiceTests
 
     private static (OfflineClockService Service, FakeKimaiClient Kimai, RecordingLogger Logger) CreateServiceWithLogger()
     {
+        var (service, kimai, logger, _) = CreateServiceWithSettings();
+        return (service, kimai, logger);
+    }
+
+    private static (OfflineClockService Service, FakeKimaiClient Kimai, RecordingLogger Logger, RuntimeSettings Settings) CreateServiceWithSettings()
+    {
         var settings = new RuntimeSettings
         {
             BaseUrl = "http://kimai.test",
@@ -683,7 +811,7 @@ public sealed class OfflineClockServiceTests
             new InMemoryEventIdStore(),
             logger);
 
-        return (service, kimai, logger);
+        return (service, kimai, logger, settings);
     }
 
     /// <summary>
@@ -797,6 +925,21 @@ public sealed class OfflineClockServiceTests
             _activeBeganAt = beganAt;
         }
 
+        /// <summary>
+        /// Simulates a LIVE stop (e.g. Ausstempeln on another terminal) of
+        /// the running sheet at <paramref name="stoppedAt"/>.
+        /// </summary>
+        public void SimulateLiveStop(DateTimeOffset stoppedAt)
+        {
+            Operations.Add(("stop", stoppedAt));
+            _stoppedTimesheets.Add((_activeActivityId!.Value, _activeProjectId, stoppedAt));
+            _activeTimesheetId = null;
+            _activeActivityId = null;
+            _activeProjectId = null;
+            _activeIsPause = false;
+            _activeBeganAt = null;
+        }
+
         public Task<ClockStatusDto> GetStatusAsync(
             RuntimeSettings settings,
             EmployeeSettings employee,
@@ -811,6 +954,8 @@ public sealed class OfflineClockServiceTests
             var running = _activeTimesheetId is not null;
             var state = !running ? "clockedOut" : _activeIsPause ? "paused" : "working";
             var task = running && !_activeIsPause ? WorkTargetResolver.MatchTask(employee, _activeProjectId, _activeActivityId) : null;
+            var onDefault = running && !_activeIsPause && task is null
+                && WorkTargetResolver.IsDefault(settings, employee, _activeProjectId, _activeActivityId);
             return Task.FromResult(new ClockStatusDto(
                 running,
                 _activeTimesheetId,
@@ -819,7 +964,8 @@ public sealed class OfflineClockServiceTests
                 state,
                 running ? "Eingestempelt" : "Nicht eingestempelt",
                 task?.Id,
-                task?.Label));
+                task?.Label,
+                onDefault));
         }
 
         public Task StartAtAsync(
@@ -866,18 +1012,18 @@ public sealed class OfflineClockServiceTests
             return Task.CompletedTask;
         }
 
-        public Task<KimaiRecentTimesheetDto?> GetLatestStoppedTimesheetAsync(
+        public Task<IReadOnlyList<KimaiRecentTimesheetDto>> GetRecentStoppedTimesheetsAsync(
             RuntimeSettings settings,
             EmployeeSettings employee,
+            int count,
             CancellationToken cancellationToken = default)
         {
-            if (_stoppedTimesheets.Count == 0)
-            {
-                return Task.FromResult<KimaiRecentTimesheetDto?>(null);
-            }
-
-            var last = _stoppedTimesheets[^1];
-            return Task.FromResult<KimaiRecentTimesheetDto?>(new KimaiRecentTimesheetDto(last.ActivityId, last.EndedAt, last.ProjectId));
+            IReadOnlyList<KimaiRecentTimesheetDto> recent = _stoppedTimesheets
+                .OrderByDescending(sheet => sheet.EndedAt)
+                .Take(count)
+                .Select(sheet => new KimaiRecentTimesheetDto(sheet.ActivityId, sheet.EndedAt, sheet.ProjectId))
+                .ToList();
+            return Task.FromResult(recent);
         }
 
         public Task<string?> GetCurrentUserTimezoneAsync(

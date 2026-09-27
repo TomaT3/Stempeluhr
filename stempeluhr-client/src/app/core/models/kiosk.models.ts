@@ -22,9 +22,21 @@ export interface ClockStatus {
   durationSeconds: number;
   state: 'clockedOut' | 'working' | 'paused';
   stateText: string;
-  /** Laufende weitere Tätigkeit; null/fehlend = Standard-Tätigkeit (oder Pause/aus). */
+  /** Laufende weitere Tätigkeit; null/fehlend = Standard-Tätigkeit, fremde Buchung (oder Pause/aus). */
   activeTaskId?: string | null;
   activeTaskLabel?: string | null;
+  /**
+   * Arbeit läuft auf der Standard-Tätigkeit. false bei einer Buchung, die
+   * keiner Tätigkeit entspricht (gelöschte Tätigkeit, Kimai-Oberfläche)
+   * oder deren Tätigkeit offline unbekannt ist. Fehlt bei älteren Antworten
+   * und Cache-Einträgen - dann gilt `!activeTaskId` (siehe isOnDefaultTask).
+   */
+  activeIsDefaultTask?: boolean | null;
+}
+
+/** Läuft die Arbeit auf der Standard-Tätigkeit? Ältere Status ohne Flag: kein activeTaskId. */
+export function isOnDefaultTask(status: ClockStatus | null | undefined): boolean {
+  return status?.activeIsDefaultTask ?? !status?.activeTaskId;
 }
 
 export interface KioskEmployeeSession {

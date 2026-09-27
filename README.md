@@ -127,7 +127,10 @@ gewählten Tätigkeit (wie bei der Pause). Die Arbeitszeit bleibt lückenlos, in
 Kimai lässt sich die Zeit pro Kunde auswerten, und die Stundenübersicht zählt
 alles außer Pause. Nach einer Pause läuft die Tätigkeit von vor der Pause
 weiter; Einstempeln startet immer die Haupttätigkeit. Offline gewählte
-Wechsel werden wie alle Stempel nachgetragen.
+Wechsel werden wie alle Stempel nachgetragen. Lässt sich ein Wechsel nicht
+eindeutig nachtragen (z. B. weil kurz danach an einem anderen Terminal
+ausgestempelt wurde), meldet der Kiosk ihn als abgelehnt, statt eine Buchung
+zu raten.
 
 Die Dauer im Statusfeld zählt nur den laufenden Abschnitt (z. B. „Kunde X
 seit 10:15“) und beginnt nach Wechsel oder Pausenende neu; die Tagessumme
@@ -138,7 +141,10 @@ und dem Kimai-Benutzer des Mitarbeiters Zugriff darauf geben (Team). Ohne
 Zugriff lehnt Kimai den Wechsel ab („Kimai konnte nicht speichern“). Jede
 Tätigkeit braucht ein eigenes Paar aus Projekt und Aktivität, das sich von der
 Standard-Tätigkeit und der Pause unterscheidet – daran erkennt die Stempeluhr,
-welche Tätigkeit gerade läuft.
+welche Tätigkeit gerade läuft. Im Admin stehen dafür nur Aktivitäten zur Wahl,
+die Kimai für das gewählte Projekt annimmt (globale und die des Projekts).
+Läuft eine Buchung, die zu keiner Tätigkeit passt (z. B. nach dem Löschen
+einer Tätigkeit), bleibt der Wechsel zu jeder Tätigkeit möglich.
 
 ### Telegram-Benachrichtigung (optional)
 

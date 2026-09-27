@@ -27,9 +27,10 @@ export function projectClockStatus(
         stateText: switchTarget ? `Wechsel zu ${switchTarget}` : 'Zurück zur Standard-Tätigkeit',
         activeTaskId: task?.id ?? null,
         activeTaskLabel: task?.label ?? null,
+        activeIsDefaultTask: task === null,
       };
     case 'start':
-    case 'pauseEnd':
+      // Einstempeln startet immer die Standard-Tätigkeit.
       return {
         isRunning: true,
         activeTimesheetId: current?.activeTimesheetId ?? null,
@@ -37,6 +38,20 @@ export function projectClockStatus(
         durationSeconds: 0,
         state: 'working',
         stateText: 'Eingestempelt',
+        activeIsDefaultTask: true,
+      };
+    case 'pauseEnd':
+      // The server resumes the task from before the pause, which the kiosk
+      // does not know offline: neither a task nor the default task, so no
+      // task button claims to be the running one.
+      return {
+        isRunning: true,
+        activeTimesheetId: current?.activeTimesheetId ?? null,
+        startedAt: performedAt,
+        durationSeconds: 0,
+        state: 'working',
+        stateText: 'Eingestempelt',
+        activeIsDefaultTask: false,
       };
     case 'pauseStart':
       return {

@@ -61,10 +61,7 @@ public static class WorkTargetResolver
     /// <summary>Weitere Tätigkeit des Mitarbeiters oder null (unbekannt/unvollständig).</summary>
     public static KimaiTimesheetTarget? ResolveTask(EmployeeSettings employee, string taskId)
     {
-        var task = FindTask(employee, taskId);
-        return task is { ProjectId: int projectId, ActivityId: int activityId }
-            ? new KimaiTimesheetTarget(projectId, activityId, task.Label, task.Billable, task.Id, task.Label)
-            : null;
+        return ToTarget(FindTask(employee, taskId));
     }
 
     /// <summary>
@@ -105,16 +102,33 @@ public static class WorkTargetResolver
         KimaiRecentTimesheetDto? beforePause)
     {
         var task = beforePause is null ? null : MatchTask(employee, beforePause.ProjectId, beforePause.ActivityId);
-        return (task is null ? null : ResolveTask(employee, task.Id)) ?? ResolveDefault(settings, employee);
+        return ToTarget(task) ?? ResolveDefault(settings, employee);
+    }
+
+    /// <summary>True when a timesheet with this project/activity books on the default task.</summary>
+    public static bool IsDefault(RuntimeSettings settings, EmployeeSettings employee, int? projectId, int? activityId)
+    {
+        return ResolveDefault(settings, employee) is { } standard && BooksOn(standard, projectId, activityId);
+    }
+
+    /// <summary>True when a timesheet with this project/activity books on <paramref name="target"/>.</summary>
+    public static bool BooksOn(KimaiTimesheetTarget target, int? projectId, int? activityId)
+    {
+        return target.ProjectId == projectId && target.ActivityId == activityId;
     }
 
     /// <summary>
-    /// True when the running WORK sheet already books on <paramref name="target"/>
-    /// (both null = default task). Callers rule out pause/clocked out first.
+    /// True when the running WORK sheet already books on <paramref name="target"/>.
+    /// The default task only counts when the sheet really books on it: a
+    /// sheet that matches no task (deleted task, booking from the Kimai UI)
+    /// is not the default task, so a switch to the default still applies.
+    /// Callers rule out pause/clocked out first.
     /// </summary>
     public static bool IsRunningOn(ClockStatusDto running, KimaiTimesheetTarget target)
     {
-        return string.Equals(running.ActiveTaskId, target.TaskId, StringComparison.OrdinalIgnoreCase);
+        return target.TaskId is null
+            ? running.ActiveIsDefaultTask
+            : string.Equals(running.ActiveTaskId, target.TaskId, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -124,6 +138,13 @@ public static class WorkTargetResolver
     public static string DisplayName(KimaiTimesheetTarget target)
     {
         return target.Label ?? (target.TaskId is null ? "Standard-Taetigkeit" : "Taetigkeit");
+    }
+
+    private static KimaiTimesheetTarget? ToTarget(EmployeeTaskSettings? task)
+    {
+        return task is { ProjectId: int projectId, ActivityId: int activityId }
+            ? new KimaiTimesheetTarget(projectId, activityId, task.Label, task.Billable, task.Id, task.Label)
+            : null;
     }
 
     private static EmployeeTaskSettings? FindTask(EmployeeSettings employee, string taskId)

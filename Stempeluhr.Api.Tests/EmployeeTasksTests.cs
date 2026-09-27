@@ -156,6 +156,20 @@ public sealed class EmployeeTasksTests
 
         Assert.Equal("working", status.State);
         Assert.Null(status.ActiveTaskId);
+        Assert.True(status.ActiveIsDefaultTask);
+    }
+
+    [Fact]
+    public async Task KimaiStatus_UnknownSheet_IsNeitherTaskNorDefault()
+    {
+        var client = CreateKimaiClient(
+            """[{"id":5,"begin":"2026-09-05T08:00:00+0200","duration":0,"project":30,"activity":31}]""");
+
+        var status = await client.GetStatusAsync(Settings(CustomerX), Settings(CustomerX).Employees[0]);
+
+        Assert.Equal("working", status.State);
+        Assert.Null(status.ActiveTaskId);
+        Assert.False(status.ActiveIsDefaultTask);
     }
 
     private static AdminService CreateAdminService() => new(null!, null!);

@@ -39,15 +39,16 @@ public interface IKimaiClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the most recently STOPPED timesheet of the employee (null if
-    /// none exists). Used by the offline replay to verify that a "nothing is
-    /// running" state really comes from an interrupted two-step transaction
-    /// (pauseEnd, task switch), and by pauseEnd to resume the task that ran
-    /// before the pause.
+    /// Returns the <paramref name="count"/> most recently STOPPED timesheets
+    /// of the employee, latest end first (empty if none exist). Used by the
+    /// offline replay to verify that a "nothing is running" state really
+    /// comes from an interrupted two-step transaction (pauseEnd, task
+    /// switch), and by pauseEnd to resume the task that ran before the pause.
     /// </summary>
-    Task<KimaiRecentTimesheetDto?> GetLatestStoppedTimesheetAsync(
+    Task<IReadOnlyList<KimaiRecentTimesheetDto>> GetRecentStoppedTimesheetsAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
+        int count,
         CancellationToken cancellationToken = default);
 
     /// <summary>

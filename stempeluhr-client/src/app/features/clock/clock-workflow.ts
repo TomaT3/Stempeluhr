@@ -4,7 +4,7 @@ import { SwUpdate } from '@angular/service-worker';
 import { Subscription, finalize, timeout } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
-import { ClockAction, ClockStatus, Employee, EmployeeTask, HoursOverview } from '../../core/models/kiosk.models';
+import { ClockAction, ClockStatus, Employee, EmployeeTask, HoursOverview, isOnDefaultTask } from '../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../core/models/offline.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
@@ -113,8 +113,15 @@ export abstract class ClockWorkflow implements OnDestroy {
   /** Anzeigename der Haupttätigkeit (im Admin pflegbar, sonst neutral). */
   readonly defaultTaskLabel = computed(() => this.selectedEmployee()?.defaultTaskLabel?.trim() || 'Standard-Tätigkeit');
 
-  /** Tätigkeit, auf der gerade gearbeitet wird (weitere oder Haupttätigkeit). */
-  readonly currentTaskLabel = computed(() => this.clockState.status()?.activeTaskLabel || this.defaultTaskLabel());
+  /**
+   * Arbeit läuft auf der Haupttätigkeit. false auch bei einer Buchung, die
+   * keiner Tätigkeit entspricht - dann ist kein Auswahlknopf gesperrt.
+   */
+  readonly onDefaultTask = computed(() => isOnDefaultTask(this.clockState.status()));
+
+  /** Tätigkeit, auf der gerade gearbeitet wird (weitere, Haupttätigkeit oder unbekannt). */
+  readonly currentTaskLabel = computed(() =>
+    this.clockState.status()?.activeTaskLabel || (this.onDefaultTask() ? this.defaultTaskLabel() : 'Arbeit'));
 
   /**
    * Tätigkeitsauswahl offen. Gehört zur Sitzung: jeder Identitätswechsel,
@@ -805,7 +812,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       employeeName: this.selectedEmployee()?.displayName ?? '',
       pin: this.pin(),
       nfcCardId: this.nfcCardId,
-      task: taskId === null ? null : (this.employeeTasks().find(task => task.id === taskId) ?? { id: taskId, label: taskId }),
+      task: taskId === null ? null : (this.employeeTasks().find(task => task.id === taskId) ?? { id: taskId, label: 'Tätigkeit' }),
     };
 
     // Known outage: queue right away instead of letting the employee wait

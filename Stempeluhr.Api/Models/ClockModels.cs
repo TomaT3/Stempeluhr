@@ -84,7 +84,11 @@ public sealed record OfflineSyncEventResultDto(
 /// <summary>
 /// Stempelstatus. <see cref="ActiveTaskId"/>/<see cref="ActiveTaskLabel"/>
 /// nennen die weitere Tätigkeit, auf der gerade gearbeitet wird (null =
-/// Standard-Tätigkeit, Pause oder nicht eingestempelt).
+/// Standard-Tätigkeit, fremde Buchung, Pause oder nicht eingestempelt).
+/// <see cref="ActiveIsDefaultTask"/> ist nur true, wenn das laufende
+/// Arbeits-Timesheet auf Projekt/Aktivität der Standard-Tätigkeit bucht -
+/// eine gelöschte Tätigkeit oder eine Buchung aus der Kimai-Oberfläche ist
+/// weder weitere noch Standard-Tätigkeit.
 /// </summary>
 public sealed record ClockStatusDto(
     bool IsRunning,
@@ -94,7 +98,8 @@ public sealed record ClockStatusDto(
     string State,
     string StateText,
     string? ActiveTaskId = null,
-    string? ActiveTaskLabel = null);
+    string? ActiveTaskLabel = null,
+    bool ActiveIsDefaultTask = false);
 
 public enum ClockActionResult
 {

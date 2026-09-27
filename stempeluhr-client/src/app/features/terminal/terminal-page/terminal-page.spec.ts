@@ -479,6 +479,25 @@ describe('TerminalPage', () => {
       expect(first.textContent?.trim()).toBe('Büro');
     });
 
+    it('marks no task as running for a sheet that matches none (e.g. deleted task)', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      const component = fixture.componentInstance;
+      ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+      pinLoginResult.next({
+        employee: { ...session.employee, tasks: [{ id: 'kx', label: 'Kunde X' }], defaultTaskLabel: 'Büro' },
+        status: { ...working, activeIsDefaultTask: false },
+      });
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.task-label')?.textContent).not.toContain('Büro');
+
+      component.openTaskPicker();
+      fixture.detectChanges();
+      const options = [...fixture.nativeElement.querySelectorAll('.task-button')] as HTMLButtonElement[];
+      // Switching back to the main task must stay possible.
+      expect(options.map(option => option.disabled)).toEqual([false, false]);
+    });
+
     it('shows since when the section runs also without further tasks', () => {
       const fixture = TestBed.createComponent(TerminalPage);
       unlockWorking(fixture, []);

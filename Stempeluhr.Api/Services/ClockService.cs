@@ -299,18 +299,26 @@ public sealed class ClockService(
     /// <summary>
     /// Latest stopped timesheet while a pause runs = the sheet the pause
     /// interrupted. Only used to pick the task to resume, so a failing lookup
-    /// (e.g. an old Kimai) must not block the pause end: default task then.
+    /// (an old Kimai, a timeout) must not block the pause end: default task
+    /// then. Without further tasks the answer cannot matter - no request.
     /// </summary>
     private async Task<KimaiRecentTimesheetDto?> GetTimesheetBeforePauseAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
         CancellationToken cancellationToken)
     {
+        if (employee.Tasks is not { Length: > 0 })
+        {
+            return null;
+        }
+
         try
         {
-            return await kimai.GetLatestStoppedTimesheetAsync(settings, employee, cancellationToken);
+            var recent = await kimai.GetRecentStoppedTimesheetsAsync(settings, employee, 1, cancellationToken);
+            return recent.FirstOrDefault();
         }
-        catch (KimaiApiException ex)
+        catch (Exception ex) when (ex is KimaiApiException or HttpRequestException
+            || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
         {
             logger?.LogWarning(ex, "Timesheet before the pause could not be read - resuming the default task");
             return null;
