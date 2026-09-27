@@ -54,13 +54,16 @@
           @if (clockState.isWorking()) {
             <!-- Die Dauer zählt nur den laufenden Abschnitt (aktuelles Kimai-
                  Timesheet): nach Wechsel oder Pausenende beginnt sie neu. Das
-                 "seit" macht das sichtbar; die Tagessumme steht in der Stundenkarte. -->
-            @if (employeeTasks().length > 0 || status.startedAt) {
+                 "seit" macht das sichtbar; die Tagessumme steht in der Stundenkarte.
+                 Offline entfällt das "seit": vorgemerkt ist es nur der Moment des
+                 Tippens, und die längere Offline-Statuszeile braucht den Platz
+                 (800x480 darf nicht scrollen). -->
+            @if (employeeTasks().length > 0 || (status.startedAt && !isOffline())) {
               <em class="task-label">
                 @if (employeeTasks().length > 0) {
                   {{ currentTaskLabel() }}
                 }
-                @if (status.startedAt) {
+                @if (status.startedAt && !isOffline()) {
                   seit {{ status.startedAt | date: 'HH:mm' }}
                 }
               </em>

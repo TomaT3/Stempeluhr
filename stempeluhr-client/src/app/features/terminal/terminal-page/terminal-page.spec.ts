@@ -506,6 +506,26 @@ describe('TerminalPage', () => {
       expect(caption).toMatch(/^\s*seit \d{2}:\d{2}\s*$/);
     });
 
+    it('drops the "since" caption while offline to keep 800x480 free of scrolling', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockWorking(fixture, []);
+      fixture.componentInstance.isOffline.set(true);
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.task-label')).toBeNull();
+    });
+
+    it('keeps the task name but not the time while offline', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockWorking(fixture);
+      fixture.componentInstance.isOffline.set(true);
+      fixture.detectChanges();
+
+      const caption = fixture.nativeElement.querySelector('.task-label')?.textContent ?? '';
+      expect(caption).toContain('Standard-Tätigkeit');
+      expect(caption).not.toContain('seit');
+    });
+
     it('closes the picker when the session ends', () => {
       const fixture = TestBed.createComponent(TerminalPage);
       unlockWorking(fixture);
