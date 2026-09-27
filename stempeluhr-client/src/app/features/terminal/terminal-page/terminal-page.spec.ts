@@ -716,6 +716,53 @@ describe('TerminalPage', () => {
         expect(cache['04ABCD'].tasks).toEqual([{ id: 'ky', label: 'Kunde Y' }]);
       });
 
+      it('still refreshes the card cache when the employee acts before identify answers', () => {
+        const working: ClockStatus = {
+          ...status, isRunning: true, activeTimesheetId: 7, state: 'working', stateText: 'Eingestempelt', activeIsDefaultTask: true,
+        };
+        clockImpl.mockImplementation(() => of(working));
+        const fixture = scanCachedCard([{ id: 'gone', label: 'Gelöscht' }]);
+        fixture.componentInstance.start(null);
+
+        // The answer to the scan is older than the action's: only the card cache takes it.
+        identify$.next(identifyEvent({ employee: { ...session.employee, tasks: [{ id: 'ky', label: 'Kunde Y' }] } }));
+        fixture.detectChanges();
+
+        const cache = JSON.parse(window.localStorage.getItem('stempeluhr.employee-card-cache.v1') ?? '{}');
+        expect(cache['04ABCD'].tasks).toEqual([{ id: 'ky', label: 'Kunde Y' }]);
+        expect(fixture.componentInstance.clockState.status()?.state).toBe('working');
+        const statusCache = JSON.parse(window.localStorage.getItem('stempeluhr.employee-status-cache.v1') ?? '{}');
+        expect(statusCache['max'].status.state).toBe('working');
+      });
+
+      it('treats a card that now belongs to someone else as a new session', () => {
+        window.localStorage.setItem(
+          'stempeluhr.employee-status-cache.v1',
+          JSON.stringify({
+            max: {
+              status: { ...status, isRunning: true, activeTimesheetId: 5, state: 'working', stateText: 'Eingestempelt', activeIsDefaultTask: true },
+              observedAt: new Date().toISOString(),
+              origin: 'observed',
+            },
+          }),
+        );
+        const fixture = scanCachedCard();
+        fixture.componentInstance.openTaskPicker();
+        expect(fixture.componentInstance.taskPickerOpen()).toBe(true);
+
+        identify$.next(identifyEvent({
+          employee: { ...session.employee, id: 'anna', displayName: 'Anna', tasks },
+          status: null,
+        }));
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('anna');
+        expect(fixture.componentInstance.taskPickerOpen()).toBe(false);
+        // Nothing is known about Anna yet: never Max's status under her name.
+        expect(fixture.componentInstance.clockState.status()).toBeNull();
+        expect(fixture.componentInstance.message()).toContain('Anna');
+      });
+
       it('drops an identify answer that arrives after the session ended', () => {
         const fixture = scanCachedCard();
         fixture.componentInstance.back();

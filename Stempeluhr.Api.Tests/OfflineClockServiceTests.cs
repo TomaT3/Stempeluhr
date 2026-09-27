@@ -537,7 +537,26 @@ public sealed class OfflineClockServiceTests
 
         Assert.Equal("applied", result.Results.Single().Status);
         Assert.Contains("Lief bereits", result.Results.Single().Message);
+        Assert.DoesNotContain("anderen", result.Results.Single().Message);
         Assert.Single(kimai.Operations);
+    }
+
+    [Fact]
+    public async Task Start_OnTask_WhileAnotherTaskRuns_IsNoOpButLogged()
+    {
+        // Clocked in on the main task at another terminal meanwhile: the
+        // replay must not switch (a start is no switch), but the lost choice
+        // has to be findable for whoever corrects the time per customer.
+        var (service, kimai, logger) = CreateServiceWithLogger();
+        await service.SyncKioskAsync([Kiosk("e1", "start", T08)]);
+
+        var result = await service.SyncKioskAsync([StartOn("e2", "kx", T10)]);
+
+        var single = Assert.Single(result.Results);
+        Assert.Equal("applied", single.Status);
+        Assert.Contains("Lief bereits auf einer anderen Taetigkeit", single.Message);
+        Assert.Single(kimai.Operations);
+        Assert.Contains(logger.Messages, message => message.Contains("task choice is dropped"));
     }
 
     [Fact]

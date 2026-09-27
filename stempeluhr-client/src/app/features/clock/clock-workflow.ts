@@ -169,11 +169,15 @@ export abstract class ClockWorkflow implements OnDestroy {
   private pendingRecoveryFlush = false;
   private nfcCardId: string | null = null;
   /**
-   * Stille Status-Nachfrage nach einem Kartenscan aus dem Cache. Wird bei
-   * jedem Identitätswechsel und jeder Aktion abgebrochen: eine späte Antwort
-   * gehört dann nicht mehr zu dieser Sitzung bzw. ist älter als die der Aktion.
+   * Stille Nachfrage nach einem Kartenscan aus dem Cache. Ihre Antwort
+   * aktualisiert immer den Karten-Cache (er gehört zur Karte, nicht zur
+   * Sitzung), die Sitzung aber nur, solange `sessionGeneration` unverändert
+   * ist: nach einem Identitätswechsel gehört sie zu einer anderen Sitzung,
+   * nach einer Aktion ist ihr Status älter als der der Aktion.
    */
   private identifyRefresh: Subscription | null = null;
+  /** Zählt resetSessionChoices hoch - bei jedem Identitätswechsel und jeder Aktion. */
+  private sessionGeneration = 0;
   /** Unsubscribes the offline-queue recovery listener (see constructor). */
   private recoveryUnsubscribe: (() => void) | null = null;
   /**
@@ -546,12 +550,15 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.pendingResetOnRecovery = false;
   }
 
-  /** Auswahlen und die stille Status-Nachfrage gehören zur Sitzung bzw. zum Stand vor einer Aktion. */
+  /**
+   * Auswahlen gehören zur Sitzung bzw. zum Stand vor einer Aktion. Eine noch
+   * laufende stille Nachfrage darf danach nur noch den Karten-Cache
+   * aktualisieren (identifyRefresh).
+   */
   private resetSessionChoices(): void {
     this.taskPickerOpen.set(false);
     this.startChoiceOpen.set(false);
-    this.identifyRefresh?.unsubscribe();
-    this.identifyRefresh = null;
+    this.sessionGeneration++;
   }
 
   /**
@@ -752,26 +759,35 @@ export abstract class ClockWorkflow implements OnDestroy {
       // nachladen: der Cache kennt nur den letzten Stand, auch der Tätigkeiten
       // (die Einstempel-Auswahl böte sonst gelöschte an). Fehler (429, Netz)
       // ignorieren: der Employee ist bereits freigeschaltet, der Status kommt
-      // mit der ersten Aktion. Identitätswechsel und Aktionen brechen die
-      // Nachfrage ab (resetSessionChoices).
+      // mit der ersten Aktion. Nach einem Identitätswechsel oder einer Aktion
+      // aktualisiert die Antwort nur noch den Karten-Cache (identifyRefresh).
       if (!this.isOffline()) {
+        const generation = this.sessionGeneration;
+        this.identifyRefresh?.unsubscribe();
         this.identifyRefresh = this.kioskApi.identify(sessionCardId, this.terminalId ?? 'default').subscribe({
           next: event => {
             this.identifyRefresh = null;
             if (!event.success) {
               return;
             }
-            const current = event.employee ?? employee;
             if (event.employee) {
               rememberEmployeeCard(event.cardId ?? sessionCardId, event.employee);
+            }
+            if (generation !== this.sessionGeneration) {
+              return;
+            }
+            if (event.employee && event.employee.id !== employee.id) {
+              // Karte inzwischen umgehängt: ein Identitätswechsel wie jeder
+              // andere - nie Name, Status oder Auswahl des alten stehen lassen.
+              this.applyOfflineIdentity(event.employee, sessionCardId, null, event.status);
+              this.message.set(`${event.employee.displayName} - bitte Aktion waehlen.`);
+              return;
+            }
+            if (event.employee) {
               this.selectedEmployee.set(event.employee);
-              if (event.employee.id !== employee.id) {
-                // Karte inzwischen umgehängt: nie den alten Namen stehen lassen.
-                this.message.set(`${event.employee.displayName} - bitte Aktion waehlen.`);
-              }
             }
             if (event.status) {
-              this.applyObservedStatus(current.id, event.status);
+              this.applyObservedStatus(employee.id, event.status);
             }
           },
           error: () => {

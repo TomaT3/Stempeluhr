@@ -132,7 +132,9 @@ alles außer Pause. Nach einer Pause läuft die Tätigkeit von vor der Pause
 weiter. Offline gewählte Tätigkeiten werden wie alle Stempel nachgetragen;
 ist die Tätigkeit eines offline gestempelten Einstempelns inzwischen
 gelöscht, bucht der Nachtrag auf die Haupttätigkeit, damit keine Arbeitszeit
-verloren geht, und vermerkt das in der Beschreibung des Timesheets. Lässt
+verloren geht, und vermerkt das in der Beschreibung des Timesheets. Läuft
+beim Nachtrag schon eine andere Tätigkeit, bleibt das Einstempeln wie immer
+ein No-op; die verworfene Wahl steht dann im API-Log. Lässt
 sich ein Wechsel nicht eindeutig nachtragen (z. B. weil kurz danach an einem
 anderen Terminal ausgestempelt wurde), meldet der Kiosk ihn als abgelehnt,
 statt eine Buchung zu raten.
