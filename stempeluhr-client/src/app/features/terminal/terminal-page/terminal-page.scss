@@ -286,9 +286,14 @@ p {
   line-height: 1;
 }
 
+/* contain: size - eine lange Auswahlliste darf die Zeile nicht strecken,
+   sonst wächst die Seite und Abbrechen samt Stundenkarte rutschen unter den
+   Rand (800x480 scrollt nicht). Ohne eigene Größe nimmt die Spalte die Höhe
+   der Zeile an, und nur die Liste scrollt. Einspaltig aufgehoben (unten). */
 .action-panel.picker {
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 10px;
+  contain: size;
 }
 
 .task-list {
@@ -528,9 +533,11 @@ app-hours-overview-card {
     grid-row: auto;
   }
 
-  /* Auswahllisten bleiben einspaltig: Titel, Liste und Abbrechen untereinander. */
+  /* Auswahllisten bleiben einspaltig: Titel, Liste und Abbrechen untereinander.
+     Hier in eigener Zeile braucht die Spalte ihre Größe wieder. */
   .action-panel.picker {
     grid-template-columns: minmax(0, 1fr);
+    contain: none;
   }
 }
 
