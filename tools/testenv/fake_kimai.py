@@ -20,11 +20,19 @@ import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 LOCK = threading.Lock()
 TIMESHEETS: list[dict] = []
 NEXT_ID = 100
 LOG_PATH = "fake_kimai_log.jsonl"
+# Zeitzone des Token-Inhabers (/api/users/me). Ohne Zeitzonen-Daten (Windows
+# ohne tzdata) bleibt nur die Systemzeit.
+USER_TIMEZONE = "Europe/Berlin"
+try:
+    USER_TZ: ZoneInfo | None = ZoneInfo(USER_TIMEZONE)
+except ZoneInfoNotFoundError:
+    USER_TZ = None
 
 
 def now_iso() -> str:
@@ -44,8 +52,11 @@ def parse_query(path: str) -> dict:
 
 
 def to_local_naive(iso_str: str) -> datetime:
-    """ISO-String (mit Offset) -> naive Lokalzeit, wie Kimai sie filtert."""
-    return datetime.fromisoformat(iso_str).astimezone().replace(tzinfo=None)
+    """ISO-String (mit Offset) -> naive Zeit des Token-Inhabers, wie Kimai sie
+    filtert. Nicht die Systemzeit: die läuft in der CI auf UTC, die naiven
+    Grenzen der API aber auf Berliner Zeit - Buchungen kurz nach Mitternacht
+    fielen sonst aus einem Fenster, das heute beginnt."""
+    return datetime.fromisoformat(iso_str).astimezone(USER_TZ).replace(tzinfo=None)
 
 
 def to_list_dto(sheet: dict) -> dict:
@@ -95,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/users/me"):
             # Kimai: Zeitraum-Abfragen interpretiert naive Datetimes in der
             # Zeitzone des Token-Inhabers - die API erfragt sie hier.
-            self._send(200, {"id": 1, "username": "api", "timezone": "Europe/Berlin"})
+            self._send(200, {"id": 1, "username": "api", "timezone": USER_TIMEZONE})
             return
         if self.path.startswith("/api/timesheets/active"):
             with LOCK:
