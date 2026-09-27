@@ -43,6 +43,10 @@ describe('projectClockStatus', () => {
     const back = projectClockStatus(onTask, 'switch', at, null);
     expect(back.state).toBe('working');
     expect(back.activeTaskId).toBeNull();
+    expect(back.stateText).toBe('Zurück zur Standard-Tätigkeit');
+
+    const backNamed = projectClockStatus(onTask, 'switch', at, null, 'Büro');
+    expect(backNamed.stateText).toBe('Wechsel zu Büro');
   });
 
   it('turns a queued stop into a clocked-out status', () => {

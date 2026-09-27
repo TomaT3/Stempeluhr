@@ -243,14 +243,6 @@ h2 {
   background: linear-gradient(180deg, #d8523d, var(--color-danger));
 }
 
-.task-label {
-  margin: 0;
-  color: var(--color-text);
-  font-weight: 800;
-  text-align: center;
-  overflow-wrap: anywhere;
-}
-
 .task-switch-button,
 .task-button {
   width: min(680px, 100%);

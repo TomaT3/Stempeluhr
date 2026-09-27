@@ -110,6 +110,12 @@ export abstract class ClockWorkflow implements OnDestroy {
   /** Weitere Tätigkeiten des angemeldeten Mitarbeiters (leer = kein Wechselknopf). */
   readonly employeeTasks = computed(() => this.selectedEmployee()?.tasks ?? []);
 
+  /** Anzeigename der Haupttätigkeit (im Admin pflegbar, sonst neutral). */
+  readonly defaultTaskLabel = computed(() => this.selectedEmployee()?.defaultTaskLabel?.trim() || 'Standard-Tätigkeit');
+
+  /** Tätigkeit, auf der gerade gearbeitet wird (weitere oder Haupttätigkeit). */
+  readonly currentTaskLabel = computed(() => this.clockState.status()?.activeTaskLabel || this.defaultTaskLabel());
+
   /**
    * Tätigkeitsauswahl offen. Gehört zur Sitzung: jeder Identitätswechsel,
    * back() und jede abgeschickte Aktion schließt sie.
@@ -867,7 +873,13 @@ export abstract class ClockWorkflow implements OnDestroy {
     // pre-action status on screen: after an offline Einstempeln the kiosk
     // then offers Pause/Ausstempeln instead of another Einstempeln (which
     // would queue a second, redundant start).
-    const projected = projectClockStatus(this.clockState.status(), stamp.action, stamp.performedAt, stamp.task);
+    const projected = projectClockStatus(
+      this.clockState.status(),
+      stamp.action,
+      stamp.performedAt,
+      stamp.task,
+      this.selectedEmployee()?.defaultTaskLabel?.trim() || null,
+    );
     this.clockState.setStatus(withOfflineLabel(projected, 'projected', stamp.performedAt));
     if (stamp.employeeId) {
       rememberProjectedStatus(stamp.employeeId, projected);

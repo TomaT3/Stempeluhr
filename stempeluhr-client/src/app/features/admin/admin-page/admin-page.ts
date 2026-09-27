@@ -197,6 +197,7 @@ export class AdminPage implements OnDestroy {
           billable: true,
           isEnabled: true,
           tasks: [],
+          defaultTaskLabel: null,
         },
       ],
     }));
@@ -477,6 +478,8 @@ export class AdminPage implements OnDestroy {
         tags: employee.tags,
         billable: employee.billable,
         isEnabled: employee.isEnabled,
+        // Leerer String löscht die Bezeichnung (null hiesse "unverändert lassen").
+        defaultTaskLabel: employee.defaultTaskLabel ?? '',
         tasks: (employee.tasks ?? []).map(task => ({
           id: task.id,
           label: task.label,
@@ -595,6 +598,7 @@ export class AdminPage implements OnDestroy {
       billable: true,
       isEnabled: true,
       tasks: [],
+      defaultTaskLabel: null,
     };
   }
 

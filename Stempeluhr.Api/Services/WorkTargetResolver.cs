@@ -40,7 +40,7 @@ public static class WorkTargetResolver
             string.IsNullOrWhiteSpace(employee.Description) ? "Stempeluhr" : employee.Description,
             employee.Billable,
             null,
-            null);
+            string.IsNullOrWhiteSpace(employee.DefaultTaskLabel) ? null : employee.DefaultTaskLabel.Trim());
     }
 
     /// <summary>
@@ -117,10 +117,13 @@ public static class WorkTargetResolver
         return string.Equals(running.ActiveTaskId, target.TaskId, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Name für Meldungen: Label der Tätigkeit oder „Standard-Taetigkeit“.</summary>
+    /// <summary>
+    /// Name für Meldungen: Label der Tätigkeit bzw. die Bezeichnung der
+    /// Haupttätigkeit, ohne Bezeichnung „Standard-Taetigkeit“.
+    /// </summary>
     public static string DisplayName(KimaiTimesheetTarget target)
     {
-        return target.TaskId is null ? "Standard-Taetigkeit" : target.Label ?? "Taetigkeit";
+        return target.Label ?? (target.TaskId is null ? "Standard-Taetigkeit" : "Taetigkeit");
     }
 
     private static EmployeeTaskSettings? FindTask(EmployeeSettings employee, string taskId)

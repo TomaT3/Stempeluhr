@@ -11,6 +11,8 @@ export interface Employee {
    * Offline-Caches - dann gibt es keinen Wechselknopf.
    */
   tasks?: EmployeeTask[];
+  /** Anzeigename der Haupttätigkeit (z. B. „Büro“); leer = „Standard-Tätigkeit“. */
+  defaultTaskLabel?: string | null;
 }
 
 export interface ClockStatus {

@@ -49,7 +49,8 @@ public sealed record EmployeeDto(
     string Color,
     string? ImageUrl,
     bool RequiresPin,
-    IReadOnlyList<EmployeeTaskDto>? Tasks = null);
+    IReadOnlyList<EmployeeTaskDto>? Tasks = null,
+    string? DefaultTaskLabel = null);
 
 /// <summary>Weitere Tätigkeit für die Auswahl am Kiosk (nur Anzeige-Daten).</summary>
 public sealed record EmployeeTaskDto(string Id, string Label);

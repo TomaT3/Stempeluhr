@@ -68,14 +68,12 @@
         [running]="clockStatus.state === 'working'"
         [paused]="clockStatus.state === 'paused'" />
 
-      @if (clockState.isWorking() && employeeTasks().length > 0) {
-        <p class="task-label">Tätigkeit: {{ clockStatus.activeTaskLabel || 'Standard-Tätigkeit' }}</p>
-      }
-
       <dl class="time-info" [class.single]="!clockStatus.isRunning" aria-label="Zeitinformationen">
         @if (clockState.isWorking()) {
+          <!-- Beginn und Dauer gelten für den laufenden Abschnitt (aktuelles
+               Kimai-Timesheet): nach Wechsel oder Pausenende beginnen sie neu. -->
           <div>
-            <dt>Eingestempelt seit</dt>
+            <dt>{{ employeeTasks().length > 0 ? currentTaskLabel() + ' seit' : 'Arbeit seit' }}</dt>
             <dd>{{ clockStatus.startedAt | date: 'HH:mm' }}</dd>
           </div>
           <div>
@@ -124,7 +122,7 @@
                 [class.active]="!clockStatus.activeTaskId"
                 [disabled]="isBusy() || !clockStatus.activeTaskId"
                 (click)="switchTask(null)">
-                Standard-Tätigkeit
+                {{ defaultTaskLabel() }}
               </button>
               @for (task of employeeTasks(); track task.id) {
                 <button

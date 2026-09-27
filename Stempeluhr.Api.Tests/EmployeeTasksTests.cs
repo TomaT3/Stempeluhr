@@ -74,6 +74,31 @@ public sealed class EmployeeTasksTests
     }
 
     [Fact]
+    public void DefaultTaskLabel_RoundTripsThroughAdmin()
+    {
+        var current = new RuntimeSettings
+        {
+            Employees = [new EmployeeSettings { Id = "max", DisplayName = "Max", DefaultTaskLabel = "Büro" }]
+        };
+
+        Assert.Equal("Büro", AdminEmployeeDto.FromSettings(current.Employees[0]).DefaultTaskLabel);
+        Assert.Equal("Büro", UpdateLabel(null).ToSettings(current).DefaultTaskLabel);       // alter Client: behalten
+        Assert.Null(UpdateLabel(" ").ToSettings(current).DefaultTaskLabel);                 // bewusst geleert
+        Assert.Equal("Werkstatt", UpdateLabel(" Werkstatt ").ToSettings(current).DefaultTaskLabel);
+    }
+
+    [Fact]
+    public void EmployeeDto_CarriesDefaultTaskLabel()
+    {
+        var employee = new EmployeeSettings { Id = "max", DisplayName = "Max", DefaultTaskLabel = "Büro" };
+
+        Assert.Equal("Büro", new EmployeeService().ToEmployeeDto(employee).DefaultTaskLabel);
+    }
+
+    private static AdminEmployeeUpdateDto UpdateLabel(string? label) =>
+        new("max", null, "Max", null, null, null, true, null, null, null, null, null, null, true, true, null, label);
+
+    [Fact]
     public void Validate_AcceptsValidTasks()
     {
         Assert.Null(CreateAdminService().ValidateTasks(Settings(CustomerX)));

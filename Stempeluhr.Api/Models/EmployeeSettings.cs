@@ -23,6 +23,12 @@ public sealed class EmployeeSettings
     /// Die Standard-Tätigkeit ergibt sich weiter aus ProjectId/ActivityId.
     /// </summary>
     public EmployeeTaskSettings[] Tasks { get; init; } = [];
+
+    /// <summary>
+    /// Anzeigename der Haupttätigkeit (ProjectId/ActivityId) am Kiosk, z. B.
+    /// „Büro“. Null = neutraler Text „Standard-Tätigkeit“.
+    /// </summary>
+    public string? DefaultTaskLabel { get; init; }
 }
 
 public sealed class EmployeeTaskSettings

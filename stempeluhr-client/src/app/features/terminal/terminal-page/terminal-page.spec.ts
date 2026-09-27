@@ -459,6 +459,34 @@ describe('TerminalPage', () => {
       expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
     });
 
+    it('names the main task as configured and says since when the section runs', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      const component = fixture.componentInstance;
+      ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+      pinLoginResult.next({
+        employee: { ...session.employee, tasks: [{ id: 'kx', label: 'Kunde X' }], defaultTaskLabel: 'Büro' },
+        status: working,
+      });
+      fixture.detectChanges();
+
+      const caption = fixture.nativeElement.querySelector('.task-label')?.textContent ?? '';
+      expect(caption).toContain('Büro');
+      expect(caption).toMatch(/seit \d{2}:\d{2}/);
+
+      component.openTaskPicker();
+      fixture.detectChanges();
+      const first = fixture.nativeElement.querySelector('.task-button') as HTMLButtonElement;
+      expect(first.textContent?.trim()).toBe('Büro');
+    });
+
+    it('shows since when the section runs also without further tasks', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockWorking(fixture, []);
+
+      const caption = fixture.nativeElement.querySelector('.task-label')?.textContent ?? '';
+      expect(caption).toMatch(/^\s*seit \d{2}:\d{2}\s*$/);
+    });
+
     it('closes the picker when the session ends', () => {
       const fixture = TestBed.createComponent(TerminalPage);
       unlockWorking(fixture);

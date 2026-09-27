@@ -52,7 +52,8 @@ public sealed record AdminEmployeeDto(
     string[] Tags,
     bool Billable,
     bool IsEnabled,
-    IReadOnlyCollection<AdminEmployeeTaskDto> Tasks)
+    IReadOnlyCollection<AdminEmployeeTaskDto> Tasks,
+    string? DefaultTaskLabel)
 {
     public static AdminEmployeeDto FromSettings(EmployeeSettings employee)
     {
@@ -71,7 +72,8 @@ public sealed record AdminEmployeeDto(
             employee.Tags,
             employee.Billable,
             employee.IsEnabled,
-            (employee.Tasks ?? []).Select(AdminEmployeeTaskDto.FromSettings).ToArray());
+            (employee.Tasks ?? []).Select(AdminEmployeeTaskDto.FromSettings).ToArray(),
+            employee.DefaultTaskLabel);
     }
 }
 
@@ -150,7 +152,8 @@ public sealed record AdminEmployeeUpdateDto(
     string[]? Tags,
     bool Billable,
     bool IsEnabled,
-    IReadOnlyCollection<AdminEmployeeTaskDto>? Tasks = null)
+    IReadOnlyCollection<AdminEmployeeTaskDto>? Tasks = null,
+    string? DefaultTaskLabel = null)
 {
     public EmployeeSettings ToSettings(RuntimeSettings current)
     {
@@ -178,7 +181,12 @@ public sealed record AdminEmployeeUpdateDto(
             // löschen. Eine leere Liste löscht bewusst.
             Tasks = Tasks is null
                 ? existing?.Tasks ?? []
-                : Tasks.Select(task => task.ToSettings()).ToArray()
+                : Tasks.Select(task => task.ToSettings()).ToArray(),
+            // Gleiches Muster: null (alter Client) behält den Wert, ein
+            // leerer String löscht ihn bewusst.
+            DefaultTaskLabel = DefaultTaskLabel is null
+                ? existing?.DefaultTaskLabel
+                : string.IsNullOrWhiteSpace(DefaultTaskLabel) ? null : DefaultTaskLabel.Trim()
         };
     }
 }

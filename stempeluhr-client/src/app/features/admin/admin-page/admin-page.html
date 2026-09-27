@@ -245,7 +245,16 @@
             <!-- Weitere Taetigkeiten: Arbeit fuer andere Kunden, auf die am Kiosk
                  ohne Ausstempeln gewechselt wird (Projekt + Aktivitaet in Kimai). -->
             <div class="task-admin">
-              <h3>Weitere Tätigkeiten</h3>
+              <h3>Tätigkeiten am Kiosk</h3>
+              <div class="form-grid">
+                <label>
+                  Bezeichnung Haupttätigkeit (Kiosk)
+                  <input
+                    [value]="employee.defaultTaskLabel ?? ''"
+                    (input)="updateEmployee(index, { defaultTaskLabel: $any($event.target).value || null })"
+                    placeholder="Standard-Tätigkeit">
+                </label>
+              </div>
               @for (task of employee.tasks; track task.id; let taskIndex = $index) {
                 <div class="form-grid task-admin-row">
                   <label>

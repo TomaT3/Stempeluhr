@@ -80,7 +80,8 @@ public sealed class EmployeeService : IEmployeeService
             (employee.Tasks ?? [])
                 .Where(task => task.ProjectId is not null && task.ActivityId is not null)
                 .Select(task => new EmployeeTaskDto(task.Id, task.Label))
-                .ToArray());
+                .ToArray(),
+            employee.DefaultTaskLabel);
     }
 
     private static string Initials(string name)

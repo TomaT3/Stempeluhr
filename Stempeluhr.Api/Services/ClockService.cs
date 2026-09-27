@@ -349,7 +349,7 @@ public sealed class ClockService(
         await kimai.StartAsync(settings, employee, target, cancellationToken);
         NotifyTransition(settings, employee, "switch", target.Label);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
-        return status with { StateText = target.TaskId is null ? "Zurueck zur Standard-Taetigkeit" : $"Wechsel zu {target.Label}" };
+        return status with { StateText = target.Label is null ? "Zurueck zur Standard-Taetigkeit" : $"Wechsel zu {target.Label}" };
     }
 
     /// <summary>

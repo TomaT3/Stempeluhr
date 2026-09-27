@@ -39,6 +39,8 @@ export interface AdminEmployee {
   isEnabled: boolean;
   /** Weitere Tätigkeiten (andere Kunden), am Kiosk ohne Ausstempeln wählbar. */
   tasks: AdminEmployeeTask[];
+  /** Anzeigename der Haupttätigkeit am Kiosk; leer = „Standard-Tätigkeit“. */
+  defaultTaskLabel: string | null;
 }
 
 export interface AdminEmployeeTask {

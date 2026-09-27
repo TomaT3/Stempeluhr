@@ -286,6 +286,26 @@ public sealed class ClockServiceNotificationTests
         Assert.Null(Assert.Single(notifier.TaskLabels));
     }
 
+    [Fact]
+    public async Task Switch_BackToDefault_UsesDefaultTaskLabel()
+    {
+        var settings = SettingsWithTask();
+        var max = settings.Employees[0];
+        settings.Employees[0] = new EmployeeSettings
+        {
+            Id = max.Id, Pin = max.Pin, ApiToken = max.ApiToken, DisplayName = max.DisplayName,
+            Tasks = max.Tasks, DefaultTaskLabel = "Büro"
+        };
+        var (service, kimai, notifier) = Create(settings);
+        kimai.EnqueueStatus(WorkingOnTask);
+        kimai.EnqueueStatus(Working);
+
+        var response = await service.ClockAsync(SwitchRequest(null));
+
+        Assert.Equal("Wechsel zu Büro", response.Status!.StateText);
+        Assert.Equal("Büro", Assert.Single(notifier.TaskLabels));
+    }
+
     [Theory]
     [InlineData("onTarget")]
     [InlineData("paused")]

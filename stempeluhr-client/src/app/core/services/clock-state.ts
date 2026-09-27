@@ -6,14 +6,16 @@ import { ClockAction, ClockStatus, EmployeeTask } from '../models/kiosk.models';
  * State a locally queued OFFLINE action leads to. The wording mirrors the
  * server's own stateText values (ClockService) so the kiosk does not switch
  * vocabulary between online and offline. `task` is the target of a 'switch'
- * (null = back to the default task).
+ * (null = back to the default task, named `defaultTaskLabel` if configured).
  */
 export function projectClockStatus(
   current: ClockStatus | null,
   action: ClockAction,
   performedAt: string,
   task: EmployeeTask | null = null,
+  defaultTaskLabel: string | null = null,
 ): ClockStatus {
+  const switchTarget = task?.label ?? defaultTaskLabel;
   switch (action) {
     case 'switch':
       return {
@@ -22,7 +24,7 @@ export function projectClockStatus(
         startedAt: performedAt,
         durationSeconds: 0,
         state: 'working',
-        stateText: task ? `Wechsel zu ${task.label}` : 'Zurück zur Standard-Tätigkeit',
+        stateText: switchTarget ? `Wechsel zu ${switchTarget}` : 'Zurück zur Standard-Tätigkeit',
         activeTaskId: task?.id ?? null,
         activeTaskLabel: task?.label ?? null,
       };

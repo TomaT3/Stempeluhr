@@ -112,7 +112,9 @@ eingebunden und gesichert werden.
   „Letzte Karten-ID“ und lässt sich per „Letzte NFC-Karte zuweisen“ übernehmen.
 - Standard-Projekt, Standard-Aktivität und Pause-Aktivität
 - Pro Mitarbeiter optional **weitere Tätigkeiten** (Bezeichnung, Projekt,
-  Aktivität, abrechenbar), z. B. Arbeit für andere Kunden
+  Aktivität, abrechenbar), z. B. Arbeit für andere Kunden, und eine
+  Bezeichnung der Haupttätigkeit für den Kiosk (z. B. „Büro“; leer =
+  „Standard-Tätigkeit“)
 
 Secrets werden in Admin-Antworten nie zurückgegeben.
 
@@ -124,8 +126,12 @@ endet und ein neues beginnt im selben Moment auf Projekt/Aktivität der
 gewählten Tätigkeit (wie bei der Pause). Die Arbeitszeit bleibt lückenlos, in
 Kimai lässt sich die Zeit pro Kunde auswerten, und die Stundenübersicht zählt
 alles außer Pause. Nach einer Pause läuft die Tätigkeit von vor der Pause
-weiter; Einstempeln startet immer die Standard-Tätigkeit. Offline gewählte
+weiter; Einstempeln startet immer die Haupttätigkeit. Offline gewählte
 Wechsel werden wie alle Stempel nachgetragen.
+
+Die Dauer im Statusfeld zählt nur den laufenden Abschnitt (z. B. „Kunde X
+seit 10:15“) und beginnt nach Wechsel oder Pausenende neu; die Tagessumme
+steht in der Stundenkarte.
 
 Voraussetzungen in Kimai: Kunde und Projekt (ggf. eigene Aktivität) anlegen
 und dem Kimai-Benutzer des Mitarbeiters Zugriff darauf geben (Team). Ohne
