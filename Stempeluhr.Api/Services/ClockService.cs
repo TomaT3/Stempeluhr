@@ -123,6 +123,18 @@ public sealed class ClockService(
                 await EndPauseAsync(context.Settings, context.Employee, cancellationToken));
         }
 
+        if (string.Equals(request.Action, "switch", StringComparison.OrdinalIgnoreCase))
+        {
+            // Unknown or incomplete task: permanent client error, never a
+            // silent switch to something else.
+            var target = WorkTargetResolver.Resolve(context.Settings, context.Employee, request.TaskId);
+            return target is null
+                ? new ClockActionResponse(ClockActionResult.BadRequest, null)
+                : new ClockActionResponse(
+                    ClockActionResult.Success,
+                    await SwitchTaskAsync(context.Settings, context.Employee, target, cancellationToken));
+        }
+
         return new ClockActionResponse(ClockActionResult.BadRequest, null);
     }
 
@@ -196,7 +208,9 @@ public sealed class ClockService(
             };
         }
 
-        await kimai.StartAsync(settings, employee, cancellationToken);
+        var target = WorkTargetResolver.ResolveDefault(settings, employee)
+            ?? throw new InvalidOperationException("Projekt und Aktivitaet muessen konfiguriert sein.");
+        await kimai.StartAsync(settings, employee, target, cancellationToken);
         NotifyTransition(settings, employee, "start");
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
@@ -235,13 +249,14 @@ public sealed class ClockService(
             return running with { StateText = "Schon in Pause" };
         }
 
-        if ((employee.ProjectId ?? settings.DefaultProjectId) is null || settings.PauseActivityId is null)
+        var pause = WorkTargetResolver.ResolvePause(settings, employee);
+        if (pause is null)
         {
             return running with { StateText = "Pausen-Aktivitaet fehlt" };
         }
 
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
-        await kimai.StartPauseAsync(settings, employee, cancellationToken);
+        await kimai.StartAsync(settings, employee, pause, cancellationToken);
         NotifyTransition(settings, employee, "pauseStart");
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "In Pause" };
@@ -263,17 +278,86 @@ public sealed class ClockService(
             return running with { StateText = "Nicht in Pause" };
         }
 
-        if ((employee.ProjectId ?? settings.DefaultProjectId) is null
-            || (employee.ActivityId ?? settings.DefaultActivityId) is null)
+        if (WorkTargetResolver.ResolveDefault(settings, employee) is null)
         {
             return running with { StateText = "Arbeits-Aktivitaet fehlt" };
         }
 
+        // Resume the task that ran before the pause (read BEFORE stopping the
+        // pause: until then the latest stopped timesheet is the one the pause
+        // interrupted). Falls back to the default task.
+        var resume = WorkTargetResolver.ResolveResume(
+            settings, employee, await GetTimesheetBeforePauseAsync(settings, employee, cancellationToken))!;
+
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
-        await kimai.StartAsync(settings, employee, cancellationToken);
+        await kimai.StartAsync(settings, employee, resume, cancellationToken);
         NotifyTransition(settings, employee, "pauseEnd");
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
+    }
+
+    /// <summary>
+    /// Latest stopped timesheet while a pause runs = the sheet the pause
+    /// interrupted. Only used to pick the task to resume, so a failing lookup
+    /// (an old Kimai, a timeout) must not block the pause end: default task
+    /// then. Without further tasks the answer cannot matter - no request.
+    /// </summary>
+    private async Task<KimaiRecentTimesheetDto?> GetTimesheetBeforePauseAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken)
+    {
+        if (employee.Tasks is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        try
+        {
+            var recent = await kimai.GetRecentStoppedTimesheetsAsync(settings, employee, 1, cancellationToken);
+            return recent.FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is KimaiApiException or HttpRequestException
+            || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
+        {
+            logger?.LogWarning(ex, "Timesheet before the pause could not be read - resuming the default task");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Switches the running work timesheet to another task without clocking
+    /// out: stop, then start on <paramref name="target"/> (same two-step
+    /// pattern as the pause). Only from "working" - a pause or a clocked-out
+    /// employee has nothing to switch.
+    /// </summary>
+    private async Task<ClockStatusDto> SwitchTaskAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        KimaiTimesheetTarget target,
+        CancellationToken cancellationToken)
+    {
+        var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+        if (!running.IsRunning || running.ActiveTimesheetId is null)
+        {
+            return running with { StateText = "Nicht eingestempelt" };
+        }
+
+        if (running.State == "paused")
+        {
+            return running with { StateText = "Aktuell in Pause" };
+        }
+
+        if (WorkTargetResolver.IsRunningOn(running, target))
+        {
+            return running with { StateText = $"{WorkTargetResolver.DisplayName(target)} laeuft bereits" };
+        }
+
+        await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
+        await kimai.StartAsync(settings, employee, target, cancellationToken);
+        NotifyTransition(settings, employee, "switch", target.Label);
+        var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+        return status with { StateText = target.Label is null ? "Zurueck zur Standard-Taetigkeit" : $"Wechsel zu {target.Label}" };
     }
 
     /// <summary>
@@ -284,7 +368,7 @@ public sealed class ClockService(
     /// noch scheitern lassen. Bewusst KEIN Request-CancellationToken - der
     /// Request ist nach der Response oft schon beendet.
     /// </summary>
-    private void NotifyTransition(RuntimeSettings settings, EmployeeSettings employee, string action)
+    private void NotifyTransition(RuntimeSettings settings, EmployeeSettings employee, string action, string? taskLabel = null)
     {
         if (notifier is null || !settings.TelegramEnabled)
         {
@@ -294,13 +378,14 @@ public sealed class ClockService(
         // Synchron direkt am Übergang erfasst (vor jedem await): Das ist die
         // Stempelzeit - nicht erst nach TZ-Lookup/Telegram-POST.
         var stampUtc = DateTimeOffset.UtcNow;
-        _ = SendNotificationAsync(settings, employee, action, stampUtc);
+        _ = SendNotificationAsync(settings, employee, action, taskLabel, stampUtc);
     }
 
     private async Task SendNotificationAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
         string action,
+        string? taskLabel,
         DateTimeOffset stampUtc)
     {
         try
@@ -313,7 +398,7 @@ public sealed class ClockService(
             // stattdessen und landen im catch darunter.
             var timeZone = ResolveTimezone(
                 await kimai.GetCurrentUserTimezoneAsync(settings, employee, CancellationToken.None));
-            await notifier!.SendStampNotificationAsync(employee.DisplayName, action, stampUtc, timeZone);
+            await notifier!.SendStampNotificationAsync(employee.DisplayName, action, stampUtc, timeZone, taskLabel);
         }
         catch (Exception ex)
         {

@@ -70,8 +70,10 @@
 
       <dl class="time-info" [class.single]="!clockStatus.isRunning" aria-label="Zeitinformationen">
         @if (clockState.isWorking()) {
+          <!-- Beginn und Dauer gelten für den laufenden Abschnitt (aktuelles
+               Kimai-Timesheet): nach Wechsel oder Pausenende beginnen sie neu. -->
           <div>
-            <dt>Eingestempelt seit</dt>
+            <dt>{{ employeeTasks().length > 0 ? currentTaskLabel() + ' seit' : 'Arbeit seit' }}</dt>
             <dd>{{ clockStatus.startedAt | date: 'HH:mm' }}</dd>
           </div>
           <div>
@@ -110,6 +112,36 @@
             <span class="stamp-label">Ausstempeln</span>
           </button>
         </div>
+
+        @if (employeeTasks().length > 0) {
+          @if (taskPickerOpen()) {
+            <div class="task-picker" role="group" aria-label="Tätigkeit wählen">
+              <button
+                class="task-button"
+                type="button"
+                [class.active]="onDefaultTask()"
+                [disabled]="isBusy() || onDefaultTask()"
+                (click)="switchTask(null)">
+                {{ defaultTaskLabel() }}
+              </button>
+              @for (task of employeeTasks(); track task.id) {
+                <button
+                  class="task-button"
+                  type="button"
+                  [class.active]="clockStatus.activeTaskId === task.id"
+                  [disabled]="isBusy() || clockStatus.activeTaskId === task.id"
+                  (click)="switchTask(task.id)">
+                  {{ task.label }}
+                </button>
+              }
+              <button class="task-button cancel" type="button" (click)="closeTaskPicker()">Abbrechen</button>
+            </div>
+          } @else {
+            <button class="task-switch-button" type="button" (click)="openTaskPicker()" [disabled]="isBusy()">
+              <span aria-hidden="true">⇄</span> Tätigkeit wechseln
+            </button>
+          }
+        }
       } @else if (clockState.isPaused()) {
         <div class="stamp-actions">
           <button class="stamp-button start" type="button" (click)="endPause()" [disabled]="isBusy()">

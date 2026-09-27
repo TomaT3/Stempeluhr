@@ -9,18 +9,20 @@ public interface IKimaiClient
         EmployeeSettings employee,
         CancellationToken cancellationToken = default);
 
-    Task StartAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default);
+    /// <summary>Starts a timesheet on <paramref name="target"/> now (work, task or pause).</summary>
+    Task StartAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        KimaiTimesheetTarget target,
+        CancellationToken cancellationToken = default);
 
-    /// <summary>Starts a timesheet that begins at <paramref name="startedAt"/> (backdating for offline replays).</summary>
+    /// <summary>Starts a timesheet on <paramref name="target"/> that begins at <paramref name="startedAt"/> (backdating for offline replays).</summary>
     Task StartAtAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
-        int projectId,
-        int activityId,
+        KimaiTimesheetTarget target,
         DateTimeOffset startedAt,
         CancellationToken cancellationToken = default);
-
-    Task StartPauseAsync(RuntimeSettings settings, EmployeeSettings employee, CancellationToken cancellationToken = default);
 
     Task StopAsync(
         RuntimeSettings settings,
@@ -37,13 +39,16 @@ public interface IKimaiClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the most recently STOPPED timesheet of the employee (null if
-    /// none exists). Used by the offline replay to verify that a "nothing is
-    /// running" state really comes from an interrupted pauseEnd transaction.
+    /// Returns the <paramref name="count"/> most recently STOPPED timesheets
+    /// of the employee, latest end first (empty if none exist). Used by the
+    /// offline replay to verify that a "nothing is running" state really
+    /// comes from an interrupted two-step transaction (pauseEnd, task
+    /// switch), and by pauseEnd to resume the task that ran before the pause.
     /// </summary>
-    Task<KimaiRecentTimesheetDto?> GetLatestStoppedTimesheetAsync(
+    Task<IReadOnlyList<KimaiRecentTimesheetDto>> GetRecentStoppedTimesheetsAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
+        int count,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -80,5 +85,5 @@ public interface IKimaiClient
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>Minimal view of a finished timesheet, for replay verification.</summary>
-public sealed record KimaiRecentTimesheetDto(int? ActivityId, DateTimeOffset? EndedAt);
+/// <summary>Minimal view of a finished timesheet, for replay verification and pause resume.</summary>
+public sealed record KimaiRecentTimesheetDto(int? ActivityId, DateTimeOffset? EndedAt, int? ProjectId = null);

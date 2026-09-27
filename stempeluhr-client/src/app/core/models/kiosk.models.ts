@@ -5,6 +5,14 @@ export interface Employee {
   color: string;
   imageUrl: string | null;
   requiresPin: boolean;
+  /**
+   * Weitere Tätigkeiten (z. B. Arbeit für andere Kunden), auf die während der
+   * Arbeitszeit gewechselt werden kann. Fehlt bei Einträgen aus älteren
+   * Offline-Caches - dann gibt es keinen Wechselknopf.
+   */
+  tasks?: EmployeeTask[];
+  /** Anzeigename der Haupttätigkeit (z. B. „Büro“); leer = „Standard-Tätigkeit“. */
+  defaultTaskLabel?: string | null;
 }
 
 export interface ClockStatus {
@@ -14,6 +22,21 @@ export interface ClockStatus {
   durationSeconds: number;
   state: 'clockedOut' | 'working' | 'paused';
   stateText: string;
+  /** Laufende weitere Tätigkeit; null/fehlend = Standard-Tätigkeit, fremde Buchung (oder Pause/aus). */
+  activeTaskId?: string | null;
+  activeTaskLabel?: string | null;
+  /**
+   * Arbeit läuft auf der Standard-Tätigkeit. false bei einer Buchung, die
+   * keiner Tätigkeit entspricht (gelöschte Tätigkeit, Kimai-Oberfläche)
+   * oder deren Tätigkeit offline unbekannt ist. Fehlt bei älteren Antworten
+   * und Cache-Einträgen - dann gilt `!activeTaskId` (siehe isOnDefaultTask).
+   */
+  activeIsDefaultTask?: boolean | null;
+}
+
+/** Läuft die Arbeit auf der Standard-Tätigkeit? Ältere Status ohne Flag: kein activeTaskId. */
+export function isOnDefaultTask(status: ClockStatus | null | undefined): boolean {
+  return status?.activeIsDefaultTask ?? !status?.activeTaskId;
 }
 
 export interface KioskEmployeeSession {
@@ -50,4 +73,9 @@ export interface HealthStatus {
   settingsConfigured: boolean;
 }
 
-export type ClockAction = 'start' | 'stop' | 'pauseStart' | 'pauseEnd';
+export interface EmployeeTask {
+  id: string;
+  label: string;
+}
+
+export type ClockAction = 'start' | 'stop' | 'pauseStart' | 'pauseEnd' | 'switch';

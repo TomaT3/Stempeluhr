@@ -9,8 +9,15 @@ public static class TelegramMessageFactory
 {
     /// <summary>
     /// Aktionen entsprechen den Clock-Aktionen aus <c>KioskClockRequest.Action</c>.
+    /// <paramref name="taskLabel"/> ist nur beim Wechsel ("switch") relevant:
+    /// Ziel-Tätigkeit, null = zurück zur Standard-Tätigkeit.
     /// </summary>
-    public static string Build(string employeeName, string action, DateTimeOffset stampUtc, TimeZoneInfo timeZone)
+    public static string Build(
+        string employeeName,
+        string action,
+        DateTimeOffset stampUtc,
+        TimeZoneInfo timeZone,
+        string? taskLabel = null)
     {
         var (emoji, label) = action.ToLowerInvariant() switch
         {
@@ -18,6 +25,9 @@ public static class TelegramMessageFactory
             "stop" => ("🔴", "ausgestempelt"),
             "pausestart" => ("🟡", "Pause"),
             "pauseend" => ("🟢", "Pause beendet"),
+            "switch" => ("🔄", string.IsNullOrWhiteSpace(taskLabel)
+                ? "zurück zur Standard-Tätigkeit"
+                : $"wechselt zu {taskLabel}"),
             _ => throw new ArgumentException($"Unbekannte Stempelaktion: {action}", nameof(action))
         };
 

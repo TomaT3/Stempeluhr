@@ -8,7 +8,8 @@ public sealed record AdminEmployeeStatusDto(
     int DurationSeconds,
     string State,
     string StateText,
-    bool IsAvailable);
+    bool IsAvailable,
+    string? ActiveTaskLabel = null);
 
 public sealed record AdminSettingsDto(
     string BaseUrl,
@@ -50,7 +51,9 @@ public sealed record AdminEmployeeDto(
     string? Description,
     string[] Tags,
     bool Billable,
-    bool IsEnabled)
+    bool IsEnabled,
+    IReadOnlyCollection<AdminEmployeeTaskDto> Tasks,
+    string? DefaultTaskLabel)
 {
     public static AdminEmployeeDto FromSettings(EmployeeSettings employee)
     {
@@ -68,7 +71,35 @@ public sealed record AdminEmployeeDto(
             employee.Description,
             employee.Tags,
             employee.Billable,
-            employee.IsEnabled);
+            employee.IsEnabled,
+            (employee.Tasks ?? []).Select(AdminEmployeeTaskDto.FromSettings).ToArray(),
+            employee.DefaultTaskLabel);
+    }
+}
+
+/// <summary>Weitere Tätigkeit eines Mitarbeiters im Admin-Bereich (lesen und speichern).</summary>
+public sealed record AdminEmployeeTaskDto(
+    string? Id,
+    string? Label,
+    int? ProjectId,
+    int? ActivityId,
+    bool Billable)
+{
+    public static AdminEmployeeTaskDto FromSettings(EmployeeTaskSettings task)
+    {
+        return new AdminEmployeeTaskDto(task.Id, task.Label, task.ProjectId, task.ActivityId, task.Billable);
+    }
+
+    public EmployeeTaskSettings ToSettings()
+    {
+        return new EmployeeTaskSettings
+        {
+            Id = string.IsNullOrWhiteSpace(Id) ? Guid.NewGuid().ToString("N") : Id.Trim(),
+            Label = Label?.Trim() ?? string.Empty,
+            ProjectId = ProjectId,
+            ActivityId = ActivityId,
+            Billable = Billable
+        };
     }
 }
 
@@ -120,7 +151,9 @@ public sealed record AdminEmployeeUpdateDto(
     string? Description,
     string[]? Tags,
     bool Billable,
-    bool IsEnabled)
+    bool IsEnabled,
+    IReadOnlyCollection<AdminEmployeeTaskDto>? Tasks = null,
+    string? DefaultTaskLabel = null)
 {
     public EmployeeSettings ToSettings(RuntimeSettings current)
     {
@@ -142,7 +175,18 @@ public sealed record AdminEmployeeUpdateDto(
             Description = string.IsNullOrWhiteSpace(Description) ? null : Description,
             Tags = Tags ?? [],
             Billable = Billable,
-            IsEnabled = IsEnabled
+            IsEnabled = IsEnabled,
+            // Keep-current-when-null: ein alter, gecachter Admin-Client kennt
+            // die Tätigkeiten nicht und sendet null - ein Save darf sie nicht
+            // löschen. Eine leere Liste löscht bewusst.
+            Tasks = Tasks is null
+                ? existing?.Tasks ?? []
+                : Tasks.Select(task => task.ToSettings()).ToArray(),
+            // Gleiches Muster: null (alter Client) behält den Wert, ein
+            // leerer String löscht ihn bewusst.
+            DefaultTaskLabel = DefaultTaskLabel is null
+                ? existing?.DefaultTaskLabel
+                : string.IsNullOrWhiteSpace(DefaultTaskLabel) ? null : DefaultTaskLabel.Trim()
         };
     }
 }

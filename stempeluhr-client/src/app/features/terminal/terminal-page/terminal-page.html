@@ -52,6 +52,22 @@
         <div class="status-line">
           <strong>{{ status.stateText }}</strong>
           @if (clockState.isWorking()) {
+            <!-- Die Dauer zählt nur den laufenden Abschnitt (aktuelles Kimai-
+                 Timesheet): nach Wechsel oder Pausenende beginnt sie neu. Das
+                 "seit" macht das sichtbar; die Tagessumme steht in der Stundenkarte.
+                 Offline entfällt das "seit": vorgemerkt ist es nur der Moment des
+                 Tippens, und die längere Offline-Statuszeile braucht den Platz
+                 (800x480 darf nicht scrollen). -->
+            @if (employeeTasks().length > 0 || (status.startedAt && !isOffline())) {
+              <em class="task-label">
+                @if (employeeTasks().length > 0) {
+                  {{ currentTaskLabel() }}
+                }
+                @if (status.startedAt && !isOffline()) {
+                  seit {{ status.startedAt | date: 'HH:mm' }}
+                }
+              </em>
+            }
             <span>{{ clockState.elapsed() | duration }}</span>
           } @else if (clockState.isPaused()) {
             <span>Pause {{ clockState.elapsed() | duration }}</span>
@@ -75,12 +91,47 @@
     </section>
 
     @if (isUnlocked()) {
-      <section class="action-panel" aria-label="Stempelaktionen">
-        @if (clockState.isWorking()) {
+      <section
+        class="action-panel"
+        [class.three]="clockState.isWorking() && employeeTasks().length > 0 && !taskPickerOpen()"
+        [class.picker]="clockState.isWorking() && taskPickerOpen()"
+        aria-label="Stempelaktionen">
+        @if (clockState.isWorking() && taskPickerOpen()) {
+          <!-- Tätigkeitsauswahl ersetzt die Stempelknöpfe in derselben Spalte:
+               nichts überdeckt Stunden oder Abmelden; bei vielen Tätigkeiten
+               scrollt nur diese Liste, nie die Seite. -->
+          <div class="task-list" role="group" aria-label="Tätigkeit wählen">
+            <button
+              class="task-button"
+              type="button"
+              [class.active]="onDefaultTask()"
+              [disabled]="isBusy() || onDefaultTask()"
+              (click)="switchTask(null)">
+              {{ defaultTaskLabel() }}
+            </button>
+            @for (task of employeeTasks(); track task.id) {
+              <button
+                class="task-button"
+                type="button"
+                [class.active]="clockState.status()?.activeTaskId === task.id"
+                [disabled]="isBusy() || clockState.status()?.activeTaskId === task.id"
+                (click)="switchTask(task.id)">
+                {{ task.label }}
+              </button>
+            }
+          </div>
+          <button class="task-cancel" type="button" (click)="closeTaskPicker()">Abbrechen</button>
+        } @else if (clockState.isWorking()) {
           <button class="action-button pause" type="button" (click)="startPause()" [disabled]="isBusy()">
             <span class="icon pause"></span>
             <span>Pause</span>
           </button>
+          @if (employeeTasks().length > 0) {
+            <button class="action-button switch" type="button" (click)="openTaskPicker()" [disabled]="isBusy()">
+              <span class="icon swap" aria-hidden="true">⇄</span>
+              <span>Tätigkeit wechseln</span>
+            </button>
+          }
           <button class="action-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
             <span class="icon square"></span>
             <span>Ausstempeln</span>

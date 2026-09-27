@@ -224,14 +224,197 @@ public sealed class ClockServiceNotificationTests
         Assert.IsType<HttpRequestException>(Assert.Single(logger.Exceptions));
     }
 
+    // --- Task switch (live path) ---------------------------------------
+
+    private static readonly ClockStatusDto WorkingOnTask =
+        new(true, 6, "2026-09-05T08:00:00Z", 60, "working", "Eingestempelt", "kx", "Kunde X");
+
+    private static RuntimeSettings SettingsWithTask() => new()
+    {
+        BaseUrl = "http://kimai.test",
+        DefaultProjectId = 1,
+        DefaultActivityId = 2,
+        PauseActivityId = 99,
+        TelegramBotToken = "123456:test",
+        TelegramChatId = "-1001",
+        Employees =
+        {
+            new EmployeeSettings
+            {
+                Id = "max",
+                Pin = "1234",
+                ApiToken = "t",
+                DisplayName = "Max Mustermann",
+                Tasks = [new EmployeeTaskSettings { Id = "kx", Label = "Kunde X", ProjectId = 20, ActivityId = 21, Billable = false }]
+            }
+        }
+    };
+
+    private static KioskClockRequest SwitchRequest(string? taskId) => new("max", "1234", "switch", null, taskId);
+
+    [Fact]
+    public async Task Switch_FromDefaultToTask_StopsAndStartsOnTask()
+    {
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(Working);
+        kimai.EnqueueStatus(WorkingOnTask);
+
+        var response = await service.ClockAsync(SwitchRequest("kx"));
+
+        Assert.Equal(ClockActionResult.Success, response.Result);
+        Assert.Equal("Wechsel zu Kunde X", response.Status!.StateText);
+        Assert.Equal("kx", response.Status.ActiveTaskId);
+        Assert.Equal(1, kimai.StopCalls);
+        var target = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((20, 21, "Kunde X", false), (target.ProjectId, target.ActivityId, target.Description, target.Billable));
+        Assert.Equal("switch", Assert.Single(notifier.Calls).Action);
+        Assert.Equal("Kunde X", Assert.Single(notifier.TaskLabels));
+    }
+
+    [Fact]
+    public async Task Switch_BackToDefault_StartsDefaultTask()
+    {
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(WorkingOnTask);
+        kimai.EnqueueStatus(Working);
+
+        var response = await service.ClockAsync(SwitchRequest(null));
+
+        Assert.Equal("Zurueck zur Standard-Taetigkeit", response.Status!.StateText);
+        var target = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((1, 2), (target.ProjectId, target.ActivityId));
+        Assert.Null(Assert.Single(notifier.TaskLabels));
+    }
+
+    [Fact]
+    public async Task Switch_BackToDefault_UsesDefaultTaskLabel()
+    {
+        var settings = SettingsWithTask();
+        var max = settings.Employees[0];
+        settings.Employees[0] = new EmployeeSettings
+        {
+            Id = max.Id, Pin = max.Pin, ApiToken = max.ApiToken, DisplayName = max.DisplayName,
+            Tasks = max.Tasks, DefaultTaskLabel = "Büro"
+        };
+        var (service, kimai, notifier) = Create(settings);
+        kimai.EnqueueStatus(WorkingOnTask);
+        kimai.EnqueueStatus(Working);
+
+        var response = await service.ClockAsync(SwitchRequest(null));
+
+        Assert.Equal("Wechsel zu Büro", response.Status!.StateText);
+        Assert.Equal("Büro", Assert.Single(notifier.TaskLabels));
+    }
+
+    [Theory]
+    [InlineData("onTarget")]
+    [InlineData("paused")]
+    [InlineData("clockedOut")]
+    public async Task Switch_WithoutPossibleTransition_IsSilentNoOp(string state)
+    {
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(state switch { "onTarget" => WorkingOnTask, "paused" => Paused, _ => ClockedOut });
+
+        var response = await service.ClockAsync(SwitchRequest("kx"));
+
+        Assert.Equal(ClockActionResult.Success, response.Result);
+        Assert.Equal(0, kimai.StopCalls);
+        Assert.Empty(kimai.StartedTargets);
+        Assert.Empty(notifier.Calls);
+    }
+
+    [Fact]
+    public async Task Switch_UnknownTask_IsBadRequest()
+    {
+        var (service, kimai, _) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(Working);
+
+        var response = await service.ClockAsync(SwitchRequest("gone"));
+
+        Assert.Equal(ClockActionResult.BadRequest, response.Result);
+        Assert.Equal(0, kimai.StopCalls);
+    }
+
+    [Fact]
+    public async Task PauseEnd_ResumesTheTaskThatRanBeforeThePause()
+    {
+        var (service, kimai, _) = Create(SettingsWithTask());
+        kimai.LatestStopped = new KimaiRecentTimesheetDto(21, DateTimeOffset.UtcNow, 20);
+        kimai.EnqueueStatus(Paused);
+        kimai.EnqueueStatus(WorkingOnTask);
+
+        await service.ClockAsync(Request("pauseEnd"));
+
+        var target = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((20, 21), (target.ProjectId, target.ActivityId));
+    }
+
+    [Fact]
+    public async Task Switch_ToDefault_WhileOnDefault_IsSilentNoOp()
+    {
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
+
+        var response = await service.ClockAsync(SwitchRequest(null));
+
+        Assert.Contains("laeuft bereits", response.Status!.StateText);
+        Assert.Equal(0, kimai.StopCalls);
+        Assert.Empty(notifier.Calls);
+    }
+
+    [Fact]
+    public async Task Switch_ToDefault_WhileOnUnknownSheet_StartsDefaultTask()
+    {
+        // Working = a sheet that matches neither a task nor the default task
+        // (e.g. its task was deleted): switching back must not be a no-op.
+        var (service, kimai, _) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(Working);
+        kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
+
+        await service.ClockAsync(SwitchRequest(null));
+
+        Assert.Equal(1, kimai.StopCalls);
+        var target = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((1, 2), (target.ProjectId, target.ActivityId));
+    }
+
+    [Fact]
+    public async Task PauseEnd_WithoutTasks_SkipsResumeLookup()
+    {
+        var (service, kimai, _) = Create();
+        kimai.EnqueueStatus(Paused);
+        kimai.EnqueueStatus(Working);
+
+        await service.ClockAsync(Request("pauseEnd"));
+
+        Assert.Equal(0, kimai.RecentStoppedCalls);
+        Assert.Single(kimai.StartedTargets);
+    }
+
+    [Fact]
+    public async Task PauseEnd_AfterDefaultWork_ResumesDefaultTask()
+    {
+        var (service, kimai, _) = Create(SettingsWithTask());
+        kimai.LatestStopped = new KimaiRecentTimesheetDto(2, DateTimeOffset.UtcNow, 1);
+        kimai.EnqueueStatus(Paused);
+        kimai.EnqueueStatus(Working);
+
+        await service.ClockAsync(Request("pauseEnd"));
+
+        var target = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((1, 2), (target.ProjectId, target.ActivityId));
+    }
+
     private sealed class RecordingNotifier : ITelegramNotifier
     {
         public List<(string DisplayName, string Action)> Calls { get; } = [];
+        public List<string?> TaskLabels { get; } = [];
 
         public Task SendStampNotificationAsync(
-            string employeeName, string action, DateTimeOffset stampUtc, TimeZoneInfo timeZone)
+            string employeeName, string action, DateTimeOffset stampUtc, TimeZoneInfo timeZone, string? taskLabel = null)
         {
             Calls.Add((employeeName, action));
+            TaskLabels.Add(taskLabel);
             return Task.CompletedTask;
         }
     }
@@ -288,15 +471,27 @@ public sealed class ClockServiceNotificationTests
             return Task.FromResult<string?>(TimezoneReturnsNull ? null : "Europe/Berlin");
         }
 
-        public Task StartAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)
-        {
-            StartCalls++;
-            return Task.CompletedTask;
-        }
+        /// <summary>Every started target in order (work, task and pause).</summary>
+        public List<KimaiTimesheetTarget> StartedTargets { get; } = [];
 
-        public Task StartPauseAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)
+        /// <summary>Latest stopped sheet GetRecentStoppedTimesheetsAsync answers (pauseEnd resume lookup).</summary>
+        public KimaiRecentTimesheetDto? LatestStopped { get; set; }
+
+        /// <summary>How often the resume lookup reached Kimai.</summary>
+        public int RecentStoppedCalls { get; private set; }
+
+        public Task StartAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget t, CancellationToken ct = default)
         {
-            StartPauseCalls++;
+            StartedTargets.Add(t);
+            if (t.ActivityId == s.PauseActivityId)
+            {
+                StartPauseCalls++;
+            }
+            else
+            {
+                StartCalls++;
+            }
+
             return Task.CompletedTask;
         }
 
@@ -306,9 +501,13 @@ public sealed class ClockServiceNotificationTests
             return Task.CompletedTask;
         }
 
-        public Task StartAtAsync(RuntimeSettings s, EmployeeSettings e, int p, int a, DateTimeOffset d, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task StartAtAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget t, DateTimeOffset d, CancellationToken ct = default) => throw new NotSupportedException();
         public Task StopAtAsync(RuntimeSettings s, EmployeeSettings e, int id, DateTimeOffset d, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<KimaiRecentTimesheetDto?> GetLatestStoppedTimesheetAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<KimaiRecentTimesheetDto>> GetRecentStoppedTimesheetsAsync(RuntimeSettings s, EmployeeSettings e, int count, CancellationToken ct = default)
+        {
+            RecentStoppedCalls++;
+            return Task.FromResult<IReadOnlyList<KimaiRecentTimesheetDto>>(LatestStopped is null ? [] : [LatestStopped]);
+        }
         public Task<IReadOnlyCollection<KimaiUserDto>> GetUsersAsync(string b, string t, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyCollection<KimaiActivityDto>> GetActivitiesAsync(string b, string t, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyCollection<KimaiProjectDto>> GetProjectsAsync(string b, string t, CancellationToken ct = default) => throw new NotSupportedException();

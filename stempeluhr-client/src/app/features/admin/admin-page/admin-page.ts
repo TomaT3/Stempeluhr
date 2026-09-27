@@ -3,7 +3,7 @@ import { DatePipe } from '@angular/common';
 import { Component, OnDestroy, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { AdminEmployee, AdminEmployeeStatus, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../../../core/models/admin.models';
+import { AdminEmployee, AdminEmployeeStatus, AdminEmployeeTask, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../../../core/models/admin.models';
 import { NfcClockEvent } from '../../../core/models/kiosk.models';
 import { AdminApi } from '../../../core/services/admin-api';
 import { Avatar } from '../../../shared/components/avatar/avatar';
@@ -83,7 +83,7 @@ export class AdminPage implements OnDestroy {
         this.loadAdminEmployeeStatuses();
       },
       error: (error: HttpErrorResponse) => {
-        this.adminMessage.set(error.status === 409 ? this.conflictMessage(error) : 'Speichern fehlgeschlagen');
+        this.adminMessage.set(error.status === 409 || error.status === 400 ? this.conflictMessage(error) : 'Speichern fehlgeschlagen');
         this.adminBusy.set(false);
       },
     });
@@ -196,6 +196,8 @@ export class AdminPage implements OnDestroy {
           tags: ['stempeluhr'],
           billable: true,
           isEnabled: true,
+          tasks: [],
+          defaultTaskLabel: null,
         },
       ],
     }));
@@ -238,6 +240,70 @@ export class AdminPage implements OnDestroy {
       employees: settings.employees.map((employee, employeeIndex) =>
         employeeIndex === index ? { ...employee, ...patch } : employee),
     }));
+  }
+
+  addEmployeeTask(index: number): void {
+    const employee = this.adminSettings()?.employees[index];
+    if (!employee) {
+      return;
+    }
+
+    this.updateEmployee(index, {
+      tasks: [
+        ...(employee.tasks ?? []),
+        { id: crypto.randomUUID().replaceAll('-', ''), label: '', projectId: null, activityId: null, billable: true },
+      ],
+    });
+  }
+
+  updateEmployeeTask(index: number, taskIndex: number, patch: Partial<AdminEmployeeTask>): void {
+    const employee = this.adminSettings()?.employees[index];
+    if (!employee) {
+      return;
+    }
+
+    this.updateEmployee(index, {
+      tasks: (employee.tasks ?? []).map((task, i) => {
+        if (i !== taskIndex) {
+          return task;
+        }
+
+        const updated = { ...task, ...patch };
+        // A project-bound activity of another project would make Kimai
+        // reject the start AFTER the switch already stopped the running sheet.
+        return this.isActivityAllowedForProject(updated.activityId, updated.projectId)
+          ? updated
+          : { ...updated, activityId: null };
+      }),
+    });
+  }
+
+  /** Aktivitäten, die Kimai für dieses Projekt akzeptiert: globale plus die des Projekts. */
+  activitiesForProject(projectId: number | null): KimaiActivity[] {
+    return projectId === null
+      ? this.kimaiActivities()
+      : this.kimaiActivities().filter(activity => activity.projectId === null || activity.projectId === projectId);
+  }
+
+  hasActivityForProject(activityId: number | null, projectId: number | null): boolean {
+    return activityId !== null && this.activitiesForProject(projectId).some(activity => activity.id === activityId);
+  }
+
+  private isActivityAllowedForProject(activityId: number | null, projectId: number | null): boolean {
+    // Unknown activities (list not loaded) stay untouched.
+    const activity = this.kimaiActivities().find(candidate => candidate.id === activityId);
+    return !activity || projectId === null || activity.projectId === null || activity.projectId === projectId;
+  }
+
+  removeEmployeeTask(index: number, taskIndex: number): void {
+    const employee = this.adminSettings()?.employees[index];
+    if (!employee) {
+      return;
+    }
+
+    this.updateEmployee(index, {
+      tasks: (employee.tasks ?? []).filter((_, i) => i !== taskIndex),
+    });
   }
 
   updateEmployeeTags(index: number, value: string): void {
@@ -440,6 +506,15 @@ export class AdminPage implements OnDestroy {
         tags: employee.tags,
         billable: employee.billable,
         isEnabled: employee.isEnabled,
+        // Leerer String löscht die Bezeichnung (null hiesse "unverändert lassen").
+        defaultTaskLabel: employee.defaultTaskLabel ?? '',
+        tasks: (employee.tasks ?? []).map(task => ({
+          id: task.id,
+          label: task.label,
+          projectId: task.projectId,
+          activityId: task.activityId,
+          billable: task.billable,
+        })),
       })),
     };
   }
@@ -550,10 +625,12 @@ export class AdminPage implements OnDestroy {
       tags: ['stempeluhr'],
       billable: true,
       isEnabled: true,
+      tasks: [],
+      defaultTaskLabel: null,
     };
   }
 
-  private toNumber(value: string): number | null {
+  toNumber(value: string): number | null {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   }

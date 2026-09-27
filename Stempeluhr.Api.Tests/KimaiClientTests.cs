@@ -23,6 +23,7 @@ public sealed class KimaiClientTests
     private static RuntimeSettings Settings => new() { BaseUrl = "http://kimai.test" };
 
     private static EmployeeSettings Employee => new() { Id = "max", ApiToken = "token" };
+    private static readonly KimaiTimesheetTarget Target = new(1, 1, "Stempeluhr", true, null, null);
 
     [Fact]
     public async Task BeginBackdate_FallbackRetriesTransientPatchFailures()
@@ -35,7 +36,7 @@ public sealed class KimaiClientTests
             Resp(HttpStatusCode.OK, "{}"));                     // PATCH begin -> success
         var client = CreateClient(handler);
 
-        await client.StartAtAsync(Settings, Employee, 1, 1, T08);
+        await client.StartAtAsync(Settings, Employee, Target, T08);
 
         Assert.Equal(
         [
@@ -65,7 +66,7 @@ public sealed class KimaiClientTests
         // Pin the concrete transient exception type: a permanent error here
         // would be classified as "rejected" and lose the stamp instead.
         var thrown = await Assert.ThrowsAnyAsync<KimaiApiException>(
-            () => client.StartAtAsync(Settings, Employee, 1, 1, T08));
+            () => client.StartAtAsync(Settings, Employee, Target, T08));
         Assert.Equal(HttpStatusCode.BadGateway, thrown.StatusCode);
 
         // The last request must be the compensating stop of the misdated
@@ -94,23 +95,26 @@ public sealed class KimaiClientTests
     }
 
     [Fact]
-    public async Task GetLatestStoppedTimesheetAsync_BuildsQueryWithoutUserFilter_AndParsesLatestEntry()
+    public async Task GetRecentStoppedTimesheetsAsync_BuildsQueryWithoutUserFilter_AndParsesEntries()
     {
         var handler = new ScriptedHandler(
             Resp(HttpStatusCode.OK, """
                 [
-                    {"id":9,"begin":"2026-08-28T07:00:00+02:00","end":"2026-08-28T11:30:00+02:00","duration":16200,"activity":{"id":5}}
+                    {"id":9,"begin":"2026-08-28T11:00:00+02:00","end":"2026-08-28T11:30:00+02:00","duration":1800,"activity":{"id":5},"project":{"id":1}},
+                    {"id":8,"begin":"2026-08-28T07:00:00+02:00","end":"2026-08-28T11:00:00+02:00","duration":14400,"activity":{"id":21},"project":{"id":20}}
                 ]
                 """));
         var client = CreateClient(handler);
 
-        var latest = await client.GetLatestStoppedTimesheetAsync(Settings, Employee, CancellationToken.None);
+        var recent = await client.GetRecentStoppedTimesheetsAsync(Settings, Employee, 2, CancellationToken.None);
 
         // No user filter: Kimai rejects user=me with 400 (requirements \d+|all),
         // the default is the token owner. The sort parameter is spelled order.
-        Assert.Equal("GET /api/timesheets?size=1&orderBy=end&order=DESC&state=stopped", handler.Requests.Single());
-        Assert.Equal(5, latest!.ActivityId);
-        Assert.Equal(DateTimeOffset.Parse("2026-08-28T11:30:00+02:00"), latest.EndedAt);
+        Assert.Equal("GET /api/timesheets?size=2&orderBy=end&order=DESC&state=stopped", handler.Requests.Single());
+        Assert.Equal(2, recent.Count);
+        Assert.Equal(5, recent[0].ActivityId);
+        Assert.Equal(DateTimeOffset.Parse("2026-08-28T11:30:00+02:00"), recent[0].EndedAt);
+        Assert.Equal((20, 21), (recent[1].ProjectId, recent[1].ActivityId));
     }
 
     [Fact]

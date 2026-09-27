@@ -341,3 +341,32 @@ input[type="color"] {
     flex-direction: column;
   }
 }
+
+/* Weitere Taetigkeiten je Mitarbeiter (Arbeit fuer andere Kunden). */
+.task-admin {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.task-admin h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.task-admin-row {
+  align-items: end;
+}
+
+.task-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.task-admin-hint {
+  margin: 0;
+  color: var(--color-muted);
+}

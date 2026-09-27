@@ -1,3 +1,4 @@
+import { isOnDefaultTask } from '../models/kiosk.models';
 import { ClockState, projectClockStatus } from './clock-state';
 
 const idle = {
@@ -29,6 +30,34 @@ describe('projectClockStatus', () => {
     const resumed = projectClockStatus(paused, 'pauseEnd', at);
     expect(resumed.state).toBe('working');
     expect(resumed.startedAt).toBe(at);
+    // The server resumes the task from before the pause - unknown offline.
+    expect(isOnDefaultTask(resumed)).toBe(false);
+    expect(resumed.activeTaskId ?? null).toBeNull();
+  });
+
+  it('treats a queued start as the default task', () => {
+    expect(isOnDefaultTask(projectClockStatus(idle, 'start', at))).toBe(true);
+  });
+
+  it('turns a queued task switch into working on that task - and back', () => {
+    const working = projectClockStatus(idle, 'start', at);
+
+    const onTask = projectClockStatus(working, 'switch', at, { id: 'kx', label: 'Kunde X' });
+    expect(onTask.state).toBe('working');
+    expect(onTask.activeTaskId).toBe('kx');
+    expect(onTask.activeTaskLabel).toBe('Kunde X');
+    expect(onTask.stateText).toBe('Wechsel zu Kunde X');
+
+    expect(isOnDefaultTask(onTask)).toBe(false);
+
+    const back = projectClockStatus(onTask, 'switch', at, null);
+    expect(back.state).toBe('working');
+    expect(back.activeTaskId).toBeNull();
+    expect(isOnDefaultTask(back)).toBe(true);
+    expect(back.stateText).toBe('Zurück zur Standard-Tätigkeit');
+
+    const backNamed = projectClockStatus(onTask, 'switch', at, null, 'Büro');
+    expect(backNamed.stateText).toBe('Wechsel zu Büro');
   });
 
   it('turns a queued stop into a clocked-out status', () => {
@@ -38,6 +67,20 @@ describe('projectClockStatus', () => {
     expect(stopped.isRunning).toBe(false);
     expect(stopped.startedAt).toBeNull();
     expect(stopped.stateText).toBe('Ausgestempelt');
+  });
+});
+
+describe('isOnDefaultTask', () => {
+  const working = { ...idle, state: 'working' as const, isRunning: true };
+
+  it('follows the server flag', () => {
+    expect(isOnDefaultTask({ ...working, activeIsDefaultTask: true })).toBe(true);
+    expect(isOnDefaultTask({ ...working, activeIsDefaultTask: false })).toBe(false);
+  });
+
+  it('falls back to "no task" for statuses without the flag (older API, cached)', () => {
+    expect(isOnDefaultTask(working)).toBe(true);
+    expect(isOnDefaultTask({ ...working, activeTaskId: 'kx' })).toBe(false);
   });
 });
 
