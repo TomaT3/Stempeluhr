@@ -75,6 +75,12 @@ Weitere Regeln:
 - Stempel, die der Server beim Nachtrag endgültig ablehnt (z. B. PIN
   inzwischen geändert), zeigt das Terminal im Ruhezustand an, bis jemand sie in
   Kimai nachgetragen und „Alle erledigt“ gedrückt hat.
+  Abgelehnte Nachträge werden zusätzlich ohne PIN und Karten-ID in
+  `data/rejected-offline-events.json` erfasst. Im Adminbereich unter
+  „Abgelehnte Offline-Stempel“ sind sie auch von einem anderen Rechner aus
+  einsehbar und können nach dem manuellen Nachtrag markiert werden. „Alle
+  erledigt“ am Kiosk quittiert nur den lokalen Hinweis und setzt die
+  Admin-Markierung nicht.
 
 ## Einrichtung
 
@@ -302,5 +308,5 @@ separater Schritt (siehe [Update](#update)).
   Terminal-Authentifizierung statt PIN in der Queue (#7).
 - Nutzt ein Mitarbeiter während eines Ausfalls mehrere Terminals, kann die
   Reihenfolge beim Nachtrag nach Eingang statt nach Zeit gemischt werden.
-- Weitere offene Issues: PIN-Fehlversuch-Backoff (#8), Randfälle abgelehnter
-  Stempel (#37), Telegram-Hinweis bei abgelehnten Stempeln (#36).
+- Weitere offene Issues: PIN-Fehlversuch-Backoff (#8), Telegram-Hinweis bei
+  abgelehnten Stempeln (#36).

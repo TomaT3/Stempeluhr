@@ -1,0 +1,34 @@
+<section class="rejections">
+  <div class="toolbar">
+    <a routerLink="/admin">&lt; Admin</a>
+    <label>Admin-Passwort
+      <input type="password" [value]="adminPassword()" (input)="adminPassword.set($any($event.target).value)"
+        (keyup.enter)="load()" autocomplete="current-password">
+    </label>
+    <button type="button" (click)="load()" [disabled]="isBusy()">Aktualisieren</button>
+  </div>
+  <h1>Abgelehnte Offline-Stempel</h1>
+  <p>Nach dem manuellen Nachtrag in Kimai den Eintrag als nachgetragen markieren. Die Historie bleibt erhalten.</p>
+  @if (hasLoaded()) {
+    <div class="entry-list">
+      @for (entry of entries(); track entry.eventId) {
+        <article class="entry">
+          <div>
+            <strong>{{ entry.employeeName || entry.employeeId || 'Unbekannt' }}</strong>
+            <span>{{ actionLabel(entry.action) }} · {{ entry.performedAt | date: 'dd.MM.yyyy HH:mm' }}</span>
+            <small>Abgelehnt {{ entry.rejectedAt | date: 'dd.MM.yyyy HH:mm' }} · {{ entry.message }}</small>
+            <small>Event-ID: {{ entry.eventId }}</small>
+          </div>
+          @if (entry.resolvedAt) {
+            <strong>Nachgetragen {{ entry.resolvedAt | date: 'dd.MM.yyyy HH:mm' }}</strong>
+          } @else {
+            <button type="button" (click)="resolve(entry)" [disabled]="isBusy()">Als nachgetragen markieren</button>
+          }
+        </article>
+      } @empty {
+        <p>Keine abgelehnten Offline-Stempel vorhanden.</p>
+      }
+    </div>
+  }
+  @if (message()) { <p role="alert">{{ message() }}</p> }
+</section>

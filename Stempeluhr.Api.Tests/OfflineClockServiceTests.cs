@@ -35,6 +35,32 @@ public sealed class OfflineClockServiceTests
     private static readonly DateTimeOffset T1230 = Parse("2026-08-24T12:30:00Z");
 
     [Fact]
+    public async Task RejectedReplay_IsSavedForAdminWithoutCredentials()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-rejected-sync-{Guid.NewGuid():N}");
+        try
+        {
+            var path = Path.Combine(directory, "rejected.json");
+            var journal = new RejectedOfflineEventStore(path);
+            var service = new OfflineClockService(new InMemorySettingsStore(TestSettings()),
+                new InMemoryEmployeeService(), new FakeKimaiClient(), new InMemoryEventIdStore(),
+                new KioskEventCoordinator(), journal, new RecordingLogger());
+
+            var result = await service.SyncKioskAsync([Kiosk("rejected-1", "start", T08, "wrong-pin")]);
+
+            Assert.Equal("rejected", Assert.Single(result.Results).Status);
+            var entry = Assert.Single(new RejectedOfflineEventStore(path).List());
+            Assert.Equal("rejected-1", entry.EventId);
+            Assert.Equal(T08, entry.PerformedAt);
+            Assert.DoesNotContain("wrong-pin", File.ReadAllText(path));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task TransientFailure_BuffersWholeBatch_AndReplaysInScanOrder()
     {
         var (service, kimai) = CreateService();
@@ -1205,6 +1231,7 @@ public sealed class OfflineClockServiceTests
             kimai,
             new InMemoryEventIdStore(),
             new KioskEventCoordinator(),
+            new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-rejected-{Guid.NewGuid():N}.json")),
             logger);
 
         return (service, kimai, logger, settings);
@@ -1225,6 +1252,7 @@ public sealed class OfflineClockServiceTests
             kimai,
             new InMemoryEventIdStore(),
             markers,
+            new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-rejected-{Guid.NewGuid():N}.json")),
             new RecordingLogger());
         var live = new ClockService(
             new InMemorySettingsStore(settings),

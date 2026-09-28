@@ -36,6 +36,7 @@ public sealed class OfflineClockService(
     IKimaiClient kimai,
     IOfflineEventIdStore eventIdStore,
     KioskEventCoordinator kioskEvents,
+    RejectedOfflineEventStore rejectedEvents,
     ILogger<OfflineClockService> logger) : IOfflineClockService
 {
     private const string BufferedStatus = "buffered";
@@ -176,6 +177,33 @@ public sealed class OfflineClockService(
         finally
         {
             _syncLock.Release();
+        }
+
+        // Persist the server's final refusals before returning them to the
+        // kiosk. The journal remains available from another admin computer.
+        foreach (var result in results.Where(result => result.Status == "rejected"))
+        {
+            var entry = events.FirstOrDefault(entry => entry.EventId == result.EventId);
+            if (entry is null)
+            {
+                continue;
+            }
+            try
+            {
+                var employeeName = settingsStore.Load().Employees
+                    .FirstOrDefault(employee => employee.Id == entry.EmployeeId)?.DisplayName ?? string.Empty;
+                rejectedEvents.Record(new RejectedOfflineEvent(
+                    entry.EventId, entry.EmployeeId, employeeName, entry.Action,
+                    entry.PerformedAt, DateTimeOffset.UtcNow, result.Message ?? string.Empty));
+            }
+            catch (Exception ex)
+            {
+                // A 5xx leaves the event in the kiosk queue. Free its ID so
+                // the retry can report the refusal again and persist it.
+                eventIdStore.Remove(result.EventId);
+                logger.LogError(ex, "Could not persist rejected offline event {EventId}", result.EventId);
+                throw;
+            }
         }
 
         return new OfflineSyncResultDto(accepted, duplicates, buffered, results);

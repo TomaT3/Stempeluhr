@@ -74,3 +74,14 @@ export interface KimaiUser {
   displayName: string;
   avatarUrl: string | null;
 }
+
+export interface AdminRejectedOfflineEvent {
+  eventId: string;
+  employeeId: string;
+  employeeName: string;
+  action: string;
+  performedAt: string;
+  rejectedAt: string;
+  message: string;
+  resolvedAt: string | null;
+}

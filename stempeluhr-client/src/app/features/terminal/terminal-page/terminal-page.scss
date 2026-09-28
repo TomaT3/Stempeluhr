@@ -1,3 +1,7 @@
+@use '../../../../styles/start-choice' as start-choice;
+
+@include start-choice.choice(12px);
+
 :host {
   display: block;
   min-height: 100%;
@@ -12,8 +16,16 @@
   padding-top: 2.75rem;
 }
 
-:host:has(.offline-banner) .terminal {
+.terminal:has(.offline-banner) {
   min-height: calc(100vh - 2.75rem - clamp(20px, 4vw, 44px));
+}
+
+// Bei einer Sitzung kommt unter den drei Spalten die Stundenkarte hinzu.
+// Die Kartenhoehe muss im Banner-Fall von der ersten Grid-Zeile abgehen.
+.terminal.session:has(.offline-banner) {
+  height: calc(100vh - 2.75rem - clamp(20px, 4vw, 44px) - 20px);
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 h1,
@@ -247,7 +259,6 @@ p {
   padding: 14px;
   color: #ffffff;
   font-size: clamp(1.35rem, 3.2vw, 2.35rem);
-  letter-spacing: 0;
   line-height: 1;
   box-shadow: 0 16px 30px rgba(38, 51, 77, 0.16);
 }
@@ -275,7 +286,7 @@ p {
 }
 
 .action-button.switch {
-  background: linear-gradient(180deg, #3d6fd8, var(--color-primary));
+  background: var(--gradient-switch);
 }
 
 /* Wechselpfeile als Zeichen (⇄, in DejaVu Sans auf den Pis enthalten). */
@@ -336,10 +347,6 @@ p {
   font-weight: 700;
 }
 
-.task-button:disabled {
-  cursor: default;
-}
-
 .task-cancel {
   background: var(--color-surface-subtle);
   color: var(--color-muted);
@@ -350,21 +357,6 @@ p {
    leere Zeile samt Abstand Platz bei 800x480. */
 .action-panel.start-choice {
   grid-template-rows: auto minmax(0, 1fr);
-}
-
-.start-choice-title {
-  margin: 0;
-  color: var(--color-muted);
-  font-weight: 800;
-}
-
-.task-button.start-task {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-  border-color: transparent;
-  color: #fff;
 }
 
 /* Kleines Dreieck: nur die Kanten verkleinern, sonst geht die Form verloren. */
@@ -383,15 +375,15 @@ p {
 
 .action-button.start,
 .task-button.start-task {
-  background: linear-gradient(180deg, #199968, var(--color-success));
+  background: var(--gradient-start);
 }
 
 .action-button.pause {
-  background: linear-gradient(180deg, #d09221, #b7791f);
+  background: var(--gradient-pause);
 }
 
 .action-button.stop {
-  background: linear-gradient(180deg, #d8523d, var(--color-danger));
+  background: var(--gradient-stop);
 }
 
 .icon {

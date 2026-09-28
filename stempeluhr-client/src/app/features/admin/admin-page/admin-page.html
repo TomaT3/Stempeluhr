@@ -80,6 +80,7 @@
           <button type="button" (click)="importKimaiActivities()" [disabled]="adminBusy()">Kimai-Aktivitaeten laden</button>
           <button type="button" (click)="addEmployee()">Manuell hinzufuegen</button>
           <a class="admin-link-button" routerLink="/admin/status">Status anzeigen</a>
+          <a class="admin-link-button" routerLink="/admin/offline-rejections">Abgelehnte Offline-Stempel</a>
           <button type="button" class="primary" (click)="saveAdminSettings()" [disabled]="adminBusy()">Speichern</button>
         </div>
       </section>
