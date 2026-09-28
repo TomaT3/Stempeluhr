@@ -11,10 +11,13 @@ Simuliert die Kimai-REST-Endpoints, die der StempeluhrKimaiClient nutzt:
 Alle Buchungen werden im Log (JSONL) protokolliert und als In-Memory-Liste
 gehalten. Ein GET /_bookings gibt den kompletten Zustand zurück - damit
 verifiziert der Test die Nachträge.
+
+Usage: fake_kimai.py [--port 8099] [--log fake_kimai_log.jsonl]
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import threading
 from datetime import datetime, timezone
@@ -25,6 +28,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 LOCK = threading.Lock()
 TIMESHEETS: list[dict] = []
 NEXT_ID = 100
+# Per --log überschreibbar; relativ zum Arbeitsverzeichnis des Prozesses.
 LOG_PATH = "fake_kimai_log.jsonl"
 # Zeitzone des Token-Inhabers (/api/users/me). Ohne Zeitzonen-Daten (Windows
 # ohne tzdata) bleibt nur die Systemzeit.
@@ -206,6 +210,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = ThreadingHTTPServer(("127.0.0.1", 8099), Handler)
-    print("Fake Kimai lauscht auf http://127.0.0.1:8099")
+    parser = argparse.ArgumentParser(description="Fake-Kimai für die Stempeluhr-Tests")
+    parser.add_argument("--port", type=int, default=8099)
+    parser.add_argument("--log", default=LOG_PATH, help="Pfad des JSONL-Logs")
+    args = parser.parse_args()
+    LOG_PATH = args.log
+
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    print(f"Fake Kimai lauscht auf http://127.0.0.1:{args.port}, Log: {LOG_PATH}")
     server.serve_forever()

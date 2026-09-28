@@ -15,8 +15,11 @@ WORK="$(mktemp -d /tmp/stempeluhr-e2e.XXXXXX)"
 # Eindeutige Event-ID-Präfixe pro Lauf, damit der persistente Event-ID-Store
 # (data/offline-event-ids.json) eines früheren Laufs nichts als duplicate markiert.
 RUN="$(date +%s)-$$"
-API_PORT=5100
-KIMAI_PORT=8099
+# Eigene Ports statt der Dev-Ports (API 5100, Fake-Kimai 8099): cleanup()
+# beendet alles, was auf ihnen lauscht, und träfe sonst eine laufende Dev-API.
+API_PORT="${E2E_API_PORT:-5101}"
+KIMAI_PORT="${E2E_KIMAI_PORT:-8098}"
+KIMAI_LOG="$WORK/fake_kimai_log.jsonl"
 API_URL="http://127.0.0.1:${API_PORT}"
 KIMAI_URL="http://127.0.0.1:${KIMAI_PORT}"
 PASS=0
@@ -86,8 +89,7 @@ dotnet build "$ROOT/Stempeluhr.Api/Stempeluhr.Api.csproj" -v q --nologo > /dev/n
 # ---------------------------------------------------------------- Start
 say "Starte Fake-Kimai (:${KIMAI_PORT}) und Stempeluhr-API (:${API_PORT})"
 
-python3 "$ROOT/tools/testenv/fake_kimai.py" > /dev/null 2>&1 & KIMAI_PID=$!
-KIMAI_LOG="$WORK/fake_kimai_log.jsonl"
+python3 "$ROOT/tools/testenv/fake_kimai.py" --port "$KIMAI_PORT" --log "$KIMAI_LOG" > /dev/null 2>&1 & KIMAI_PID=$!
 wait_for "$KIMAI_URL/_bookings" 10 || { echo "Fake-Kimai startete nicht"; exit 1; }
 echo "  Fake-Kimai läuft (PID $KIMAI_PID)"
 
@@ -252,11 +254,10 @@ R=$(post_sync "{\"events\":[{\"eventId\":\"${RUN}-off-3\",\"employeeId\":\"test-
 assert_status '"buffered"' "$R" "Offline-Ausstempeln wird gepuffert"
 
 echo "  Starte Fake-Kimai neu..."
-(cd /tmp && python3 "$ROOT/tools/testenv/fake_kimai.py" > /dev/null 2>&1 & echo $! > "$WORK/kimai.pid")
-KIMAI_PID=$(cat "$WORK/kimai.pid")
-# Das Kimai-Log wird im cwd des Prozesses geschrieben.
-KIMAI_LOG="/tmp/fake_kimai_log.jsonl"
-rm -f "$KIMAI_LOG"
+# Eigenes Log für die neue Instanz: nur Buchungen des Nachtrags sollen den
+# Flush belegen, das Log der ersten Phase bleibt für die Fehlersuche.
+KIMAI_LOG="$WORK/fake_kimai_log.restart.jsonl"
+python3 "$ROOT/tools/testenv/fake_kimai.py" --port "$KIMAI_PORT" --log "$KIMAI_LOG" > /dev/null 2>&1 & KIMAI_PID=$!
 wait_for "$KIMAI_URL/_bookings" 10 || { echo "Fake-Kimai startete nicht"; exit 1; }
 
 echo "  Warte auf Outbox-Flush (Background-Service)..."
@@ -317,7 +318,7 @@ R=$(curl -s -m 5 -X POST "$API_URL/api/nfc/clock/sync" -H 'Content-Type: applica
 # simuliert. Die API selbst ist in Test 1-3 bereits abgedeckt.
 say "Test 4: Agent-Level-Simulation (LocalScanServer: Publish → Ack / Timeout → Drop)"
 
-SIM_PORT=18737
+SIM_PORT="${E2E_SIM_PORT:-18737}"
 cat > "$WORK/agent-config.json" <<EOF
 {
   "api_base_url": "$API_URL",
@@ -407,5 +408,5 @@ if [ "$FAIL" = "0" ]; then
   exit 0
 fi
 echo "API-Log: $WORK/api.log"
-echo "Kimai-Log: $WORK/fake_kimai_log.jsonl"
+echo "Kimai-Log: $WORK/fake_kimai_log.jsonl, nach dem Neustart $WORK/fake_kimai_log.restart.jsonl"
 exit 1
