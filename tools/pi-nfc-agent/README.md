@@ -16,7 +16,11 @@ und in der API, nicht im Agenten.
 
 Bestätigt die Kiosk-App einen Scan nicht innerhalb von
 `selection_timeout_seconds`, wird er verworfen (Log + Fehler-Piep). CORS- und
-Private-Network-Header erlauben den Zugriff aus der HTTPS-Kiosk-Seite.
+Private-Network-Header erlauben den Zugriff nur aus der Kiosk-Seite: Deren
+Origin ist die von `api_base_url` (oder `kiosk_origin`). Eine andere Seite
+im Kiosk-Browser bekommt für `/scan/*` ein 403 und kann Scans weder lesen
+noch bestätigen. Anfragen ohne `Origin` (curl, Updater) bleiben erlaubt,
+`/health` ist offen.
 
 ## Dateien
 
@@ -48,6 +52,7 @@ Private-Network-Header erlauben den Zugriff aus der HTTPS-Kiosk-Seite.
 | `reader_name_contains` | – | Filter auf den PC/SC-Reader-Namen (z. B. `ACR122`) |
 | `local_port` | `8737` | Port des Loopback-Servers |
 | `selection_timeout_seconds` | `10` | Wartezeit auf das Ack der Kiosk-App |
+| `kiosk_origin` | Origin von `api_base_url` | Nur nötig, wenn der Kiosk die Seite von einer anderen Adresse lädt als `api_base_url`. Das Journal meldet abgelehnte Origins. |
 
 Schlüssel älterer Versionen (`reader_token`, `queue_path`, `fallback_mode`)
 werden ignoriert.
