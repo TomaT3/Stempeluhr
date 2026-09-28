@@ -11,7 +11,7 @@ builder.Services.AddSingleton<IEmployeeService, EmployeeService>();
 builder.Services.AddSingleton<IAdminAuthorizationService, AdminAuthorizationService>();
 builder.Services.AddSingleton<INfcClockEventStore, NfcClockEventStore>();
 builder.Services.AddSingleton<IOfflineEventIdStore>(sp => new FileOfflineEventIdStore(
-    Path.Combine(builder.Environment.ContentRootPath, "data", "offline-event-ids.json"),
+    Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "offline-event-ids.json"),
     sp.GetRequiredService<ILogger<FileOfflineEventIdStore>>()));
 // Singleton: the offline outbox (queues + sync lock) must outlive individual
 // HTTP requests so events buffered during a Kimai outage survive and can be
