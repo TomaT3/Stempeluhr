@@ -31,6 +31,14 @@ describe('KioskApi', () => {
     ['ping', '/api/health', () => api.ping()],
   ];
 
+  it('sends the event ID the kiosk queues on failure with the live stamp (issue #67)', () => {
+    api.clock('max', '1234', 'pauseEnd', null, null, 'ev1').subscribe();
+
+    const request = http.expectOne('/api/kiosk/clock');
+    expect(request.request.body).toMatchObject({ action: 'pauseEnd', eventId: 'ev1' });
+    request.flush({});
+  });
+
   for (const [name, url, call] of hangingCalls) {
     it(`${name} fails with a TimeoutError when the server does not answer`, () => {
       let error: unknown = null;

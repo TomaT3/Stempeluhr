@@ -7,8 +7,12 @@ public sealed class ClockService(
     IEmployeeService employees,
     IKimaiClient kimai,
     ITelegramNotifier? notifier = null,
-    ILogger<ClockService>? logger = null) : IClockService
+    ILogger<ClockService>? logger = null,
+    InterruptedTransitionStore? interruptedTransitions = null) : IClockService
 {
+    /// <summary>Kiosk event IDs are 32 hex characters; anything longer is not one.</summary>
+    private const int MaxEventIdLength = 64;
+
     public async Task<KioskEmployeeSessionDto?> LoginWithPinAsync(string? pin, CancellationToken cancellationToken = default)
     {
         var settings = settingsStore.Load();
@@ -118,7 +122,7 @@ public sealed class ClockService(
         {
             return new ClockActionResponse(
                 ClockActionResult.Success,
-                await EndPauseAsync(context.Settings, context.Employee, cancellationToken));
+                await EndPauseAsync(context.Settings, context.Employee, EventIdOf(request), cancellationToken));
         }
 
         if (string.Equals(request.Action, "switch", StringComparison.OrdinalIgnoreCase))
@@ -130,10 +134,22 @@ public sealed class ClockService(
                 ? new ClockActionResponse(ClockActionResult.BadRequest, null)
                 : new ClockActionResponse(
                     ClockActionResult.Success,
-                    await SwitchTaskAsync(context.Settings, context.Employee, target, cancellationToken));
+                    await SwitchTaskAsync(context.Settings, context.Employee, target, EventIdOf(request), cancellationToken));
         }
 
         return new ClockActionResponse(ClockActionResult.BadRequest, null);
+    }
+
+    /// <summary>
+    /// Event ID under which the kiosk queues this action if the request
+    /// fails. Older kiosks send none - their half-done transitions stay
+    /// rejected on replay, as before.
+    /// </summary>
+    private static string? EventIdOf(KioskClockRequest request)
+    {
+        return string.IsNullOrWhiteSpace(request.EventId) || request.EventId.Length > MaxEventIdLength
+            ? null
+            : request.EventId;
     }
 
     public async Task<NfcClockEventDto> IdentifyWithNfcCardAsync(
@@ -282,6 +298,7 @@ public sealed class ClockService(
     private async Task<ClockStatusDto> EndPauseAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
+        string? eventId,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
@@ -307,7 +324,7 @@ public sealed class ClockService(
             settings, employee, await GetTimesheetBeforePauseAsync(settings, employee, cancellationToken))!;
 
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
-        await kimai.StartAsync(settings, employee, resume, cancellationToken);
+        await StartAfterStopAsync(settings, employee, resume, eventId, running.ActiveTimesheetId.Value, cancellationToken);
         NotifyTransition(settings, employee, "pauseEnd");
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
@@ -352,6 +369,7 @@ public sealed class ClockService(
         RuntimeSettings settings,
         EmployeeSettings employee,
         KimaiTimesheetTarget target,
+        string? eventId,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
@@ -373,7 +391,7 @@ public sealed class ClockService(
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
         try
         {
-            await kimai.StartAsync(settings, employee, target, cancellationToken);
+            await StartAfterStopAsync(settings, employee, target, eventId, running.ActiveTimesheetId.Value, cancellationToken);
         }
         catch (KimaiApiException ex) when (IsRejectedByKimai(ex))
         {
@@ -442,6 +460,38 @@ public sealed class ClockService(
             StateText = "Eingestempelt",
             Warning = $"{WorkTargetResolver.DisplayName(target)} nicht moeglich - weiter auf {WorkTargetResolver.DisplayName(previous)}"
         };
+    }
+
+    /// <summary>
+    /// Second step of a live transition (pauseEnd, switch) after Kimai
+    /// confirmed the stop. When the start fails in a way the kiosk queues
+    /// (anything but a Kimai 4xx: 5xx, network, the kiosk's own timeout
+    /// aborting the request), the stopped sheet is remembered under the
+    /// kiosk's event ID: the replay of exactly that event then resumes
+    /// instead of rejecting it like a clock-out elsewhere (issue #67). A
+    /// start that went through needs no marker - the replay finds it running.
+    /// </summary>
+    private async Task StartAfterStopAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        KimaiTimesheetTarget target,
+        string? eventId,
+        int stoppedTimesheetId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await kimai.StartAsync(settings, employee, target, cancellationToken);
+        }
+        catch (Exception ex) when (eventId is not null && !(ex is KimaiApiException kimaiEx && IsRejectedByKimai(kimaiEx)))
+        {
+            interruptedTransitions?.Remember(eventId, stoppedTimesheetId);
+            logger?.LogWarning(
+                ex,
+                "Live transition {EventId}: sheet {TimesheetId} stopped, start failed - the queued event may resume it",
+                eventId, stoppedTimesheetId);
+            throw;
+        }
     }
 
     /// <summary>

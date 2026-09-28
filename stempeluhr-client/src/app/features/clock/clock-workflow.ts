@@ -52,6 +52,11 @@ const WARNING_RESET_MS = 6000;
 
 /** A stamp as captured at button press (see sendClockAction). */
 interface PendingStamp {
+  /**
+   * Sent with the live request and reused when the stamp is queued: the
+   * server can then tell its own half-done transition apart (issue #67).
+   */
+  eventId: string;
   action: ClockAction;
   performedAt: string;
   employeeId: string;
@@ -938,6 +943,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     // have changed selectedEmployee/pin/nfcCardId. The queued event must
     // describe WHO acted WHEN, so freeze both at press time.
     const stamp: PendingStamp = {
+      eventId: this.generateEventId(),
       action,
       performedAt: new Date().toISOString(),
       employeeId: this.selectedEmployee()?.id ?? '',
@@ -957,7 +963,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
 
-    this.kioskApi.clock(stamp.employeeId, stamp.pin, action, stamp.nfcCardId, stamp.task?.id ?? null).subscribe({
+    this.kioskApi.clock(stamp.employeeId, stamp.pin, action, stamp.nfcCardId, stamp.task?.id ?? null, stamp.eventId).subscribe({
       next: status => {
         this.isOffline.set(false);
         this.clockState.setStatus(status);
@@ -1000,7 +1006,7 @@ export abstract class ClockWorkflow implements OnDestroy {
    */
   private queueOffline(stamp: PendingStamp): void {
     this.offlineQueue.enqueueKiosk({
-      eventId: this.generateEventId(),
+      eventId: stamp.eventId,
       employeeId: stamp.employeeId,
       pin: stamp.pin,
       action: stamp.action,

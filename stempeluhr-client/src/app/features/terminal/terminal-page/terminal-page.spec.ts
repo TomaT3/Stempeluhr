@@ -455,7 +455,7 @@ describe('TerminalPage', () => {
       options[1].click();
       fixture.detectChanges();
 
-      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx');
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx', expect.any(String));
       expect(fixture.componentInstance.taskPickerOpen()).toBe(false);
       expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
     });
@@ -480,7 +480,7 @@ describe('TerminalPage', () => {
       vi.advanceTimersByTime(250);
       options[1].click();
 
-      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx');
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx', expect.any(String));
     });
 
     it('names the main task as configured and says since when the section runs', () => {
@@ -613,7 +613,7 @@ describe('TerminalPage', () => {
       options[1].click();
       fixture.detectChanges();
 
-      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx');
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx', expect.any(String));
       expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
     });
 
@@ -624,7 +624,7 @@ describe('TerminalPage', () => {
 
       startOptions(fixture)[0].click();
 
-      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, null);
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, null, expect.any(String));
     });
 
     it('queues an offline clock-in with its task and shows that task as running', () => {

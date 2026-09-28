@@ -28,10 +28,22 @@ export class KioskApi {
     return this.http.post<KioskEmployeeSession>('/api/kiosk/pin-login', { pin }).pipe(timeout(REQUEST_TIMEOUT_MS));
   }
 
-  /** `taskId` nur bei 'start'/'switch': Tätigkeit bzw. Ziel, null = Standard-Tätigkeit. */
-  clock(employeeId: string, pin: string, action: ClockAction, nfcCardId: string | null = null, taskId: string | null = null) {
+  /**
+   * `taskId` nur bei 'start'/'switch': Tätigkeit bzw. Ziel, null = Standard-Tätigkeit.
+   * `eventId`: die ID, unter der der Kiosk diese Aktion bei einem Fehler
+   * einreiht - bleibt ein Pausenende oder Wechsel halb gebucht, setzt der
+   * Nachtrag genau dieses Ereignis fort (Issue #67).
+   */
+  clock(
+    employeeId: string,
+    pin: string,
+    action: ClockAction,
+    nfcCardId: string | null = null,
+    taskId: string | null = null,
+    eventId: string | null = null,
+  ) {
     return this.http
-      .post<ClockStatus>('/api/kiosk/clock', { employeeId, pin, action, nfcCardId, taskId })
+      .post<ClockStatus>('/api/kiosk/clock', { employeeId, pin, action, nfcCardId, taskId, eventId })
       .pipe(timeout(REQUEST_TIMEOUT_MS));
   }
 

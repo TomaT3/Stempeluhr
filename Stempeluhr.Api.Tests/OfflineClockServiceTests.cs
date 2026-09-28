@@ -322,25 +322,150 @@ public sealed class OfflineClockServiceTests
         Assert.False(kimai.IsRunning);
     }
 
+    // --- Live request half-booked, then queued (issue #67) --------------
+
+    private static KioskClockRequest Live(string action, string? eventId, string? taskId = null) =>
+        new("max", "1234", action, null, taskId, eventId);
+
     [Fact]
-    public async Task PauseEnd_HalfBookedLive_IsRejectedLikeAStopElsewhere()
+    public async Task PauseEnd_HalfBookedLive_ResumesOnReplayOfTheSameEvent()
     {
-        // Live "Pause beenden": ClockService stopped the pause, then the start
-        // failed (Kimai 5xx) or the kiosk ran into its timeout - so the kiosk
-        // queued the pause end. Only the replay sets markers, and Kimai looks
-        // exactly like issue #55 (pause stopped at the event, nothing runs).
-        // Deliberately rejected like the switch: the kiosk reports the stamp
-        // instead of guessing. Before, this case resumed work.
-        var (service, kimai) = CreateService();
-        await service.SyncKioskAsync([Kiosk("h1", "start", T08), Kiosk("h2", "pauseStart", T12)]);
-        kimai.SimulateLiveStop(T1230);
+        // Live "Pause beenden": the pause stop went through, the start failed
+        // (Kimai 5xx, network, kiosk timeout). The kiosk queues the pause end
+        // under the event ID it already sent live - the marker proves this
+        // server stopped the pause for exactly that event.
+        var (live, replay, kimai, markers) = CreateLiveAndReplay();
+        await replay.SyncKioskAsync([Kiosk("h1", "start", T08), Switch("h2", "kx", T10), Kiosk("h3", "pauseStart", T12)]);
+        var pauseId = kimai.ActiveTimesheetId!.Value;
+        kimai.StopWallClock = T1230.AddSeconds(2);
+        kimai.FailNextStartCalls = 1;
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => live.ClockAsync(Live("pauseEnd", "h4")));
+        Assert.False(kimai.IsRunning);
+        Assert.True(markers.TryGet("h4", out var marked));
+        Assert.Equal(pauseId, marked);
+
+        var result = await replay.SyncKioskAsync([Kiosk("h4", "pauseEnd", T1230)]);
+
+        Assert.Equal("applied", result.Results.Single().Status);
+        // The live stop ended the pause at the server's clock: aligned with
+        // the resume at the kiosk's timestamp - no gap, no overlap.
+        Assert.Equal(T1230, kimai.EndOf(pauseId));
+        Assert.Equal(("start", T1230), kimai.Operations[^1]);
+        Assert.Equal((20, 21), (kimai.StartedTargets[^1].ProjectId, kimai.StartedTargets[^1].ActivityId));
+        Assert.True(kimai.IsRunning);
+        Assert.False(kimai.ActiveIsPause);
+        Assert.False(markers.TryGet("h4", out _));
+    }
+
+    [Fact]
+    public async Task PauseEnd_AppliedLiveButQueuedAfterTimeout_IsNoOp()
+    {
+        // Kimai took both steps, the answer came too late for the kiosk.
+        var (live, replay, kimai, markers) = CreateLiveAndReplay();
+        await replay.SyncKioskAsync([Kiosk("t1", "start", T08), Kiosk("t2", "pauseStart", T12)]);
+        kimai.StopWallClock = T1230.AddSeconds(2);
+
+        await live.ClockAsync(Live("pauseEnd", "t3"));
+        Assert.False(markers.TryGet("t3", out _));
         var before = kimai.Operations.Count;
 
-        var result = await service.SyncKioskAsync([Kiosk("h3", "pauseEnd", T1230)]);
+        var result = await replay.SyncKioskAsync([Kiosk("t3", "pauseEnd", T1230)]);
+
+        Assert.Equal("applied", result.Results.Single().Status);
+        Assert.Equal("Keine laufende Pause - Nachtrag nicht moeglich.", result.Results.Single().Message);
+        Assert.Equal(before, kimai.Operations.Count);
+        Assert.True(kimai.IsRunning);
+        Assert.False(kimai.ActiveIsPause);
+    }
+
+    [Fact]
+    public async Task PauseEnd_HalfBookedLiveWithoutEventId_IsRejectedLikeAStopElsewhere()
+    {
+        // An older kiosk sends no event ID with the live request: nothing
+        // tells this half-done pause end apart from a clock-out elsewhere
+        // (issue #55), so the replay rejects instead of guessing.
+        var (live, replay, kimai, _) = CreateLiveAndReplay();
+        await replay.SyncKioskAsync([Kiosk("o1", "start", T08), Kiosk("o2", "pauseStart", T12)]);
+        kimai.StopWallClock = T1230.AddSeconds(2);
+        kimai.FailNextStartCalls = 1;
+        await Assert.ThrowsAsync<HttpRequestException>(() => live.ClockAsync(Live("pauseEnd", null)));
+        var before = kimai.Operations.Count;
+
+        var result = await replay.SyncKioskAsync([Kiosk("o3", "pauseEnd", T1230)]);
 
         var single = Assert.Single(result.Results);
         Assert.Equal("rejected", single.Status);
         Assert.Contains("nicht eindeutig", single.Message);
+        Assert.Equal(before, kimai.Operations.Count);
+        Assert.False(kimai.IsRunning);
+    }
+
+    [Fact]
+    public async Task PauseEnd_RejectedLiveByKimai_SetsNoMarker()
+    {
+        // A 4xx is shown on the kiosk and never queued - nothing to resume.
+        var (live, replay, kimai, markers) = CreateLiveAndReplay();
+        await replay.SyncKioskAsync([Kiosk("k1", "start", T08), Kiosk("k2", "pauseStart", T12)]);
+        kimai.StartFailures.Enqueue(new KimaiApiException(System.Net.HttpStatusCode.BadRequest, "simulated"));
+
+        await Assert.ThrowsAsync<KimaiApiException>(() => live.ClockAsync(Live("pauseEnd", "k3")));
+
+        Assert.False(markers.TryGet("k3", out _));
+    }
+
+    [Fact]
+    public async Task Switch_HalfBookedLive_ResumesOnTargetOnReplayOfTheSameEvent()
+    {
+        var (live, replay, kimai, markers) = CreateLiveAndReplay();
+        await replay.SyncKioskAsync([Kiosk("w1", "start", T08)]);
+        var workId = kimai.ActiveTimesheetId!.Value;
+        kimai.StopWallClock = T10.AddSeconds(2);
+        kimai.StartFailures.Enqueue(new KimaiApiException(System.Net.HttpStatusCode.BadGateway, "simulated"));
+
+        await Assert.ThrowsAsync<KimaiApiException>(() => live.ClockAsync(Live("switch", "w2", "kx")));
+        Assert.True(markers.TryGet("w2", out _));
+
+        var result = await replay.SyncKioskAsync([Switch("w2", "kx", T10)]);
+
+        Assert.Equal("applied", result.Results.Single().Status);
+        Assert.Equal(T10, kimai.EndOf(workId));
+        Assert.Equal(("start", T10), kimai.Operations[^1]);
+        Assert.Equal((20, 21), (kimai.StartedTargets[^1].ProjectId, kimai.StartedTargets[^1].ActivityId));
+        Assert.True(kimai.IsRunning);
+    }
+
+    [Fact]
+    public async Task Switch_AppliedLiveButQueuedAfterTimeout_IsNoOp()
+    {
+        var (live, replay, kimai, markers) = CreateLiveAndReplay();
+        await replay.SyncKioskAsync([Kiosk("a1", "start", T08)]);
+        kimai.StopWallClock = T10.AddSeconds(2);
+
+        await live.ClockAsync(Live("switch", "a2", "kx"));
+        Assert.False(markers.TryGet("a2", out _));
+        var before = kimai.Operations.Count;
+
+        var result = await replay.SyncKioskAsync([Switch("a2", "kx", T10)]);
+
+        Assert.Equal("applied", result.Results.Single().Status);
+        Assert.Contains("Lief bereits", result.Results.Single().Message);
+        Assert.Equal(before, kimai.Operations.Count);
+    }
+
+    [Fact]
+    public async Task Switch_HalfBookedLiveWithoutEventId_IsRejectedLikeAStopElsewhere()
+    {
+        var (live, replay, kimai, _) = CreateLiveAndReplay();
+        await replay.SyncKioskAsync([Kiosk("b1", "start", T08)]);
+        kimai.StopWallClock = T10.AddSeconds(2);
+        kimai.FailNextStartCalls = 1;
+        await Assert.ThrowsAsync<HttpRequestException>(() => live.ClockAsync(Live("switch", null, "kx")));
+        var before = kimai.Operations.Count;
+
+        var result = await replay.SyncKioskAsync([Switch("b2", "kx", T10)]);
+
+        Assert.Equal("rejected", result.Results.Single().Status);
         Assert.Equal(before, kimai.Operations.Count);
         Assert.False(kimai.IsRunning);
     }
@@ -983,7 +1108,50 @@ public sealed class OfflineClockServiceTests
     private static (OfflineClockService Service, FakeKimaiClient Kimai, RecordingLogger Logger, RuntimeSettings Settings) CreateServiceWithSettings(
         FakeKimaiClient? existingKimai = null)
     {
-        var settings = new RuntimeSettings
+        var settings = TestSettings();
+
+        // An existing fake stands for Kimai surviving a restart of this API
+        // (a fresh marker store: markers live in memory only).
+        var kimai = existingKimai ?? new FakeKimaiClient();
+        var logger = new RecordingLogger();
+        var service = new OfflineClockService(
+            new InMemorySettingsStore(settings),
+            new InMemoryEmployeeService(),
+            kimai,
+            new InMemoryEventIdStore(),
+            new InterruptedTransitionStore(),
+            logger);
+
+        return (service, kimai, logger, settings);
+    }
+
+    /// <summary>
+    /// Live path and replay against one Kimai, sharing the marker store like
+    /// the singleton in Program.cs (issue #67).
+    /// </summary>
+    private static (ClockService Live, OfflineClockService Replay, FakeKimaiClient Kimai, InterruptedTransitionStore Markers) CreateLiveAndReplay()
+    {
+        var settings = TestSettings();
+        var kimai = new FakeKimaiClient();
+        var markers = new InterruptedTransitionStore();
+        var replay = new OfflineClockService(
+            new InMemorySettingsStore(settings),
+            new InMemoryEmployeeService(),
+            kimai,
+            new InMemoryEventIdStore(),
+            markers,
+            new RecordingLogger());
+        var live = new ClockService(
+            new InMemorySettingsStore(settings),
+            new InMemoryEmployeeService(),
+            kimai,
+            interruptedTransitions: markers);
+        return (live, replay, kimai, markers);
+    }
+
+    private static RuntimeSettings TestSettings()
+    {
+        return new RuntimeSettings
         {
             BaseUrl = "http://kimai.test",
             DefaultProjectId = 1,
@@ -1018,18 +1186,6 @@ public sealed class OfflineClockServiceTests
                 },
             ],
         };
-
-        // An existing fake stands for Kimai surviving a restart of this API.
-        var kimai = existingKimai ?? new FakeKimaiClient();
-        var logger = new RecordingLogger();
-        var service = new OfflineClockService(
-            new InMemorySettingsStore(settings),
-            new InMemoryEmployeeService(),
-            kimai,
-            new InMemoryEventIdStore(),
-            logger);
-
-        return (service, kimai, logger, settings);
     }
 
     /// <summary>
@@ -1207,6 +1363,12 @@ public sealed class OfflineClockServiceTests
                 onDefault));
         }
 
+        /// <summary>
+        /// The next start calls (live or backdated) fail with these
+        /// exceptions, in order - after <see cref="FailNextStartCalls"/>.
+        /// </summary>
+        public Queue<Exception> StartFailures { get; } = new();
+
         public Task StartAtAsync(
             RuntimeSettings settings,
             EmployeeSettings employee,
@@ -1218,6 +1380,11 @@ public sealed class OfflineClockServiceTests
             {
                 FailNextStartCalls--;
                 throw new HttpRequestException("simulated transient start failure");
+            }
+
+            if (StartFailures.TryDequeue(out var failure))
+            {
+                throw failure;
             }
 
             Operations.Add(("start", startedAt));
@@ -1298,8 +1465,9 @@ public sealed class OfflineClockServiceTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult<string?>("Europe/Berlin");
 
+        /// <summary>Live start: begins at <see cref="StopWallClock"/>, the fake's "now".</summary>
         public Task StartAsync(RuntimeSettings settings, EmployeeSettings employee, KimaiTimesheetTarget target, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            StartAtAsync(settings, employee, target, StopWallClock, cancellationToken);
 
         public Task<IReadOnlyCollection<KimaiUserDto>> GetUsersAsync(string baseUrl, string apiToken, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
