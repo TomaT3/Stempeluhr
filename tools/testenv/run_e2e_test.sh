@@ -12,8 +12,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d /tmp/stempeluhr-e2e.XXXXXX)"
-# Eindeutige Event-ID-Präfixe pro Lauf, damit der persistente Event-ID-Store
-# (data/offline-event-ids.json) eines früheren Laufs nichts als duplicate markiert.
+# Eindeutige Event-ID-Präfixe pro Lauf. Der Event-ID-Store liegt seit
+# Stempeluhr:DataPath ohnehin in $WORK (nicht im data/ einer Dev-API, die
+# dieselbe Datei sonst parallel überschreiben würde); die Präfixe halten die
+# Logs mehrerer Läufe auseinander.
 RUN="$(date +%s)-$$"
 # Eigene Ports statt der Dev-Ports (API 5100, Fake-Kimai 8099): cleanup()
 # beendet alles, was auf ihnen lauscht, und träfe sonst eine laufende Dev-API.
@@ -108,6 +110,7 @@ echo "  Fake-Kimai läuft (PID $KIMAI_PID)"
 dotnet run --project "$ROOT/Stempeluhr.Api/Stempeluhr.Api.csproj" --no-build \
   --urls "$API_URL" -- \
   "Stempeluhr:SettingsPath=$WORK/settings.json" \
+  "Stempeluhr:DataPath=$WORK/data" \
   "Stempeluhr:KnownProxies:0=127.0.0.1" \
   > "$WORK/api.log" 2>&1 & API_PID=$!
 wait_for "$API_URL/healthz" 30 || wait_for "$API_URL/api/health" 5 || {

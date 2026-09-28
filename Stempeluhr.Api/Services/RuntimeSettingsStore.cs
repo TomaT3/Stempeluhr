@@ -54,7 +54,7 @@ public sealed class RuntimeSettingsStore(IWebHostEnvironment environment, IConfi
     {
         var configuredPath = configuration["Stempeluhr:SettingsPath"];
         return string.IsNullOrWhiteSpace(configuredPath)
-            ? Path.Combine(environment.ContentRootPath, "data", "settings.json")
+            ? Path.Combine(DataPaths.Directory(configuration, environment), "settings.json")
             : configuredPath;
     }
 }

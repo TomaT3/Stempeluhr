@@ -102,7 +102,8 @@ services:
 ```
 
 `data/` enthält `settings.json` mit allen Secrets und muss persistent
-eingebunden und gesichert werden.
+eingebunden und gesichert werden. `Stempeluhr__DataPath` verlegt den Ordner
+(Standard: `data/` im ContentRoot, im Container `/app/data`).
 
 ### Admin-Bereich
 
