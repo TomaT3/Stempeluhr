@@ -7,9 +7,16 @@ public sealed record KioskPinLoginRequest(string? Pin);
 /// <summary>
 /// One kiosk action. <paramref name="TaskId"/> is only used by "start" and
 /// "switch": the task to clock in on resp. switch to (null/empty = the
-/// default task).
+/// default task). <paramref name="EventId"/> is the ID under which the kiosk
+/// queues this very action if the request fails (older kiosks send none).
 /// </summary>
-public sealed record KioskClockRequest(string EmployeeId, string? Pin, string Action, string? NfcCardId, string? TaskId = null);
+public sealed record KioskClockRequest(
+    string EmployeeId,
+    string? Pin,
+    string Action,
+    string? NfcCardId,
+    string? TaskId = null,
+    string? EventId = null);
 
 /// <summary>
 /// Card identification request from the kiosk browser: resolves a scanned

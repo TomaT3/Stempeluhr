@@ -241,7 +241,7 @@ describe('ClockPage', () => {
     options[1].click();
 
     const kioskApi = TestBed.inject(KioskApi) as unknown as { clock: ReturnType<typeof vi.fn> };
-    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx');
+    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx', expect.any(String));
   });
 
   it('ignores a second tap right after opening the switch picker (issue #59)', () => {
@@ -268,7 +268,7 @@ describe('ClockPage', () => {
     vi.advanceTimersByTime(400);
     kundeX.click();
 
-    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx');
+    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx', expect.any(String));
     fixture.destroy();
   });
 

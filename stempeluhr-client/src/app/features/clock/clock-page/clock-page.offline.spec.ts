@@ -155,6 +155,12 @@ describe('ClockPage offline behaviour', () => {
     clockResult.error({ status: 0 });
 
     expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    // Same event ID as the live request (issue #67): the replay may then
+    // complete a transition the live request left half-done.
+    const kioskApi = TestBed.inject(KioskApi) as unknown as { clock: ReturnType<typeof vi.fn> };
+    const liveEventId = kioskApi.clock.mock.calls[0][5];
+    expect(liveEventId).toMatch(/^[0-9a-f]{16,}$/);
+    expect(enqueueKiosk.mock.calls[0][0].eventId).toBe(liveEventId);
     expect(component.message()).toContain('Offline gespeichert');
     expect(component.isBusy()).toBe(false);
 

@@ -17,6 +17,8 @@ builder.Services.AddSingleton<IOfflineEventIdStore>(sp => new FileOfflineEventId
 // HTTP requests so events buffered during a Kimai outage survive and can be
 // flushed by the background service below.
 builder.Services.AddSingleton<IOfflineClockService, OfflineClockService>();
+// Shared by the replay and the scoped live ClockService (issue #67).
+builder.Services.AddSingleton<KioskEventCoordinator>();
 builder.Services.AddHostedService<OfflineOutboxBackgroundService>();
 // Separate throttles for the unauthenticated kiosk sync and identify endpoints.
 builder.Services.AddKioskRateLimiters();

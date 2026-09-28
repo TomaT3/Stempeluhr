@@ -138,10 +138,17 @@ beim Nachtrag schon eine andere Tätigkeit, bleibt das Einstempeln wie immer
 ein No-op; die verworfene Wahl steht dann im API-Log. Lässt
 sich ein Wechsel oder ein Pausenende nicht eindeutig nachtragen (z. B. weil
 kurz danach an einem anderen Terminal ausgestempelt wurde), meldet der Kiosk
-ihn als abgelehnt, statt eine Buchung zu raten. Das gilt auch, wenn ein
-Pausenende oder Wechsel live nur halb in Kimai ankam (Stopp gebucht, Start
-gescheitert oder Kiosk-Timeout) und der Kiosk ihn deshalb nachträgt: In Kimai
-sieht das genauso aus wie ein Ausstempeln an einem anderen Terminal.
+ihn als abgelehnt, statt eine Buchung zu raten. Kam ein Pausenende oder
+Wechsel live nur halb in Kimai an (Stopp gebucht, Start gescheitert oder
+Kiosk-Timeout), sieht das in Kimai genauso aus. Der Kiosk schickt deshalb
+schon mit dem Live-Stempel die Event-ID mit, unter der er ihn im Fehlerfall
+einreiht; die API merkt sich den gestoppten Eintrag unter dieser ID, und der
+Nachtrag setzt genau dieses Ereignis fort. Läuft der Live-Stempel noch (der
+Kiosk gibt nach 8 s auf, ein Kimai-Aufruf darf 15 s dauern), wartet der
+Nachtrag dieses Ereignisses in der Outbox auf dessen Ergebnis, statt einen
+halben Stand zu lesen. Nach einem Neustart der API
+dazwischen (der Merker liegt nur im Speicher) wird der Stempel wie bisher
+abgelehnt.
 
 Die Dauer im Statusfeld zählt nur den laufenden Abschnitt (z. B. „Kunde X
 seit 10:15“) und beginnt nach Wechsel oder Pausenende neu; die Tagessumme

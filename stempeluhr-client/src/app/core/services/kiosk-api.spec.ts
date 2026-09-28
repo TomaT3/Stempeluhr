@@ -31,6 +31,14 @@ describe('KioskApi', () => {
     ['ping', '/api/health', () => api.ping()],
   ];
 
+  it('sends the event ID the kiosk queues on failure with the live stamp (issue #67)', () => {
+    api.clock('max', '1234', 'pauseEnd', null, null, 'ev1').subscribe();
+
+    const request = http.expectOne('/api/kiosk/clock');
+    expect(request.request.body).toMatchObject({ action: 'pauseEnd', eventId: 'ev1' });
+    request.flush({});
+  });
+
   it('classifies answers like the API: network, 5xx, 408 and 429 are transient', () => {
     expect([0, 408, 429, 500, 502, 503].every(isTransientHttpStatus)).toBe(true);
     expect([400, 401, 403, 404, 409, 422].some(isTransientHttpStatus)).toBe(false);

@@ -35,6 +35,7 @@ public sealed class OfflineClockService(
     IEmployeeService employees,
     IKimaiClient kimai,
     IOfflineEventIdStore eventIdStore,
+    KioskEventCoordinator kioskEvents,
     ILogger<OfflineClockService> logger) : IOfflineClockService
 {
     private const string BufferedStatus = "buffered";
@@ -53,18 +54,6 @@ public sealed class OfflineClockService(
     // same event - one per retry interval across the whole outage. Guarded by
     // _syncLock like the list itself.
     private readonly HashSet<string> _kioskOutboxIds = new(StringComparer.Ordinal);
-
-    // Two-step transitions (pauseEnd, switch) whose replay got Kimai's
-    // confirmation for the stop and then failed: event ID -> id of the sheet
-    // this replay stopped. Only these may resume while nothing runs, and only
-    // while that very sheet is still the latest stopped one. An ordinary
-    // clock-out on another terminal right after the queued event leaves the
-    // same Kimai state (latest stopped sheet ending near the event), so the
-    // Kimai state alone cannot tell our own half-done transition apart
-    // (issue #55); the sheet id also survives a failed end backdate, which
-    // the time window did not (issue #10). Guarded by _syncLock; lost on
-    // restart - the replay then rejects instead of guessing.
-    private readonly Dictionary<string, int> _interruptedTransitions = new(StringComparer.Ordinal);
 
     private readonly SemaphoreSlim _syncLock = new(1, 1);
 
@@ -142,9 +131,10 @@ public sealed class OfflineClockService(
                     BufferKioskFrom(orderedKioskEvents, i);
                     break;
                 }
-                catch (Exception ex) when (IsTransientNetworkError(ex))
+                catch (Exception ex) when (IsTransientError(ex))
                 {
-                    // Kimai unreachable at the network level - keep for retry.
+                    // Kimai unreachable at the network level, or the live request of
+                    // this event still running - keep for retry.
                     eventIdStore.Remove(entry.EventId);
                     BufferKioskFrom(orderedKioskEvents, i);
                     break;
@@ -245,6 +235,18 @@ public sealed class OfflineClockService(
         var settings = settingsStore.Load();
         var employee = ResolveKioskEmployee(settings, entry);
 
+        if (kioskEvents.IsLiveInFlight(entry.EventId))
+        {
+            // The kiosk gave up on the live request of this very event, the
+            // API is still on it (issue #67). Reading Kimai now could see a
+            // half-done transition before its marker exists. Buffer instead:
+            // the outbox retries once the live request has an outcome.
+            logger.LogInformation(
+                "Offline kiosk event {EventId}: its live request is still running - buffering",
+                entry.EventId);
+            throw new LiveRequestInFlightException();
+        }
+
         var action = NormalizeKioskAction(entry.Action);
         return await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
     }
@@ -286,6 +288,13 @@ public sealed class OfflineClockService(
     /// per event - every result reveals whether its credentials matched.
     /// </summary>
     private sealed class KioskAuthenticationException(string message) : InvalidOperationException(message);
+
+    /// <summary>
+    /// The live request of the same event is still running. Transient like a
+    /// Kimai outage: the event buffers and the outbox retries it.
+    /// </summary>
+    private sealed class LiveRequestInFlightException()
+        : InvalidOperationException("Live-Stempel laeuft noch - wird automatisch nachgetragen.");
 
     private static string NormalizeKioskAction(string? action)
     {
@@ -414,9 +423,10 @@ public sealed class OfflineClockService(
 
     /// <summary>
     /// Runs one two-step transition (pauseEnd, switch). Its marker in
-    /// <see cref="_interruptedTransitions"/> survives only a TRANSIENT failure
-    /// (the event buffers and comes back); any final outcome - applied, no-op,
-    /// rejected - ends it.
+    /// <see cref="KioskEventCoordinator"/> - set by an earlier replay or
+    /// by the live request of the same event - survives only a TRANSIENT
+    /// failure (the event buffers and comes back); any final outcome -
+    /// applied, no-op, rejected - ends it.
     /// </summary>
     private async Task<(string Message, string State)> ApplyTransitionAsync(
         string eventId,
@@ -425,12 +435,12 @@ public sealed class OfflineClockService(
         try
         {
             var result = await apply();
-            _interruptedTransitions.Remove(eventId);
+            kioskEvents.Forget(eventId);
             return result;
         }
-        catch (Exception ex) when (!(ex is KimaiApiException kimaiEx ? IsRetryable(kimaiEx) : IsTransientNetworkError(ex)))
+        catch (Exception ex) when (!(ex is KimaiApiException kimaiEx ? IsRetryable(kimaiEx) : IsTransientError(ex)))
         {
-            _interruptedTransitions.Remove(eventId);
+            kioskEvents.Forget(eventId);
             throw;
         }
     }
@@ -439,7 +449,8 @@ public sealed class OfflineClockService(
     /// First step of a transition: stop the sheet and backdate its end. The
     /// marker is set as soon as Kimai confirmed the stop, before the backdate
     /// that can fail on its own (issue #10): a retry then knows this replay
-    /// stopped that very sheet.
+    /// stopped that very sheet - the sheet id survives a failed backdate,
+    /// which a time window would not.
     /// </summary>
     private async Task StopTransitionAsync(
         RuntimeSettings settings,
@@ -450,7 +461,7 @@ public sealed class OfflineClockService(
         CancellationToken cancellationToken)
     {
         await kimai.StopAsync(settings, employee, timesheetId, cancellationToken);
-        _interruptedTransitions[eventId] = timesheetId;
+        kioskEvents.Remember(eventId, timesheetId);
         await kimai.BackdateEndAsync(settings, employee, timesheetId, timestamp, cancellationToken);
     }
 
@@ -458,11 +469,13 @@ public sealed class OfflineClockService(
 
     /// <summary>
     /// Retry of a transition while nothing runs: when an earlier replay of
-    /// THIS event stopped the latest stopped sheet, returns the
-    /// <paramref name="count"/> latest stopped sheets (that one first) with
-    /// its end backdated to the event, so the caller resumes. Returns null
+    /// THIS event - or its live request - stopped the latest stopped sheet,
+    /// returns the <paramref name="count"/> latest stopped sheets (that one
+    /// first) with its end backdated to the event, so the caller resumes. Returns null
     /// when this server stopped nothing for the event. Rejects when it did,
-    /// but something ended or booked after that stop.
+    /// but something ended or booked after that stop. A live stop ended the
+    /// sheet at the server's clock, not at the kiosk's timestamp: the
+    /// backdate below aligns it with the resume.
     /// </summary>
     private async Task<IReadOnlyList<KimaiRecentTimesheetDto>?> ResumeOwnInterruptedStopAsync(
         RuntimeSettings settings,
@@ -473,7 +486,7 @@ public sealed class OfflineClockService(
         int count,
         CancellationToken cancellationToken)
     {
-        if (!_interruptedTransitions.TryGetValue(eventId, out var stoppedId))
+        if (!kioskEvents.TryGet(eventId, out var stoppedId))
         {
             return null;
         }
@@ -482,15 +495,16 @@ public sealed class OfflineClockService(
         if (recent.FirstOrDefault()?.Id != stoppedId)
         {
             logger.LogWarning(
-                "Offline {What} {EventId} at {Timestamp}: sheet {TimesheetId} stopped by this replay is no longer the latest stopped one - rejecting",
+                "Offline {What} {EventId} at {Timestamp}: sheet {TimesheetId} stopped for it is no longer the latest stopped one - rejecting",
                 what, eventId, timestamp, stoppedId);
             throw new InvalidOperationException($"{what} {UnclearTransitionMessage}");
         }
 
         if (recent[0].EndedAt is not { } ended || Math.Abs((ended - timestamp).TotalSeconds) >= 1)
         {
-            // The stop went through, its backdate did not (issue #10): the
-            // sheet still ends at the moment of that first attempt.
+            // The stop went through, its backdate did not (issue #10) or the
+            // stop was live (issue #67): the sheet ends at the server's clock
+            // of that stop.
             await kimai.BackdateEndAsync(settings, employee, stoppedId, timestamp, cancellationToken);
         }
 
@@ -544,10 +558,10 @@ public sealed class OfflineClockService(
             return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
         }
 
-        // Nothing runs. Either an earlier replay of this event stopped the
-        // pause and then failed on the resume - answering a no-op would leave
-        // the employee clocked out for the rest of the day - or the pause
-        // ended elsewhere. Two entries: the stopped pause plus the sheet it
+        // Nothing runs. Either an earlier replay or the live request of this
+        // event stopped the pause and then failed on the resume - answering a
+        // no-op would leave the employee clocked out for the rest of the day
+        // - or the pause ended elsewhere. Two entries: the stopped pause plus the sheet it
         // interrupted, so the resume picks the task from before the pause.
         if (await ResumeOwnInterruptedStopAsync(settings, employee, eventId, "Pausenende", timestamp, 2, cancellationToken) is { } recent)
         {
@@ -561,8 +575,9 @@ public sealed class OfflineClockService(
         {
             // Looks like a half-done pause end, but this server did not stop
             // the pause for this event: typically a clock-out on another
-            // terminal seconds after the queued pause end (issue #55), or a
-            // restart lost the marker. Resuming would book work that runs
+            // terminal seconds after the queued pause end (issue #55), a
+            // restart lost the marker, or an older kiosk sent the live request
+            // without the event ID. Resuming would book work that runs
             // all night; acknowledging would hide a possibly lost pause end.
             // Reject: the kiosk reports it for a check.
             logger.LogWarning(
@@ -602,8 +617,9 @@ public sealed class OfflineClockService(
 
         if (!status.IsRunning || status.ActiveTimesheetId is not int switchStopId)
         {
-            // Partial-application recovery: a previous replay of THIS event
-            // stopped the work sheet but failed transiently on the start.
+            // Partial-application recovery: a previous replay or the live
+            // request of THIS event stopped the work sheet, then the start
+            // failed.
             if (await ResumeOwnInterruptedStopAsync(settings, employee, eventId, "Wechsel", timestamp, 1, cancellationToken) is not null)
             {
                 if (target is null)
@@ -629,10 +645,10 @@ public sealed class OfflineClockService(
             }
 
             // Looks like a half-done switch, but this server did not stop
-            // that sheet for this event (clock-out elsewhere, or a restart
-            // lost the marker). Starting the target would book a sheet that
-            // runs all night; acknowledging would hide a possibly lost
-            // switch. Reject: the kiosk reports it for a check.
+            // that sheet for this event (clock-out elsewhere, a restart lost
+            // the marker, or an older kiosk without event ID). Starting the
+            // target would book a sheet that runs all night; acknowledging
+            // would hide a possibly lost switch. Reject: the kiosk reports it for a check.
             logger.LogWarning(
                 "Offline switch {EventId} at {Timestamp}: work sheet stopped near the event, but not by this replay - rejecting",
                 eventId, timestamp);
@@ -750,7 +766,7 @@ public sealed class OfflineClockService(
     /// (pauseEnd: <paramref name="stoppedPause"/> true, switch: false): the
     /// latest stopped timesheet is a PAUSE (resp. WORK) timesheet that ended
     /// at this event's timestamp. Used only when this server holds no marker
-    /// for the event (<see cref="_interruptedTransitions"/>), to tell "ended
+    /// for the event (<see cref="KioskEventCoordinator"/>), to tell "ended
     /// elsewhere right after the event - reject" from "nothing to do - no-op".
     /// The small tolerance only absorbs timestamp rounding and clock skew. A
     /// transient failure of the lookup itself propagates to the caller, so
@@ -894,9 +910,10 @@ public sealed class OfflineClockService(
                 _kioskOutbox.Insert(0, kioskEntry);
                 break;
             }
-            catch (Exception ex) when (IsTransientNetworkError(ex))
+            catch (Exception ex) when (IsTransientError(ex))
             {
-                // Kimai unreachable at the network level - put back and retry later.
+                // Kimai unreachable at the network level, or the live request of
+                // this event still running - put back and retry later.
                 eventIdStore.Remove(kioskEntry.EventId);
                 _kioskOutbox.Insert(0, kioskEntry);
                 break;
@@ -935,16 +952,18 @@ public sealed class OfflineClockService(
 
     /// <summary>
     /// True for network-level failures while talking to Kimai (host down,
-    /// DNS failure, connection reset, timeout). These are transient - the
-    /// event must be buffered, never rejected. HttpRequestException and
+    /// DNS failure, connection reset, timeout) and for a live request of the
+    /// same event that is still running. These are transient - the event must
+    /// be buffered, never rejected. HttpRequestException and
     /// TaskCanceledException are NOT KimaiApiExceptions, so they would
     /// otherwise fall into the "permanent" catch-all.
     /// </summary>
-    private static bool IsTransientNetworkError(Exception exception)
+    private static bool IsTransientError(Exception exception)
     {
         return exception is HttpRequestException
             or System.Net.Sockets.SocketException
             or TaskCanceledException
-            or TimeoutException;
+            or TimeoutException
+            or LiveRequestInFlightException;
     }
 }
