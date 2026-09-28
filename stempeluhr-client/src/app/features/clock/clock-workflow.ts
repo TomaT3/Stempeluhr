@@ -176,7 +176,10 @@ export abstract class ClockWorkflow implements OnDestroy {
    * nach einer Aktion ist ihr Status älter als der der Aktion.
    */
   private identifyRefresh: Subscription | null = null;
-  /** Zählt resetSessionChoices hoch - bei jedem Identitätswechsel und jeder Aktion. */
+  /**
+   * Zählt resetSessionChoices hoch - bei jedem Identitätswechsel und jeder
+   * Aktion -, dazu jeder Scan einer Karte, die nicht im Cache liegt.
+   */
   private sessionGeneration = 0;
   /** Unsubscribes the offline-queue recovery listener (see constructor). */
   private recoveryUnsubscribe: (() => void) | null = null;
@@ -809,11 +812,21 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
 
+    // Die Antwort kann bis zum Timeout dauern. Ein neuerer Scan, ein
+    // PIN-Login oder back() macht sie zur verspäteten: dann aktualisiert sie
+    // nur noch den Karten-Cache, meldet aber weder an noch "Unbekannte Karte"
+    // (Issue #28).
+    const generation = ++this.sessionGeneration;
     const identifyCardId = normalized ?? cardId;
     this.kioskApi.identify(identifyCardId, this.terminalId ?? 'default').subscribe({
       next: event => {
         if (event.success && event.employee) {
           rememberEmployeeCard(event.cardId ?? identifyCardId, event.employee);
+        }
+        if (generation !== this.sessionGeneration) {
+          return;
+        }
+        if (event.success && event.employee) {
           this.applyOfflineIdentity(event.employee, event.cardId ?? identifyCardId, null, event.status);
           this.message.set(`${event.employee.displayName} - bitte Aktion waehlen.`);
           this.audioFeedback.playBeeps(1);
@@ -823,6 +836,9 @@ export abstract class ClockWorkflow implements OnDestroy {
         }
       },
       error: () => {
+        if (generation !== this.sessionGeneration) {
+          return;
+        }
         this.message.set('Unbekannte Karte');
         this.audioFeedback.playBeeps(2);
       },
