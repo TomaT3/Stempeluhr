@@ -181,15 +181,27 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         CancellationToken cancellationToken = default)
     {
         // First stop the timesheet normally so Kimai computes a duration.
-        await SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Patch, $"api/timesheets/{timesheetId}/stop", null, cancellationToken);
+        await StopAsync(settings, employee, timesheetId, cancellationToken);
 
         // Then backdate the end timestamp to the real scan time. If the stop
         // went through but this PATCH is lost to a transient error, the
-        // timesheet keeps end=now and a later offline replay would see
-        // IsRunning == false - it could never correct the end time on its own.
-        await BackdatePatchAsync(
-            settings, employee, "end-backdate", timesheetId, stoppedAt,
-            new { end = stoppedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz") },
+        // timesheet keeps end=now and a later replay sees IsRunning == false.
+        // Callers that must repair that call the two halves themselves
+        // (OfflineClockService.StopTransitionAsync).
+        await BackdateEndAsync(settings, employee, timesheetId, stoppedAt, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task BackdateEndAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int timesheetId,
+        DateTimeOffset endedAt,
+        CancellationToken cancellationToken = default)
+    {
+        return BackdatePatchAsync(
+            settings, employee, "end-backdate", timesheetId, endedAt,
+            new { end = endedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz") },
             cancellationToken);
     }
 
@@ -271,7 +283,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
                     endedAt = parsed;
                 }
 
-                return new KimaiRecentTimesheetDto(GetId(entry, "activity"), endedAt, GetId(entry, "project"));
+                return new KimaiRecentTimesheetDto(GetId(entry, "activity"), endedAt, GetId(entry, "project"), GetId(entry, "id"));
             })
             .ToList();
     }

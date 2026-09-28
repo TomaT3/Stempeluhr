@@ -115,6 +115,8 @@ public sealed class KimaiClientTests
         Assert.Equal(5, recent[0].ActivityId);
         Assert.Equal(DateTimeOffset.Parse("2026-08-28T11:30:00+02:00"), recent[0].EndedAt);
         Assert.Equal((20, 21), (recent[1].ProjectId, recent[1].ActivityId));
+        // The id lets the offline replay recognise the sheet it stopped itself.
+        Assert.Equal((9, 8), (recent[0].Id, recent[1].Id));
     }
 
     [Fact]

@@ -135,9 +135,9 @@ gelöscht, bucht der Nachtrag auf die Haupttätigkeit, damit keine Arbeitszeit
 verloren geht, und vermerkt das in der Beschreibung des Timesheets. Läuft
 beim Nachtrag schon eine andere Tätigkeit, bleibt das Einstempeln wie immer
 ein No-op; die verworfene Wahl steht dann im API-Log. Lässt
-sich ein Wechsel nicht eindeutig nachtragen (z. B. weil kurz danach an einem
-anderen Terminal ausgestempelt wurde), meldet der Kiosk ihn als abgelehnt,
-statt eine Buchung zu raten.
+sich ein Wechsel oder ein Pausenende nicht eindeutig nachtragen (z. B. weil
+kurz danach an einem anderen Terminal ausgestempelt wurde), meldet der Kiosk
+ihn als abgelehnt, statt eine Buchung zu raten.
 
 Die Dauer im Statusfeld zählt nur den laufenden Abschnitt (z. B. „Kunde X
 seit 10:15“) und beginnt nach Wechsel oder Pausenende neu; die Tagessumme

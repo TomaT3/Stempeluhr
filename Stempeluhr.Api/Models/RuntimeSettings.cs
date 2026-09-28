@@ -20,19 +20,20 @@ public sealed class RuntimeSettings
 
     /// <summary>
     /// Maximaler Abstand zwischen dem Ende des letzten gestoppten
-    /// Pause-Timesheets und dem Zeitstempel eines replayten pauseEnd-Events,
-    /// damit dieser als „unterbrochene Transaktion" erkannt wird. Kleiner
-    /// Wert = wenig Phantom-Resume-Fenster; Standard 30 s absorbieren nur
-    /// Timestamp-Rounding.
+    /// Timesheets und dem Zeitstempel eines replayten pauseEnd- bzw.
+    /// Wechsel-Events, ab dem der Zustand wie eine unterbrochene Transaktion
+    /// aussieht. Fortgesetzt wird nie aufgrund dieses Abstands, sondern nur,
+    /// wenn dieser Server das Blatt für genau dieses Event gestoppt hat
+    /// (Merker mit Timesheet-ID, Issues #55 und #10). Ohne Merker entscheidet
+    /// der Abstand nur: innerhalb der Toleranz ablehnen (der Kiosk meldet den
+    /// Stempel zur Prüfung), sonst ein stiller No-op.
     ///
-    /// Trade-off: Der Wert muss größer sein als die zu erwartende
+    /// Trade-off: Der Wert sollte größer sein als die zu erwartende
     /// Uhrenabweichung zwischen Client (Pi) und Server (Kimai). Raspberry Pi
     /// OS (Bookworm) synchronisiert die Uhr standardmäßig via systemd-timesyncd
-    /// (NTP über DHCP) - dann reichen 30 s locker. Läuft ein Client ohne
-    /// Zeitsynchronisation (kein NTP, z.B. isoliertes Netz), kann die
-    /// Abweichung größer werden und ein echter unterbrochener pauseEnd wird
-    /// nicht mehr erkannt (Mitarbeiter bleibt bis zum nächsten Stempel
-    /// ausgestempelt). In so einem Setup den Wert erhöhen.
+    /// (NTP über DHCP) - dann reichen 30 s locker. Ist er zu klein, endet ein
+    /// Fall ohne Merker (Neustart dazwischen) als stiller No-op statt als
+    /// gemeldete Ablehnung.
     /// </summary>
     public int PauseEndRecoveryToleranceSeconds { get; init; } = 30;
     public List<EmployeeSettings> Employees { get; init; } = [];
