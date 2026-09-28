@@ -39,6 +39,12 @@ const HEALTH_POLL_MS = 15_000;
  * wenn der Server TCP annimmt, aber nie antwortet (Review-Befund W2).
  */
 const HEALTH_TIMEOUT_MS = 10_000;
+/**
+ * Sperre nach dem Öffnen einer Auswahl per Knopf: Die Optionen ersetzen den
+ * Knopf in derselben Spalte, ein prellender Doppeltipp träfe sonst eine
+ * buchende Option (Issue #59).
+ */
+const CHOICE_TAP_GUARD_MS = 400;
 
 /** A stamp as captured at button press (see sendClockAction). */
 interface PendingStamp {
@@ -178,6 +184,8 @@ export abstract class ClockWorkflow implements OnDestroy {
   private identifyRefresh: Subscription | null = null;
   /** Zählt resetSessionChoices hoch - bei jedem Identitätswechsel und jeder Aktion. */
   private sessionGeneration = 0;
+  /** Bis wann Tipps nach dem Öffnen einer Auswahl verworfen werden (CHOICE_TAP_GUARD_MS). */
+  private choiceTapGuardUntil = 0;
   /** Unsubscribes the offline-queue recovery listener (see constructor). */
   private recoveryUnsubscribe: (() => void) | null = null;
   /**
@@ -507,6 +515,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
     if (!this.isBusy()) {
       this.startChoiceOpen.set(true);
+      this.guardChoiceTaps();
     }
   }
 
@@ -520,6 +529,11 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
     this.taskPickerOpen.set(true);
+    this.guardChoiceTaps();
+  }
+
+  private guardChoiceTaps(): void {
+    this.choiceTapGuardUntil = Date.now() + CHOICE_TAP_GUARD_MS;
   }
 
   closeTaskPicker(): void {
@@ -558,6 +572,8 @@ export abstract class ClockWorkflow implements OnDestroy {
   private resetSessionChoices(): void {
     this.taskPickerOpen.set(false);
     this.startChoiceOpen.set(false);
+    // Die Auswahl direkt nach einem Login bucht ohne Verzögerung.
+    this.choiceTapGuardUntil = 0;
     this.sessionGeneration++;
   }
 
@@ -888,6 +904,12 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   private sendClockAction(action: ClockAction, taskId: string | null = null): void {
+    // Zweiter Tipp kurz nach dem Öffnen einer Auswahl: nicht buchen, die
+    // Auswahl bleibt offen. Gilt für jede Aktion - kommt währenddessen der
+    // Status an, ersetzen die Stempelknöpfe die Auswahl unter dem Finger.
+    if (Date.now() < this.choiceTapGuardUntil) {
+      return;
+    }
     this.isBusy.set(true);
     this.resetSessionChoices();
     // Capture the stamp time AND the acting identity SYNCHRONOUSLY at button

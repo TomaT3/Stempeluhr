@@ -115,6 +115,7 @@ describe('ClockPage', () => {
 
   afterEach(() => {
     delete document.documentElement.dataset['theme'];
+    vi.useRealTimers();
   });
 
   it('faerbt eine hell erwartete Seite wieder hell, wenn der Kiosk-Pfad hierher umleitet', () => {
@@ -241,6 +242,34 @@ describe('ClockPage', () => {
 
     const kioskApi = TestBed.inject(KioskApi) as unknown as { clock: ReturnType<typeof vi.fn> };
     expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx');
+  });
+
+  it('ignores a second tap right after opening the switch picker (issue #59)', () => {
+    vi.useFakeTimers();
+    const fixture = TestBed.createComponent(ClockPage);
+    const component = fixture.componentInstance;
+    ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+    pinLoginResult.next({
+      employee: { ...session.employee, tasks: [{ id: 'kx', label: 'Kunde X' }] },
+      status: { ...status, isRunning: true, activeTimesheetId: 5, state: 'working', stateText: 'Eingestempelt' },
+    });
+    fixture.detectChanges();
+
+    (fixture.nativeElement.querySelector('.task-switch-button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    const kundeX = [...fixture.nativeElement.querySelectorAll('.task-button')]
+      .find(option => option.textContent?.trim() === 'Kunde X') as HTMLButtonElement;
+    kundeX.click();
+
+    const kioskApi = TestBed.inject(KioskApi) as unknown as { clock: ReturnType<typeof vi.fn> };
+    expect(kioskApi.clock).not.toHaveBeenCalled();
+    expect(component.taskPickerOpen()).toBe(true);
+
+    vi.advanceTimersByTime(400);
+    kundeX.click();
+
+    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx');
+    fixture.destroy();
   });
 
   it('keeps the hours card hidden before login and clears it on back()', () => {
