@@ -8,7 +8,7 @@ public sealed class ClockService(
     IKimaiClient kimai,
     ITelegramNotifier? notifier = null,
     ILogger<ClockService>? logger = null,
-    InterruptedTransitionStore? interruptedTransitions = null) : IClockService
+    KioskEventCoordinator? kioskEvents = null) : IClockService
 {
     /// <summary>Kiosk event IDs are 32 hex characters; anything longer is not one.</summary>
     private const int MaxEventIdLength = 64;
@@ -99,6 +99,12 @@ public sealed class ClockService(
             return new ClockActionResponse(ClockActionResult.Unauthorized, null);
         }
 
+        // Until this request is done, a replay of the same event waits for it
+        // (issue #67): the kiosk queues the action after 8 s while Kimai may
+        // still be working on it here.
+        var eventId = EventIdOf(request);
+        using var live = eventId is null ? null : kioskEvents?.BeginLive(eventId);
+
         if (string.Equals(request.Action, "start", StringComparison.OrdinalIgnoreCase))
         {
             return await StartClockAsync(context.Settings, context.Employee, request.TaskId, cancellationToken);
@@ -122,7 +128,7 @@ public sealed class ClockService(
         {
             return new ClockActionResponse(
                 ClockActionResult.Success,
-                await EndPauseAsync(context.Settings, context.Employee, EventIdOf(request), cancellationToken));
+                await EndPauseAsync(context.Settings, context.Employee, eventId, cancellationToken));
         }
 
         if (string.Equals(request.Action, "switch", StringComparison.OrdinalIgnoreCase))
@@ -134,7 +140,7 @@ public sealed class ClockService(
                 ? new ClockActionResponse(ClockActionResult.BadRequest, null)
                 : new ClockActionResponse(
                     ClockActionResult.Success,
-                    await SwitchTaskAsync(context.Settings, context.Employee, target, EventIdOf(request), cancellationToken));
+                    await SwitchTaskAsync(context.Settings, context.Employee, target, eventId, cancellationToken));
         }
 
         return new ClockActionResponse(ClockActionResult.BadRequest, null);
@@ -470,6 +476,8 @@ public sealed class ClockService(
     /// kiosk's event ID: the replay of exactly that event then resumes
     /// instead of rejecting it like a clock-out elsewhere (issue #67). A
     /// start that went through needs no marker - the replay finds it running.
+    /// Either way the replay waits for this request to finish first
+    /// (<see cref="KioskEventCoordinator.BeginLive"/>).
     /// </summary>
     private async Task StartAfterStopAsync(
         RuntimeSettings settings,
@@ -485,7 +493,7 @@ public sealed class ClockService(
         }
         catch (Exception ex) when (eventId is not null && !(ex is KimaiApiException kimaiEx && IsRejectedByKimai(kimaiEx)))
         {
-            interruptedTransitions?.Remember(eventId, stoppedTimesheetId);
+            kioskEvents?.Remember(eventId, stoppedTimesheetId);
             logger?.LogWarning(
                 ex,
                 "Live transition {EventId}: sheet {TimesheetId} stopped, start failed - the queued event may resume it",

@@ -143,7 +143,10 @@ Wechsel live nur halb in Kimai an (Stopp gebucht, Start gescheitert oder
 Kiosk-Timeout), sieht das in Kimai genauso aus. Der Kiosk schickt deshalb
 schon mit dem Live-Stempel die Event-ID mit, unter der er ihn im Fehlerfall
 einreiht; die API merkt sich den gestoppten Eintrag unter dieser ID, und der
-Nachtrag setzt genau dieses Ereignis fort. Nach einem Neustart der API
+Nachtrag setzt genau dieses Ereignis fort. Läuft der Live-Stempel noch (der
+Kiosk gibt nach 8 s auf, ein Kimai-Aufruf darf 15 s dauern), wartet der
+Nachtrag dieses Ereignisses in der Outbox auf dessen Ergebnis, statt einen
+halben Stand zu lesen. Nach einem Neustart der API
 dazwischen (der Merker liegt nur im Speicher) wird der Stempel wie bisher
 abgelehnt.
 

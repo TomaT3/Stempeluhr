@@ -35,7 +35,7 @@ public sealed class OfflineClockService(
     IEmployeeService employees,
     IKimaiClient kimai,
     IOfflineEventIdStore eventIdStore,
-    InterruptedTransitionStore interruptedTransitions,
+    KioskEventCoordinator kioskEvents,
     ILogger<OfflineClockService> logger) : IOfflineClockService
 {
     private const string BufferedStatus = "buffered";
@@ -131,9 +131,10 @@ public sealed class OfflineClockService(
                     BufferKioskFrom(orderedKioskEvents, i);
                     break;
                 }
-                catch (Exception ex) when (IsTransientNetworkError(ex))
+                catch (Exception ex) when (IsTransientError(ex))
                 {
-                    // Kimai unreachable at the network level - keep for retry.
+                    // Kimai unreachable at the network level, or the live request of
+                    // this event still running - keep for retry.
                     eventIdStore.Remove(entry.EventId);
                     BufferKioskFrom(orderedKioskEvents, i);
                     break;
@@ -234,6 +235,18 @@ public sealed class OfflineClockService(
         var settings = settingsStore.Load();
         var employee = ResolveKioskEmployee(settings, entry);
 
+        if (kioskEvents.IsLiveInFlight(entry.EventId))
+        {
+            // The kiosk gave up on the live request of this very event, the
+            // API is still on it (issue #67). Reading Kimai now could see a
+            // half-done transition before its marker exists. Buffer instead:
+            // the outbox retries once the live request has an outcome.
+            logger.LogInformation(
+                "Offline kiosk event {EventId}: its live request is still running - buffering",
+                entry.EventId);
+            throw new LiveRequestInFlightException();
+        }
+
         var action = NormalizeKioskAction(entry.Action);
         return await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
     }
@@ -275,6 +288,13 @@ public sealed class OfflineClockService(
     /// per event - every result reveals whether its credentials matched.
     /// </summary>
     private sealed class KioskAuthenticationException(string message) : InvalidOperationException(message);
+
+    /// <summary>
+    /// The live request of the same event is still running. Transient like a
+    /// Kimai outage: the event buffers and the outbox retries it.
+    /// </summary>
+    private sealed class LiveRequestInFlightException()
+        : InvalidOperationException("Live-Stempel laeuft noch - wird automatisch nachgetragen.");
 
     private static string NormalizeKioskAction(string? action)
     {
@@ -403,7 +423,7 @@ public sealed class OfflineClockService(
 
     /// <summary>
     /// Runs one two-step transition (pauseEnd, switch). Its marker in
-    /// <see cref="InterruptedTransitionStore"/> - set by an earlier replay or
+    /// <see cref="KioskEventCoordinator"/> - set by an earlier replay or
     /// by the live request of the same event - survives only a TRANSIENT
     /// failure (the event buffers and comes back); any final outcome -
     /// applied, no-op, rejected - ends it.
@@ -415,12 +435,12 @@ public sealed class OfflineClockService(
         try
         {
             var result = await apply();
-            interruptedTransitions.Forget(eventId);
+            kioskEvents.Forget(eventId);
             return result;
         }
-        catch (Exception ex) when (!(ex is KimaiApiException kimaiEx ? IsRetryable(kimaiEx) : IsTransientNetworkError(ex)))
+        catch (Exception ex) when (!(ex is KimaiApiException kimaiEx ? IsRetryable(kimaiEx) : IsTransientError(ex)))
         {
-            interruptedTransitions.Forget(eventId);
+            kioskEvents.Forget(eventId);
             throw;
         }
     }
@@ -441,7 +461,7 @@ public sealed class OfflineClockService(
         CancellationToken cancellationToken)
     {
         await kimai.StopAsync(settings, employee, timesheetId, cancellationToken);
-        interruptedTransitions.Remember(eventId, timesheetId);
+        kioskEvents.Remember(eventId, timesheetId);
         await kimai.BackdateEndAsync(settings, employee, timesheetId, timestamp, cancellationToken);
     }
 
@@ -466,7 +486,7 @@ public sealed class OfflineClockService(
         int count,
         CancellationToken cancellationToken)
     {
-        if (!interruptedTransitions.TryGet(eventId, out var stoppedId))
+        if (!kioskEvents.TryGet(eventId, out var stoppedId))
         {
             return null;
         }
@@ -746,7 +766,7 @@ public sealed class OfflineClockService(
     /// (pauseEnd: <paramref name="stoppedPause"/> true, switch: false): the
     /// latest stopped timesheet is a PAUSE (resp. WORK) timesheet that ended
     /// at this event's timestamp. Used only when this server holds no marker
-    /// for the event (<see cref="InterruptedTransitionStore"/>), to tell "ended
+    /// for the event (<see cref="KioskEventCoordinator"/>), to tell "ended
     /// elsewhere right after the event - reject" from "nothing to do - no-op".
     /// The small tolerance only absorbs timestamp rounding and clock skew. A
     /// transient failure of the lookup itself propagates to the caller, so
@@ -890,9 +910,10 @@ public sealed class OfflineClockService(
                 _kioskOutbox.Insert(0, kioskEntry);
                 break;
             }
-            catch (Exception ex) when (IsTransientNetworkError(ex))
+            catch (Exception ex) when (IsTransientError(ex))
             {
-                // Kimai unreachable at the network level - put back and retry later.
+                // Kimai unreachable at the network level, or the live request of
+                // this event still running - put back and retry later.
                 eventIdStore.Remove(kioskEntry.EventId);
                 _kioskOutbox.Insert(0, kioskEntry);
                 break;
@@ -931,16 +952,18 @@ public sealed class OfflineClockService(
 
     /// <summary>
     /// True for network-level failures while talking to Kimai (host down,
-    /// DNS failure, connection reset, timeout). These are transient - the
-    /// event must be buffered, never rejected. HttpRequestException and
+    /// DNS failure, connection reset, timeout) and for a live request of the
+    /// same event that is still running. These are transient - the event must
+    /// be buffered, never rejected. HttpRequestException and
     /// TaskCanceledException are NOT KimaiApiExceptions, so they would
     /// otherwise fall into the "permanent" catch-all.
     /// </summary>
-    private static bool IsTransientNetworkError(Exception exception)
+    private static bool IsTransientError(Exception exception)
     {
         return exception is HttpRequestException
             or System.Net.Sockets.SocketException
             or TaskCanceledException
-            or TimeoutException;
+            or TimeoutException
+            or LiveRequestInFlightException;
     }
 }

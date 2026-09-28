@@ -18,7 +18,7 @@ builder.Services.AddSingleton<IOfflineEventIdStore>(sp => new FileOfflineEventId
 // flushed by the background service below.
 builder.Services.AddSingleton<IOfflineClockService, OfflineClockService>();
 // Shared by the replay and the scoped live ClockService (issue #67).
-builder.Services.AddSingleton<InterruptedTransitionStore>();
+builder.Services.AddSingleton<KioskEventCoordinator>();
 builder.Services.AddHostedService<OfflineOutboxBackgroundService>();
 // Separate throttles for the unauthenticated kiosk sync and identify endpoints.
 builder.Services.AddKioskRateLimiters();
