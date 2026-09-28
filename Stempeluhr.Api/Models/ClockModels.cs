@@ -91,6 +91,9 @@ public sealed record OfflineSyncEventResultDto(
 /// Arbeits-Timesheet auf Projekt/Aktivität der Standard-Tätigkeit bucht -
 /// eine gelöschte Tätigkeit oder eine Buchung aus der Kimai-Oberfläche ist
 /// weder weitere noch Standard-Tätigkeit.
+/// <see cref="Warning"/>: Die Aktion ist nicht wie gewählt gelungen - der
+/// Text sagt, was stattdessen gebucht ist (z. B. ein von Kimai abgelehnter
+/// Wechsel). Der Kiosk zeigt ihn statt <see cref="StateText"/> als Meldung.
 /// </summary>
 public sealed record ClockStatusDto(
     bool IsRunning,
@@ -101,7 +104,8 @@ public sealed record ClockStatusDto(
     string StateText,
     string? ActiveTaskId = null,
     string? ActiveTaskLabel = null,
-    bool ActiveIsDefaultTask = false);
+    bool ActiveIsDefaultTask = false,
+    string? Warning = null);
 
 public enum ClockActionResult
 {

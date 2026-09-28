@@ -371,10 +371,88 @@ public sealed class ClockService(
         }
 
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
-        await kimai.StartAsync(settings, employee, target, cancellationToken);
+        try
+        {
+            await kimai.StartAsync(settings, employee, target, cancellationToken);
+        }
+        catch (KimaiApiException ex) when (IsRejectedByKimai(ex))
+        {
+            if (await ContinuePreviousTaskAsync(settings, employee, running, target, ex, cancellationToken) is { } continued)
+            {
+                return continued;
+            }
+
+            throw;
+        }
+
         NotifyTransition(settings, employee, "switch", target.Label);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = target.Label is null ? "Zurueck zur Standard-Taetigkeit" : $"Wechsel zu {target.Label}" };
+    }
+
+    /// <summary>
+    /// Kimai hat den Start auf der Ziel-Tätigkeit dauerhaft abgelehnt (Team-
+    /// Zugriff fehlt, Projekt archiviert, ...), nachdem das laufende Blatt
+    /// schon gestoppt war (issue #56). Ausgleichsbuchung: weiter auf der
+    /// Tätigkeit des gestoppten Blatts, bei einer fremden Buchung auf der
+    /// Standard-Tätigkeit - sonst fehlt die Arbeitszeit ab dem Wechsel, bis es
+    /// jemand bemerkt. Null, wenn auch das nicht geht: dann bleibt es bei der
+    /// Fehlermeldung. Kein Telegram-Hinweis - es wurde nichts gewechselt.
+    /// </summary>
+    private async Task<ClockStatusDto?> ContinuePreviousTaskAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        ClockStatusDto stopped,
+        KimaiTimesheetTarget target,
+        KimaiApiException rejection,
+        CancellationToken cancellationToken)
+    {
+        var previous = (stopped.ActiveTaskId is { } taskId ? WorkTargetResolver.ResolveTask(employee, taskId) : null)
+            ?? WorkTargetResolver.ResolveDefault(settings, employee);
+        if (previous is null || WorkTargetResolver.BooksOn(previous, target.ProjectId, target.ActivityId))
+        {
+            // Would be rejected just the same.
+            logger?.LogWarning(
+                rejection,
+                "Switch to {Target} rejected by Kimai after the stop - no other task to continue on",
+                WorkTargetResolver.DisplayName(target));
+            return null;
+        }
+
+        try
+        {
+            await kimai.StartAsync(settings, employee, previous, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(
+                ex,
+                "Switch to {Target} rejected by Kimai after the stop ({Rejection}) - continuing on {Previous} failed as well",
+                WorkTargetResolver.DisplayName(target), rejection.Message, WorkTargetResolver.DisplayName(previous));
+            return null;
+        }
+
+        logger?.LogWarning(
+            rejection,
+            "Switch to {Target} rejected by Kimai after the stop - continuing on {Previous}",
+            WorkTargetResolver.DisplayName(target), WorkTargetResolver.DisplayName(previous));
+        var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
+        return status with
+        {
+            StateText = "Eingestempelt",
+            Warning = $"{WorkTargetResolver.DisplayName(target)} nicht moeglich - weiter auf {WorkTargetResolver.DisplayName(previous)}"
+        };
+    }
+
+    /// <summary>
+    /// Kimai hat die Buchung endgültig abgelehnt (4xx außer 408/429, siehe
+    /// <see cref="KimaiApiException.IsTransient"/>). Der Kiosk reiht eine
+    /// solche Antwort nicht in die Offline-Queue ein, ein neuer Versuch
+    /// bleibt aus. 408/429 dagegen reiht er ein, der Nachtrag entscheidet.
+    /// </summary>
+    private static bool IsRejectedByKimai(KimaiApiException exception)
+    {
+        return !exception.IsTransient;
     }
 
     /// <summary>

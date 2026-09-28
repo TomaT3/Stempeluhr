@@ -325,13 +325,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             return true;
         }
 
-        if (exception is KimaiApiException apiException)
-        {
-            var statusCode = (int)apiException.StatusCode;
-            return statusCode >= 500 || statusCode == 408 || statusCode == 429;
-        }
-
-        return false;
+        return exception is KimaiApiException { IsTransient: true };
     }
 
     public async Task<IReadOnlyCollection<KimaiUserDto>> GetUsersAsync(
@@ -555,4 +549,18 @@ public sealed class KimaiApiException(HttpStatusCode statusCode, string details)
 {
     public HttpStatusCode StatusCode { get; } = statusCode;
     public string Details { get; } = details;
+
+    /// <summary>
+    /// Kimai may accept the same request later: 5xx, 408 (timeout), 429
+    /// (rate limit). The one classification for live path, replay and
+    /// backdate retries; the kiosk queues exactly these answers (plus network
+    /// errors) - every other status is final.
+    /// </summary>
+    public bool IsTransient => IsTransientStatus(StatusCode);
+
+    public static bool IsTransientStatus(HttpStatusCode statusCode)
+    {
+        var code = (int)statusCode;
+        return code >= 500 || code == 408 || code == 429;
+    }
 }

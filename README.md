@@ -149,7 +149,17 @@ steht in der Stundenkarte.
 
 Voraussetzungen in Kimai: Kunde und Projekt (ggf. eigene Aktivität) anlegen
 und dem Kimai-Benutzer des Mitarbeiters Zugriff darauf geben (Team). Ohne
-Zugriff lehnt Kimai den Wechsel ab („Kimai konnte nicht speichern“). Jede
+Zugriff (ebenso bei archiviertem Projekt) lehnt Kimai den Start auf der neuen
+Tätigkeit ab – dann ist das bisherige Timesheet schon beendet. Live startet
+die Stempeluhr deshalb gleich wieder auf der bisherigen Tätigkeit (bei einer
+fremden Buchung auf der Haupttätigkeit) und meldet am Kiosk mit zwei Pieptönen
+z. B. „Kunde X nicht moeglich - weiter auf Büro“; erst wenn auch das
+scheitert, bleibt es bei „Kimai konnte nicht speichern“. Einen offline
+gestempelten Wechsel, den Kimai so ablehnt, meldet der Kiosk dagegen als
+abgelehnt; die Zeit ab dem Wechsel muss dann in Kimai nachgetragen werden.
+Eine Ausgleichsbuchung beim Nachtrag sähe niemand, die Zeit stünde unbemerkt
+auf der falschen Tätigkeit, und spätere Stempel aus der Queue liefen gegen
+einen geratenen Stand. Jede
 Tätigkeit braucht ein eigenes Paar aus Projekt und Aktivität, das sich von der
 Standard-Tätigkeit und der Pause unterscheidet – daran erkennt die Stempeluhr,
 welche Tätigkeit gerade läuft. Im Admin stehen dafür nur Aktivitäten zur Wahl,
