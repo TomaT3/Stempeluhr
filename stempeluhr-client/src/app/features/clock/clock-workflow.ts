@@ -9,7 +9,7 @@ import { RejectedOfflineStamp } from '../../core/models/offline.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState, projectClockStatus } from '../../core/services/clock-state';
-import { KioskApi } from '../../core/services/kiosk-api';
+import { KioskApi, isTransientHttpStatus } from '../../core/services/kiosk-api';
 import { LocalNfcScanService } from '../../core/services/local-nfc-scan.service';
 import {
   forgetEmployeePin,
@@ -449,11 +449,12 @@ export abstract class ClockWorkflow implements OnDestroy {
       },
       error: (err) => {
         const status = err?.status ?? 0;
-        // Network/server errors mean the PIN could NOT be checked - claiming
-        // "PIN nicht gefunden" would be wrong and would lock colleagues out
-        // of the terminal for the rest of an outage. Fall back to the locally
-        // cached verifier instead of refusing the login outright.
-        if (status === 0 || status >= 500) {
+        // Network/server errors (and a Kimai timeout or rate limit) mean the
+        // PIN could NOT be checked - claiming "PIN nicht gefunden" would be
+        // wrong and would lock colleagues out of the terminal for the rest of
+        // an outage. Fall back to the locally cached verifier instead of
+        // refusing the login outright.
+        if (isTransientHttpStatus(status)) {
           void this.confirmPinOffline(pin);
           return;
         }
@@ -980,11 +981,11 @@ export abstract class ClockWorkflow implements OnDestroy {
       },
       error: (err) => {
         const status = err?.status ?? 0;
-        if (status === 0 || status >= 500) {
-          // Backend/Kimai unreachable (network error, timeout or server
-          // failure). 4xx responses are permanent (wrong PIN, deleted
-          // employee, ...) - showing the error is better than queuing an
-          // event that can never succeed.
+        if (isTransientHttpStatus(status)) {
+          // Backend/Kimai unreachable (network error, timeout, server
+          // failure, Kimai 408/429). Other 4xx responses are permanent (wrong
+          // PIN, deleted employee, ...) - showing the error is better than
+          // queuing an event that can never succeed.
           this.queueOffline(stamp);
           return;
         }

@@ -465,8 +465,8 @@ public sealed class ClockService(
     /// <summary>
     /// Second step of a live transition (pauseEnd, switch) after Kimai
     /// confirmed the stop. When the start fails in a way the kiosk queues
-    /// (anything but a Kimai 4xx: 5xx, network, the kiosk's own timeout
-    /// aborting the request), the stopped sheet is remembered under the
+    /// (anything but a final Kimai rejection: 5xx, 408, 429, network, the
+    /// kiosk's own timeout aborting the request), the stopped sheet is remembered under the
     /// kiosk's event ID: the replay of exactly that event then resumes
     /// instead of rejecting it like a clock-out elsewhere (issue #67). A
     /// start that went through needs no marker - the replay finds it running.
@@ -495,12 +495,14 @@ public sealed class ClockService(
     }
 
     /// <summary>
-    /// Kimai hat die Buchung abgelehnt (4xx). Der Kiosk reiht eine solche
-    /// Antwort nicht in die Offline-Queue ein, ein neuer Versuch bleibt aus.
+    /// Kimai hat die Buchung endgültig abgelehnt (4xx außer 408/429, siehe
+    /// <see cref="KimaiApiException.IsTransient"/>). Der Kiosk reiht eine
+    /// solche Antwort nicht in die Offline-Queue ein, ein neuer Versuch
+    /// bleibt aus. 408/429 dagegen reiht er ein, der Nachtrag entscheidet.
     /// </summary>
     private static bool IsRejectedByKimai(KimaiApiException exception)
     {
-        return (int)exception.StatusCode is >= 400 and < 500;
+        return !exception.IsTransient;
     }
 
     /// <summary>

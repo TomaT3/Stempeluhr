@@ -18,6 +18,15 @@ export const IDENTIFY_TIMEOUT_MS = 10_000;
  */
 export const REQUEST_TIMEOUT_MS = 8_000;
 
+/**
+ * Antwort, die später gelingen kann: kein HTTP-Status (Netz, Timeout), 5xx
+ * sowie 408/429, die die API von Kimai durchreicht. Dieselbe Einstufung wie
+ * in der API (KimaiApiException.IsTransient) - alles andere ist endgültig.
+ */
+export function isTransientHttpStatus(status: number): boolean {
+  return status === 0 || status >= 500 || status === 408 || status === 429;
+}
+
 @Injectable({
   providedIn: 'root',
 })
