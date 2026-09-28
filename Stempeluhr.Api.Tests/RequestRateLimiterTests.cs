@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Stempeluhr.Api.Services;
 using Xunit;
 
@@ -89,5 +90,30 @@ public sealed class RequestRateLimiterTests
         }
 
         Assert.True((int)property!.GetValue(entries)! <= 10_000, "Cap must hold after 20k unique keys");
+    }
+
+    /// <summary>
+    /// Issue #53: both limiters share one type, so a plain double registration
+    /// handed the identify limiter (60/min) to the sync endpoint as well - one
+    /// shared instance. The keyed registration must yield two separate
+    /// limiters with their own budgets.
+    /// </summary>
+    [Fact]
+    public void KioskLimiters_AreSeparateInstancesWithTheirOwnLimits()
+    {
+        using var provider = new ServiceCollection().AddKioskRateLimiters().BuildServiceProvider();
+
+        var sync = provider.GetRequiredKeyedService<RequestRateLimiter>(KioskRateLimiters.SyncKey);
+        var identify = provider.GetRequiredKeyedService<RequestRateLimiter>(KioskRateLimiters.IdentifyKey);
+
+        Assert.NotSame(sync, identify);
+        Assert.Same(sync, provider.GetRequiredKeyedService<RequestRateLimiter>(KioskRateLimiters.SyncKey));
+
+        Assert.True(sync.TryAcquire("1.2.3.4", 20));
+        Assert.False(sync.TryAcquire("1.2.3.4"));
+
+        // The exhausted sync budget must not touch identify.
+        Assert.True(identify.TryAcquire("1.2.3.4", 60));
+        Assert.False(identify.TryAcquire("1.2.3.4"));
     }
 }
