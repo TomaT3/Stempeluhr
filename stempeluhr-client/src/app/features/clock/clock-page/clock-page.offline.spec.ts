@@ -200,6 +200,44 @@ describe('ClockPage offline behaviour', () => {
     expect(playBeeps).toHaveBeenCalledWith(2);
   });
 
+  for (const status of [408, 429]) {
+    it(`queues a stamp Kimai answered with ${status} instead of losing it`, () => {
+      const fixture = createComponent();
+      const component = fixture.componentInstance;
+      ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+      pinLoginResult.next(session);
+
+      component.start();
+      clockResult.error({ status });
+
+      expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+      expect(component.message()).toContain('Offline gespeichert');
+    });
+  }
+
+  it('shows the error for a stamp Kimai refused for good (400)', () => {
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+    pinLoginResult.next(session);
+
+    component.start();
+    clockResult.error({ status: 400 });
+
+    expect(enqueueKiosk).not.toHaveBeenCalled();
+    expect(component.message()).toBe('Kimai konnte nicht speichern');
+  });
+
+  it('treats a rate-limited login (429) as unchecked, not as a wrong PIN', async () => {
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+    pinLoginResult.error({ status: 429 });
+
+    await vi.waitFor(() => expect(component.message()).toContain('Offline'));
+    expect(component.message()).not.toContain('PIN nicht gefunden');
+  });
+
   it('still reports a wrong PIN for permanent (4xx) login failures', () => {
     const fixture = createComponent();
     const component = fixture.componentInstance;

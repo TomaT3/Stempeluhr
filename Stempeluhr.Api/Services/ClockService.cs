@@ -445,12 +445,14 @@ public sealed class ClockService(
     }
 
     /// <summary>
-    /// Kimai hat die Buchung abgelehnt (4xx). Der Kiosk reiht eine solche
-    /// Antwort nicht in die Offline-Queue ein, ein neuer Versuch bleibt aus.
+    /// Kimai hat die Buchung endgültig abgelehnt (4xx außer 408/429, siehe
+    /// <see cref="KimaiApiException.IsTransient"/>). Der Kiosk reiht eine
+    /// solche Antwort nicht in die Offline-Queue ein, ein neuer Versuch
+    /// bleibt aus. 408/429 dagegen reiht er ein, der Nachtrag entscheidet.
     /// </summary>
     private static bool IsRejectedByKimai(KimaiApiException exception)
     {
-        return (int)exception.StatusCode is >= 400 and < 500;
+        return !exception.IsTransient;
     }
 
     /// <summary>

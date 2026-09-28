@@ -411,18 +411,22 @@ public sealed class ClockServiceNotificationTests
         Assert.Equal(1, kimai.StartAttempts);
     }
 
-    [Fact]
-    public async Task Switch_TransientStartFailure_IsNotCompensated()
+    [Theory]
+    [InlineData(502)]
+    [InlineData(408)]
+    [InlineData(429)]
+    public async Task Switch_TransientStartFailure_IsNotCompensated(int statusCode)
     {
-        // 5xx/network: the kiosk queues the switch, the replay decides -
+        // 5xx, 408, 429: the kiosk queues the switch, the replay decides -
         // continuing on the old task here would pre-empt it.
         var (service, kimai, _) = Create(SettingsWithTask());
         kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
-        kimai.StartFailures.Enqueue(KimaiError(502));
+        kimai.StartFailures.Enqueue(KimaiError(statusCode));
 
         var error = await Assert.ThrowsAsync<KimaiApiException>(() => service.ClockAsync(SwitchRequest("kx")));
 
-        Assert.Equal(System.Net.HttpStatusCode.BadGateway, error.StatusCode);
+        Assert.Equal(statusCode, (int)error.StatusCode);
+        Assert.True(error.IsTransient);
         Assert.Equal(1, kimai.StartAttempts);
     }
 

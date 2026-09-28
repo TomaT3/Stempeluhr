@@ -931,11 +931,7 @@ public sealed class OfflineClockService(
         }
     }
 
-    private static bool IsRetryable(KimaiApiException exception)
-    {
-        var statusCode = (int)exception.StatusCode;
-        return statusCode >= 500 || statusCode == 408 || statusCode == 429;
-    }
+    private static bool IsRetryable(KimaiApiException exception) => exception.IsTransient;
 
     /// <summary>
     /// True for network-level failures while talking to Kimai (host down,
