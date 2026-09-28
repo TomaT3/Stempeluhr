@@ -79,23 +79,31 @@ public sealed class RejectedOfflineEventStore(string filePath, ILogger<RejectedO
         {
             return _entries;
         }
+        string json;
         try
         {
-            _entries = File.Exists(filePath)
-                ? JsonSerializer.Deserialize<List<RejectedOfflineEvent>>(File.ReadAllText(filePath), JsonOptions) ?? []
-                : [];
+            // File.Exists returns false for some access errors. Read directly
+            // so an inaccessible existing journal is never mistaken for empty.
+            json = File.ReadAllText(filePath);
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
-            try
-            {
-                File.Move(filePath, filePath + ".corrupt", overwrite: true);
-            }
-            catch (Exception moveEx) when (moveEx is IOException or UnauthorizedAccessException)
-            {
-                // A read-only path cannot be quarantined; keep replay usable.
-            }
-            logger?.LogWarning(ex, "Rejected offline event journal at {Path} was unreadable and has been reset", filePath);
+            _entries = [];
+            return _entries;
+        }
+
+        try
+        {
+            _entries = JsonSerializer.Deserialize<List<RejectedOfflineEvent>>(json, JsonOptions) ?? [];
+        }
+        catch (JsonException ex)
+        {
+            // Only malformed JSON is corruption. IO/ACL failures leave the
+            // original file untouched and _entries unset for a later retry.
+            var quarantinePath = $"{filePath}.corrupt-{DateTime.UtcNow:yyyyMMddTHHmmss}-{Guid.NewGuid():N}";
+            File.Move(filePath, quarantinePath);
+            logger?.LogWarning(ex, "Rejected offline event journal at {Path} was corrupt and moved to {QuarantinePath}",
+                filePath, quarantinePath);
             _entries = [];
         }
         return _entries;

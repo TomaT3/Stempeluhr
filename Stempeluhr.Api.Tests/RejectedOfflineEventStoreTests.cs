@@ -44,10 +44,42 @@ public sealed class RejectedOfflineEventStoreTests
             var store = new RejectedOfflineEventStore(path);
 
             Assert.Empty(store.List());
-            Assert.True(File.Exists(path + ".corrupt"));
-            store.Record(new RejectedOfflineEvent("event-1", "max", "Max", "start",
+            Assert.Single(Directory.GetFiles(directory, "rejected.json.corrupt-*"));
+            File.WriteAllText(path, "{also broken");
+            var recovered = new RejectedOfflineEventStore(path);
+            Assert.Empty(recovered.List());
+            Assert.Equal(2, Directory.GetFiles(directory, "rejected.json.corrupt-*").Length);
+            recovered.Record(new RejectedOfflineEvent("event-1", "max", "Max", "start",
                 DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "abgelehnt"));
             Assert.Single(new RejectedOfflineEventStore(path).List());
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TransientReadError_DoesNotCacheEmptyStateOrOverwriteTheJournal()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-locked-journal-{Guid.NewGuid():N}");
+        try
+        {
+            var path = Path.Combine(directory, "rejected.json");
+            var first = new RejectedOfflineEvent("first", "max", "Max", "start",
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "abgelehnt");
+            new RejectedOfflineEventStore(path).Record(first);
+            var store = new RejectedOfflineEventStore(path);
+
+            using (var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var error = Record.Exception(() => store.Record(first with { EventId = "second" }));
+                Assert.True(error is IOException or UnauthorizedAccessException, error?.ToString());
+                Assert.Empty(Directory.GetFiles(directory, "rejected.json.corrupt-*"));
+            }
+
+            store.Record(first with { EventId = "second" });
+            Assert.Equal(2, new RejectedOfflineEventStore(path).List().Count);
         }
         finally
         {

@@ -115,6 +115,9 @@ public sealed class OfflineClockService(
 
                 if (!eventIdStore.TryRegister(entry.EventId))
                 {
+                    // A read error must propagate as 5xx here. Returning
+                    // "duplicate" without checking the journal could silently
+                    // discard an outbox event that was actually rejected.
                     var refused = rejectedEvents.Find(entry.EventId);
                     if (refused is not null)
                     {
