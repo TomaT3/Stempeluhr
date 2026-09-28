@@ -137,7 +137,10 @@ beim Nachtrag schon eine andere Tätigkeit, bleibt das Einstempeln wie immer
 ein No-op; die verworfene Wahl steht dann im API-Log. Lässt
 sich ein Wechsel oder ein Pausenende nicht eindeutig nachtragen (z. B. weil
 kurz danach an einem anderen Terminal ausgestempelt wurde), meldet der Kiosk
-ihn als abgelehnt, statt eine Buchung zu raten.
+ihn als abgelehnt, statt eine Buchung zu raten. Das gilt auch, wenn ein
+Pausenende oder Wechsel live nur halb in Kimai ankam (Stopp gebucht, Start
+gescheitert oder Kiosk-Timeout) und der Kiosk ihn deshalb nachträgt: In Kimai
+sieht das genauso aus wie ein Ausstempeln an einem anderen Terminal.
 
 Die Dauer im Statusfeld zählt nur den laufenden Abschnitt (z. B. „Kunde X
 seit 10:15“) und beginnt nach Wechsel oder Pausenende neu; die Tagessumme

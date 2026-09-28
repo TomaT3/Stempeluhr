@@ -323,6 +323,29 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task PauseEnd_HalfBookedLive_IsRejectedLikeAStopElsewhere()
+    {
+        // Live "Pause beenden": ClockService stopped the pause, then the start
+        // failed (Kimai 5xx) or the kiosk ran into its timeout - so the kiosk
+        // queued the pause end. Only the replay sets markers, and Kimai looks
+        // exactly like issue #55 (pause stopped at the event, nothing runs).
+        // Deliberately rejected like the switch: the kiosk reports the stamp
+        // instead of guessing. Before, this case resumed work.
+        var (service, kimai) = CreateService();
+        await service.SyncKioskAsync([Kiosk("h1", "start", T08), Kiosk("h2", "pauseStart", T12)]);
+        kimai.SimulateLiveStop(T1230);
+        var before = kimai.Operations.Count;
+
+        var result = await service.SyncKioskAsync([Kiosk("h3", "pauseEnd", T1230)]);
+
+        var single = Assert.Single(result.Results);
+        Assert.Equal("rejected", single.Status);
+        Assert.Contains("nicht eindeutig", single.Message);
+        Assert.Equal(before, kimai.Operations.Count);
+        Assert.False(kimai.IsRunning);
+    }
+
+    [Fact]
     public async Task PauseEnd_RecoveryFailingAgain_StillResumesOnTheNextRetry()
     {
         var (service, kimai) = CreateService();
