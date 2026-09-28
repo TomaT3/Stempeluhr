@@ -7,8 +7,10 @@ namespace Stempeluhr.Api.Middleware;
 /// carries a build hash (main-ABCD1234.js, styles-ABCD1234.css, ...) change
 /// their name on every build and may be cached forever. Everything else keeps
 /// its name across deploys and must be revalidated: index.html (the kiosk
-/// would otherwise keep the old app), the service worker files and the Pi
-/// agent manifest under /pi/ (the terminals would never see an update).
+/// would otherwise keep the old app), the service worker files, favicon, app
+/// icons and web app manifest (a new icon would otherwise hang around for a
+/// year) and the Pi agent manifest under /pi/ (the terminals would never see
+/// an update).
 /// </summary>
 public static partial class StaticFileCachePolicy
 {
