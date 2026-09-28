@@ -87,12 +87,14 @@ describe('TerminalPage', () => {
           provide: LocalNfcScanService,
           useValue: {
             poll: vi.fn(() => of(localScanValue)),
-            ack: vi.fn(() => of(null)),
+            refreshCatalog: vi.fn(() => of(null)), ack: vi.fn(() => of(null)),
           },
         },
         {
           provide: OfflineQueueService,
           useValue: {
+            authorizeEmployee: vi.fn(),
+            needsPin: signal(false),
             enqueueKiosk,
             syncNow: vi.fn(() => of([])),
             recovered: recovered$.asObservable(),

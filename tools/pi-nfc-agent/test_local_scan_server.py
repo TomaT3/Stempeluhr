@@ -147,6 +147,71 @@ def test_origin_restriction() -> None:
         server.server_close()
 
 
+def test_terminal_proxy() -> None:
+    import http.server
+    seen = []
+    redirect = False
+    class Upstream(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.path, dict(self.headers)))
+            if redirect:
+                self.send_response(302)
+                self.send_header("Location", "/redirect-target")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'[]')
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append((self.path, dict(self.headers), payload))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"results":[]}')
+        def log_message(self, *args):
+            pass
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=upstream.serve_forever, daemon=True).start()
+    config = AgentConfig(api_base_url=f"http://127.0.0.1:{upstream.server_port}",
+                         terminal_id="pi-1", terminal_token="private-terminal-token",
+                         debounce_seconds=3, reader_name_contains=None)
+    agent = LocalScanServer(port=0, allowed_origin=KIOSK, config=config)
+    agent.start_background()
+    try:
+        assert request(agent.url + "/terminal/catalog")[0] == 403
+        assert request(agent.url + "/terminal/catalog", origin=FOREIGN)[0] == 403
+        assert not seen
+        assert request(agent.url + "/terminal/catalog", origin=KIOSK)[0] == 200
+        assert seen[-1][0] == "/api/kiosk/catalog"
+        assert seen[-1][1]["Authorization"] == "Bearer private-terminal-token"
+        assert seen[-1][1]["X-Terminal-Id"] == "pi-1"
+        payload = {"events": [{"eventId": "e1", "terminalId": "pi-1", "pin": "1234", "nfcCardId": "04AB"}]}
+        req = urllib.request.Request(agent.url + "/terminal/sync", data=json.dumps(payload).encode(),
+                                     headers={"Origin": KIOSK, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as response:
+            assert response.status == 200
+            assert b"private-terminal-token" not in response.read()
+        assert seen[-1][0] == "/api/kiosk/clock/sync"
+        assert "pin" not in seen[-1][2]["events"][0]
+        assert "nfcCardId" not in seen[-1][2]["events"][0]
+        payload["events"][0]["terminalId"] = "wrong-terminal"
+        req.data = json.dumps(payload).encode()
+        try:
+            urllib.request.urlopen(req)
+            raise AssertionError("wrong terminal accepted")
+        except urllib.error.HTTPError as error:
+            assert error.code == 409
+        assert len(seen) == 2
+        redirect = True
+        assert request(agent.url + "/terminal/catalog", origin=KIOSK)[0] == 502
+        assert len(seen) == 3  # Redirect target must not receive the bearer token.
+    finally:
+        agent.shutdown()
+        agent.server_close()
+        upstream.shutdown()
+        upstream.server_close()
+
+
 def main() -> int:
     test_origin_of()
     test_config_origin()
@@ -248,6 +313,7 @@ def main() -> int:
         server2.shutdown()
         server2.server_close()
 
+    test_terminal_proxy()
     print("LocalScanServer: all tests passed")
     return 0
 

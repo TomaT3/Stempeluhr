@@ -18,6 +18,8 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +85,7 @@ class AgentConfig:
     # Optional: install.sh opens the kiosk at api_base_url, so that is the
     # default. Only a kiosk loaded from elsewhere needs the key.
     kiosk_origin: str | None = None
+    terminal_token: str | None = None
 
     @property
     def allowed_origin(self) -> str:
@@ -112,6 +115,7 @@ class AgentConfig:
                 raw.get("selection_timeout_seconds") or 10
             ),
             kiosk_origin=raw.get("kiosk_origin") or None,
+            terminal_token=raw.get("terminal_token") or None,
         )
 
 
@@ -131,6 +135,10 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             # Open to everyone: the updater calls it without an Origin. A
             # foreign page gets no CORS header and cannot read it anyway.
             self._send_json(200, {"ok": True, "version": AGENT_VERSION})
+            return
+
+        if self.path == "/terminal/catalog":
+            self._terminal_proxy("/api/kiosk/catalog")
             return
 
         if self.path != "/scan/latest":
@@ -156,6 +164,9 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming convention
         scan_server: LocalScanServer = self.server.scan_server  # type: ignore[attr-defined]
+        if self.path == "/terminal/sync":
+            self._terminal_proxy("/api/kiosk/clock/sync", post=True)
+            return
         # Read the (ignored) body first: closing the socket with unread data
         # can reset the connection before the client sees the answer.
         length = int(self.headers.get("Content-Length") or 0)
@@ -173,6 +184,60 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
         else:
             self._send_json(404, {"error": "no scan available"})
+
+    def _terminal_proxy(self, path: str, post: bool = False) -> None:
+        server: LocalScanServer = self.server.scan_server
+        # These privileged routes require the exact configured browser origin,
+        # including for requests without Origin (DNS rebinding/CSRF protection).
+        if not server.allowed_origin or self.headers.get("Origin") != server.allowed_origin:
+            self._send_json(403, {"error": "origin not allowed"}, allow_origin=False)
+            return
+        config = server.config
+        if config is None or not config.terminal_token:
+            self._send_json(503, {"error": "terminal token not configured"})
+            return
+        body = None
+        if post:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 262144:
+                    raise ValueError()
+                payload = json.loads(self.rfile.read(length))
+                events = payload["events"]
+                if not isinstance(events, list) or len(events) > 100:
+                    raise ValueError()
+                # Only forward event data, never arbitrary URLs or headers.
+                for event in events:
+                    if not isinstance(event, dict):
+                        raise ValueError()
+                    if event.get("terminalId") != config.terminal_id:
+                        self._send_json(409, {"error": "terminal id mismatch"})
+                        return
+                    event.pop("pin", None)
+                    event.pop("nfcCardId", None)
+                body = json.dumps({"events": events}).encode("utf-8")
+            except (ValueError, KeyError, TypeError):
+                self._send_json(400, {"error": "invalid sync batch"})
+                return
+        request = urllib.request.Request(config.api_base_url + path, data=body, headers={
+            "Authorization": "Bearer " + config.terminal_token,
+            "X-Terminal-Id": config.terminal_id,
+            "Content-Type": "application/json",
+        })
+        # Never forward the credential to a redirect target.
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+        try:
+            with urllib.request.build_opener(NoRedirect()).open(request, timeout=270 if post else 15) as response:
+                result = json.load(response)
+            self._send_json(200, result)
+        except urllib.error.HTTPError as error:
+            # Upstream error bodies may contain diagnostics: do not expose them.
+            self._send_json(error.code if error.code in (400, 401, 403, 429) else 502,
+                            {"error": "terminal request rejected"})
+        except (OSError, ValueError):
+            self._send_json(502, {"error": "server unavailable"})
 
     def do_OPTIONS(self) -> None:  # noqa: N802 - stdlib naming convention
         # CORS preflight: the kiosk UI runs on a different origin (the
@@ -214,6 +279,7 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         if allow_origin:
             self._send_allow_origin()
         self.send_header("Content-Length", str(len(body)))
@@ -235,8 +301,10 @@ class LocalScanServer:
     """
 
     def __init__(
-        self, port: int = DEFAULT_LOCAL_SCAN_PORT, allowed_origin: str | None = None
+        self, port: int = DEFAULT_LOCAL_SCAN_PORT, allowed_origin: str | None = None,
+        config: AgentConfig | None = None
     ) -> None:
+        self.config = config
         self._scan: LastScan | None = None
         self._lock = threading.Lock()
         self.allowed_origin = origin_of(allowed_origin) if allowed_origin else None
@@ -356,7 +424,7 @@ def main() -> int:
         # The bind() in the constructor raises OSError when the port is
         # already taken - fail with a clear log line instead of a traceback.
         scan_server = LocalScanServer(
-            port=config.local_port, allowed_origin=config.allowed_origin
+            port=config.local_port, allowed_origin=config.allowed_origin, config=config
         )
         scan_thread = scan_server.start_background()
     except OSError as error:

@@ -3,6 +3,7 @@ import { inject, Injectable, computed, signal } from '@angular/core';
 import { defer, finalize, firstValueFrom, Observable, of, Subject, timeout } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { confirmSyncedStatus } from './offline-cache';
+import { LOCAL_NFC_SCAN_PORT } from './local-nfc-scan.service';
 
 import {
   OfflineKioskClockEvent,
@@ -66,6 +67,7 @@ interface StoredOfflineEvent {
 @Injectable({ providedIn: 'root' })
 export class OfflineQueueService {
   private readonly http = inject(HttpClient);
+  private readonly agentPort = inject(LOCAL_NFC_SCAN_PORT);
   private readonly queued = signal<StoredOfflineEvent[]>(this.readStorage());
   readonly pendingCount = this.queued.asReadonly();
 
@@ -100,7 +102,18 @@ export class OfflineQueueService {
     }
   }
 
+  authorizeEmployee(employeeId: string, pin: string): void {
+    this.queued.update(entries => entries.map(entry => entry.event.employeeId === employeeId
+      && !entry.event.terminalId ? { ...entry, event: { ...entry.event, pin } } : entry));
+    this.syncNow().subscribe();
+  }
+
+  readonly needsPin = computed(() => this.queued().some(({ event }) =>
+    !event.terminalId && event.needsPin && !event.pin));
+
   enqueueKiosk(event: OfflineKioskClockEvent): void {
+    event = { ...event, needsPin: !!event.pin };
+    if (event.terminalId) { delete event.pin; delete event.nfcCardId; }
     this.enqueue({ kind: 'kiosk', event });
   }
 
@@ -165,12 +178,20 @@ export class OfflineQueueService {
     // chunks already processed events - PIN logins are still impossible.
     let replayAborted = false;
 
-    for (let offset = 0; offset < events.length; offset += MAX_SYNC_BATCH_SIZE) {
-      const chunk = events.slice(offset, offset + MAX_SYNC_BATCH_SIZE);
+    for (let offset = 0; offset < events.length;) {
+      const terminalId = events[offset].terminalId;
+      const chunk: OfflineKioskClockEvent[] = [];
+      for (const event of events.slice(offset, offset + MAX_SYNC_BATCH_SIZE)) {
+        if (event.terminalId !== terminalId || (!terminalId && event.needsPin && !event.pin)) break;
+        chunk.push(event);
+      }
+      if (chunk.length === 0) { replayAborted = true; break; }
+      offset += chunk.length;
       let result: OfflineSyncResult;
       try {
         result = await firstValueFrom(
-          this.http.post<OfflineSyncResult>(SYNC_ENDPOINT, { events: chunk })
+          this.http.post<OfflineSyncResult>(terminalId
+            ? `http://127.0.0.1:${this.agentPort}/terminal/sync` : SYNC_ENDPOINT, { events: chunk })
             .pipe(timeout(syncRequestTimeoutMs(chunk.length))),
         );
       } catch {
@@ -307,20 +328,26 @@ export class OfflineQueueService {
     try {
       const raw = window.localStorage.getItem(QUEUE_STORAGE_KEY);
       const parsed = raw ? (JSON.parse(raw) as StoredOfflineEvent[]) : [];
-      return Array.isArray(parsed) ? parsed.filter(entry => entry?.kind === 'kiosk') : [];
+      const terminalId = new URLSearchParams(window.location.search).get('terminalId');
+      const entries = Array.isArray(parsed) ? parsed.filter(entry => entry?.kind === 'kiosk').map(entry => {
+        const event = { ...entry.event, terminalId: entry.event.terminalId || terminalId || undefined,
+          needsPin: entry.event.needsPin || !!entry.event.pin };
+        if (event.terminalId) { delete event.pin; delete event.nfcCardId; }
+        return { ...entry, event };
+      }) : [];
+      this.writeStorage(entries); // Migrate legacy plaintext PINs immediately.
+      return entries;
     } catch {
       return [];
     }
   }
 
   private writeStorage(entries: StoredOfflineEvent[]): void {
-    // Accepted trade-off (documented in the README): kiosk events are
-    // persisted with their PIN so an offline stamp survives a kiosk restart.
-    // localStorage is readable by anyone with access to the kiosk device or
-    // via a successful XSS - treated as trusted hardware here. A terminal /
-    // reader token would remove this and is tracked as a follow-up.
     try {
-      window.localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(entries));
+      window.localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(entries.map(entry => {
+        const { pin, ...event } = entry.event;
+        return { ...entry, event };
+      })));
     } catch {
       // Storage full/blocked: keep the in-memory queue so nothing is lost
       // during this browser session.

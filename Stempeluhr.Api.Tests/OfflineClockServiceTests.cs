@@ -35,6 +35,40 @@ public sealed class OfflineClockServiceTests
     private static readonly DateTimeOffset T1230 = Parse("2026-08-24T12:30:00Z");
 
     [Fact]
+    public async Task TerminalAuthenticationSurvivesOutboxAndReplaysInOrder()
+    {
+        var (service, kimai) = CreateService();
+        kimai.FailNextStatusCalls = 2;
+        var result = await service.SyncKioskAsync([
+            Kiosk("terminal-stop", "stop", T12, "") with { AuthenticatedTerminalId = "pi-1" },
+            Kiosk("terminal-start", "start", T08, "") with { AuthenticatedTerminalId = "pi-1" }
+        ]);
+        Assert.Equal(2, result.Buffered);
+        await service.FlushOutboxAsync();
+        Assert.Equal(new[] { "start", "stop" }, kimai.Operations.Select(op => op.Kind));
+        Assert.False(kimai.IsRunning);
+    }
+
+    [Fact]
+    public async Task AuthenticatedTerminalReplaysWithoutPinAndRemainsIdempotent()
+    {
+        var (service, kimai) = CreateService();
+        var entry = Kiosk("terminal-event", "start", T08, "") with { AuthenticatedTerminalId = "pi-1" };
+        var result = await service.SyncKioskAsync([entry]);
+        Assert.Equal("applied", Assert.Single(result.Results).Status);
+        Assert.Equal("duplicate", Assert.Single((await service.SyncKioskAsync([entry])).Results).Status);
+    }
+
+    [Fact]
+    public async Task TerminalCannotReplayForRemovedEmployee()
+    {
+        var (service, _, _, settings) = CreateServiceWithSettings();
+        settings.Employees.Clear();
+        var entry = Kiosk("terminal-removed", "start", T08, "") with { AuthenticatedTerminalId = "pi-1" };
+        Assert.Equal("rejected", Assert.Single((await service.SyncKioskAsync([entry])).Results).Status);
+    }
+
+    [Fact]
     public async Task RejectedReplay_IsSavedForAdminWithoutCredentials()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-rejected-sync-{Guid.NewGuid():N}");

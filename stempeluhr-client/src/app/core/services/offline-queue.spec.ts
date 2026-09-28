@@ -50,6 +50,46 @@ describe('OfflineQueueService sync batching', () => {
     window.localStorage.clear();
   });
 
+  it('persists terminal events without credentials and replays after a restart', async () => {
+    service.enqueueKiosk({ ...kioskEvent('terminal-restart'), terminalId: 'pi-1', nfcCardId: '04AB' });
+    const stored = window.localStorage.getItem('stempeluhr.offline-queue.v1')!;
+    expect(stored).not.toContain('1234');
+    expect(stored).not.toContain('04AB');
+    const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+    const request = httpMock.expectOne('http://127.0.0.1:8737/terminal/sync');
+    expect(request.request.body.events[0].pin).toBeUndefined();
+    request.flush(resultFor(request.request.body.events, 'applied'));
+    await drainMicrotasks();
+    expect(restarted.pendingCount()).toHaveLength(0);
+  });
+
+  it('removes legacy PINs from storage immediately without losing event IDs', async () => {
+    window.localStorage.setItem('stempeluhr.offline-queue.v1', JSON.stringify([
+      { kind: 'kiosk', event: { ...kioskEvent('legacy'), terminalId: 'pi-1' } },
+    ]));
+    const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+    expect(window.localStorage.getItem('stempeluhr.offline-queue.v1')).not.toContain('1234');
+    const request = httpMock.expectOne('http://127.0.0.1:8737/terminal/sync');
+    expect(request.request.body.events[0].eventId).toBe('legacy');
+    request.flush({}, { status: 401, statusText: 'revoked' });
+    await drainMicrotasks();
+    expect(restarted.pendingCount()).toHaveLength(1);
+  });
+
+  it('keeps non-terminal events across restart until a fresh login supplies the PIN', async () => {
+    service.enqueueKiosk(kioskEvent('browser-restart'));
+    expect(window.localStorage.getItem('stempeluhr.offline-queue.v1')).not.toContain('1234');
+    const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+    await drainMicrotasks();
+    httpMock.expectNone(kioskEndpoint);
+    expect(restarted.needsPin()).toBe(true);
+    restarted.authorizeEmployee('max', '1234');
+    const request = httpMock.expectOne(kioskEndpoint);
+    request.flush(resultFor(request.request.body.events, 'applied'));
+    await drainMicrotasks();
+    expect(restarted.pendingCount()).toHaveLength(0);
+  });
+
   it('confirms a projection only after the last queued action has a server state', async () => {
     const first = kioskEvent('first');
     const later = { ...kioskEvent('later'), action: 'stop' as const, performedAt: '2026-08-24T09:00:00Z' };

@@ -12,6 +12,8 @@ und in der API, nicht im Agenten.
 | --- | --- | --- |
 | `GET` | `/scan/latest` | letzter Scan: `cardId`, `scannedAt`, `consumed` |
 | `POST` | `/scan/ack` | Kiosk bestätigt den Scan |
+| `GET` | `/terminal/catalog` | authentifizierter Mitarbeiter-Katalog vom Server |
+| `POST` | `/terminal/sync` | PIN-freier Queue-Nachtrag mit Agent-Token |
 | `GET` | `/health` | `{"ok": true, "version": "x.y.z"}` |
 
 Bestätigt die Kiosk-App einen Scan nicht innerhalb von
@@ -20,7 +22,12 @@ Private-Network-Header erlauben den Zugriff nur aus der Kiosk-Seite: Deren
 Origin ist die von `api_base_url` (oder `kiosk_origin`). Eine andere Seite
 im Kiosk-Browser bekommt für `/scan/*` ein 403 und kann Scans weder lesen
 noch bestätigen. Anfragen ohne `Origin` (curl, Updater) bleiben erlaubt,
-`/health` ist offen.
+`/health` ist offen. Für `/terminal/*` ist die genaue konfigurierte Origin
+auch bei curl Pflicht. Der Agent setzt `Authorization: Bearer …` und
+`X-Terminal-Id` selbst, folgt keinen Redirects und liefert das Token nie aus.
+Ein abweichendes `terminalId` im Sync-Event wird mit 409 abgewiesen.
+Fehlendes Token ergibt 503; 401 bei Entzug/Rotation wird an den Browser
+weitergereicht. Die Queue bleibt dabei erhalten.
 
 ## Dateien
 
@@ -47,6 +54,7 @@ noch bestätigen. Anfragen ohne `Origin` (curl, Updater) bleiben erlaubt,
 | Key | Default | Bedeutung |
 | --- | --- | --- |
 | `api_base_url` | – (Pflicht) | Basis-URL der Stempeluhr, z. B. `https://stempeluhr.example.com` |
+| `terminal_token` | – | geheimes, auf dem Server unter `terminalTokens.<id>` registriertes Token; Einrichtung/Rotation über `install.sh --terminal-token-file PFAD` |
 | `terminal_id` | `default` | Terminal-Kennung, gleich dem `terminalId` der Kiosk-URL |
 | `debounce_seconds` | `3` | Entprellung pro Karte |
 | `reader_name_contains` | – | Filter auf den PC/SC-Reader-Namen (z. B. `ACR122`) |

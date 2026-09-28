@@ -45,7 +45,7 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
     status,
   };
 
-  const kioskSyncEndpoint = '/api/kiosk/clock/sync';
+  const kioskSyncEndpoint = 'http://127.0.0.1:8737/terminal/sync';
 
   /** Lets the async flush continuation run so the next step happens. */
   async function drainMicrotasks(): Promise<void> {
@@ -94,7 +94,7 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
         {
           provide: LocalNfcScanService,
-          useValue: { poll: vi.fn(() => of(null)), ack: vi.fn(() => of(null)) },
+          useValue: { poll: vi.fn(() => of(null)), refreshCatalog: vi.fn(() => of(null)), ack: vi.fn(() => of(null)) },
         },
         {
           provide: ActivatedRoute,

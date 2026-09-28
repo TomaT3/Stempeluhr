@@ -22,6 +22,8 @@ public sealed record AdminSettingsDto(
     string? TelegramChatId,
     IReadOnlyCollection<AdminEmployeeDto> Employees)
 {
+    public IReadOnlyCollection<string> TerminalIds { get; init; } = [];
+
     public static AdminSettingsDto FromSettings(RuntimeSettings settings)
     {
         return new AdminSettingsDto(
@@ -33,7 +35,8 @@ public sealed record AdminSettingsDto(
             settings.PauseActivityId,
             !string.IsNullOrWhiteSpace(settings.TelegramBotToken),
             settings.TelegramChatId,
-            settings.Employees.Select(AdminEmployeeDto.FromSettings).ToArray());
+            settings.Employees.Select(AdminEmployeeDto.FromSettings).ToArray())
+        { TerminalIds = settings.TerminalTokens.Keys.ToArray() };
     }
 }
 
@@ -131,6 +134,7 @@ public sealed record AdminSettingsUpdateDto(
             // nicht löschen (Löschen geht manuell in settings.json).
             TelegramBotToken = string.IsNullOrWhiteSpace(TelegramBotToken) ? current.TelegramBotToken : TelegramBotToken.Trim(),
             TelegramChatId = string.IsNullOrWhiteSpace(TelegramChatId) ? current.TelegramChatId : TelegramChatId.Trim(),
+            TerminalTokens = current.TerminalTokens,
             Employees = employees
         };
     }

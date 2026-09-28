@@ -105,6 +105,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
 
     const waiting = pending === 1 ? '1 Stempel wartet' : `${pending} Stempel warten`;
+    if (this.offlineQueue.needsPin()) return `${waiting} auf Übertragung – PIN erneut eingeben`;
     return this.isOffline() ? `Offline – ${waiting} auf Übertragung` : `${waiting} auf Übertragung`;
   });
 
@@ -215,6 +216,8 @@ export abstract class ClockWorkflow implements OnDestroy {
    */
   private pendingResetOnRecovery = false;
   private readonly terminalId = this.readTerminalId();
+  private catalogTimer: number | null = null;
+  private catalogRequest: Subscription | null = null;
   /** Auto-Reload: Timer-Handle für den verzögerten Reload bei Server-Update. */
   private versionReloadTimer: number | null = null;
   private versionRetryTimer: number | null = null;
@@ -278,6 +281,12 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
 
+    const refreshCatalog = () => {
+      this.catalogRequest?.unsubscribe();
+      this.catalogRequest = this.localNfcScan.refreshCatalog().subscribe();
+    };
+    refreshCatalog();
+    this.catalogTimer = window.setInterval(refreshCatalog, 60_000);
     this.pollConnectivity();
     this.connectivityPollTimer = window.setInterval(() => this.pollConnectivity(), 1000);
     // Der Agent publiziert Karten NUR an den LocalScanServer - der Local-Poll
@@ -446,6 +455,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         // dann offline anmelden und den plausiblen Stempel-Button anbieten.
         rememberObservedStatus(session.employee.id, session.status);
         void rememberEmployeePin(pin, session.employee);
+        this.offlineQueue.authorizeEmployee(session.employee.id, pin);
         this.loadHoursOverview(pin);
       },
       error: (err) => {
@@ -476,8 +486,8 @@ export abstract class ClockWorkflow implements OnDestroy {
   /**
    * Second half of an offline PIN login: the backend could not check the PIN,
    * so resolve it against the verifier cache built from earlier ONLINE logins.
-   * The offline path only UNLOCKS - the PIN itself travels with every queued
-   * stamp and is validated server-side during replay.
+   * The offline path only UNLOCKS. Terminal replay uses agent authentication;
+   * ordinary browser replay requires the employee PIN in memory.
    */
   private async confirmPinOffline(pin: string): Promise<void> {
     const employee = await resolveEmployeeByPin(pin);
@@ -647,6 +657,8 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.catalogTimer !== null) window.clearInterval(this.catalogTimer);
+    this.catalogRequest?.unsubscribe();
     if (this.healthPollTimer !== null) {
       window.clearInterval(this.healthPollTimer);
     }
@@ -1010,6 +1022,7 @@ export abstract class ClockWorkflow implements OnDestroy {
    */
   private queueOffline(stamp: PendingStamp): void {
     this.offlineQueue.enqueueKiosk({
+      ...(this.terminalId ? { terminalId: this.terminalId } : {}),
       eventId: stamp.eventId,
       employeeId: stamp.employeeId,
       pin: stamp.pin,

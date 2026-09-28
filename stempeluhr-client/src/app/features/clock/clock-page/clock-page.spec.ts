@@ -89,7 +89,7 @@ describe('ClockPage', () => {
         // poll fully mocked.
         {
           provide: LocalNfcScanService,
-          useValue: { poll: vi.fn(() => of(localScanValue)), ack: vi.fn(() => of(null)) },
+          useValue: { poll: vi.fn(() => of(localScanValue)), refreshCatalog: vi.fn(() => of(null)), ack: vi.fn(() => of(null)) },
         },
         {
           provide: ActivatedRoute,

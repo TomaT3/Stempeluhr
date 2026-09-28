@@ -1,6 +1,8 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable, InjectionToken } from '@angular/core';
-import { catchError, map, of } from 'rxjs';
+import { catchError, map, of, tap, timeout } from 'rxjs';
+
+import { CatalogEntry, replaceEmployeeCatalog } from './offline-cache';
 
 /**
  * Port of the Pi NFC agent's loopback scan server. Overridable via
@@ -44,6 +46,14 @@ export class LocalNfcScanService {
       catchError(() => of<LocalNfcScan | null>(null)),
       // A failed agent request must never throw - it just yields no scan.
       map(scan => (this.isNewScan(scan) ? scan : null)),
+    );
+  }
+
+  refreshCatalog() {
+    return this.http.get<CatalogEntry[]>(`http://127.0.0.1:${this.port}/terminal/catalog`).pipe(
+      timeout(20_000),
+      tap(entries => replaceEmployeeCatalog(entries)),
+      catchError(() => of(null)),
     );
   }
 

@@ -14,6 +14,15 @@ public static class KioskEndpoints
 
     public static IEndpointRouteBuilder MapKioskEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/kiosk/catalog", (HttpContext context, IRuntimeSettingsStore store, IEmployeeService employees) =>
+        {
+            var settings = store.Load();
+            if (TerminalAuthentication.Authenticate(context.Request, settings) is null)
+                return Results.Unauthorized();
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(TerminalAuthentication.Catalog(settings, employees));
+        });
+
         app.MapPost("/api/kiosk/pin-login", async (
             KioskPinLoginRequest request,
             IClockService clockService,
@@ -85,19 +94,19 @@ public static class KioskEndpoints
             HttpRequest httpRequest,
             OfflineKioskSyncRequest request,
             IOfflineClockService offlineClockService,
+            IRuntimeSettingsStore settingsStore,
             [FromKeyedServices(KioskRateLimiters.SyncKey)] RequestRateLimiter kioskSyncRateLimiter,
             ILogger<Program> logger,
             CancellationToken cancellationToken) =>
         {
             var ip = httpRequest.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
-            // The kiosk sync endpoint accepts arbitrary performedAt timestamps
+            // The legacy kiosk sync endpoint accepts arbitrary performedAt timestamps
             // and is only protected by the employee PIN, so it is an attractive
             // brute-force target. Throttle per client IP (the real client IP
             // requires trusted reverse proxies to be configured via
             // Stempeluhr:KnownProxies - otherwise every kiosk behind the proxy
-            // shares one budget); real auth (terminal token) is tracked as a
-            // follow-up.
+            // shares one budget). Terminal-authenticated replay uses the same limit.
             if (!kioskSyncRateLimiter.TryAcquire(ip))
             {
                 return Results.StatusCode(StatusCodes.Status429TooManyRequests);
@@ -122,6 +131,11 @@ public static class KioskEndpoints
                 forwardedFirst.Length == 0 ? "-" : forwardedFirst,
                 request.Events?.Count ?? 0);
 
+            var hasTerminalAuth = httpRequest.Headers.ContainsKey("Authorization")
+                || httpRequest.Headers.ContainsKey("X-Terminal-Id");
+            var terminalId = TerminalAuthentication.Authenticate(httpRequest, settingsStore.Load());
+            if (hasTerminalAuth && terminalId is null) return Results.Unauthorized();
+
             if (request.Events is { Count: > MaxSyncBatchSize })
             {
                 return Results.BadRequest(new { error = $"Too many events in one batch (max {MaxSyncBatchSize})." });
@@ -129,7 +143,9 @@ public static class KioskEndpoints
 
             if (request.Events is { Count: > 0 })
             {
-                var result = await offlineClockService.SyncKioskAsync(request.Events, cancellationToken);
+                var events = terminalId is null ? request.Events : request.Events.Select(e => e with
+                { AuthenticatedTerminalId = terminalId, Pin = null, NfcCardId = null }).ToArray();
+                var result = await offlineClockService.SyncKioskAsync(events, cancellationToken);
                 return Results.Ok(result);
             }
 
