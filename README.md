@@ -80,7 +80,10 @@ Weitere Regeln:
   „Abgelehnte Offline-Stempel“ sind sie auch von einem anderen Rechner aus
   einsehbar und können nach dem manuellen Nachtrag markiert werden. „Alle
   erledigt“ am Kiosk quittiert nur den lokalen Hinweis und setzt die
-  Admin-Markierung nicht.
+  Admin-Markierung nicht. Offene Einträge bleiben erhalten; von den
+  nachgetragenen Einträgen werden die letzten 1000 aufbewahrt. Ist die
+  Journaldatei beschädigt, legt die API sie als `.corrupt` zur Prüfung beiseite
+  und beginnt eine neue Historie.
 
 ## Einrichtung
 

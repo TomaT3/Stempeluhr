@@ -110,6 +110,10 @@ button {
   line-height: 1.1;
 }
 
+.task-button:disabled:not(.start-task) {
+  cursor: default;
+}
+
 button,
 a,
 input {

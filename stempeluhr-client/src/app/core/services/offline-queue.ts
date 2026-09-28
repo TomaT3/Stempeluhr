@@ -199,7 +199,7 @@ export class OfflineQueueService {
 
         if (detail.status === 'rejected') {
           this.recordRejected(detail, chunkById.get(detail.eventId));
-        } else if ((detail.status === 'applied' || detail.status === 'duplicate') && detail.state) {
+        } else if (detail.status === 'applied' && detail.state) {
           const event = chunkById.get(detail.eventId);
           // An earlier result must not confirm a later local projection.
           if (event && this.queued().filter(entry => entry.event.employeeId === event.employeeId)

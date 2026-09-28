@@ -6,6 +6,56 @@ namespace Stempeluhr.Api.Tests;
 public sealed class RejectedOfflineEventStoreTests
 {
     [Fact]
+    public void KeepsAllOpenRecordsAndOnlyTheNewestThousandResolvedRecords()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-journal-limit-{Guid.NewGuid():N}");
+        try
+        {
+            var store = new RejectedOfflineEventStore(Path.Combine(directory, "rejected.json"));
+            var at = DateTimeOffset.Parse("2026-09-18T08:00:00Z");
+            store.Record(new RejectedOfflineEvent("open", "max", "Max", "start", at, at, "abgelehnt"));
+            for (var i = 0; i < 1001; i++)
+            {
+                store.Record(new RejectedOfflineEvent($"resolved-{i}", "max", "Max", "start",
+                    at, at, "abgelehnt", at.AddMinutes(i)));
+            }
+
+            var entries = new RejectedOfflineEventStore(Path.Combine(directory, "rejected.json")).List();
+            Assert.Equal(1001, entries.Count);
+            Assert.Contains(entries, entry => entry.EventId == "open");
+            Assert.DoesNotContain(entries, entry => entry.EventId == "resolved-0");
+            Assert.Contains(entries, entry => entry.EventId == "resolved-1000");
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CorruptJournal_IsQuarantinedAndNewRecordsCanBeSaved()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-corrupt-journal-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, "rejected.json");
+            File.WriteAllText(path, "{broken");
+            var store = new RejectedOfflineEventStore(path);
+
+            Assert.Empty(store.List());
+            Assert.True(File.Exists(path + ".corrupt"));
+            store.Record(new RejectedOfflineEvent("event-1", "max", "Max", "start",
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "abgelehnt"));
+            Assert.Single(new RejectedOfflineEventStore(path).List());
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void RecordsSurviveRestart_AndResolutionStaysVisible()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-rejected-test-{Guid.NewGuid():N}");

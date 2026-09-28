@@ -20,12 +20,14 @@
   min-height: calc(100vh - 2.75rem - clamp(20px, 4vw, 44px));
 }
 
-// Bei einer Sitzung kommt unter den drei Spalten die Stundenkarte hinzu.
-// Die Kartenhoehe muss im Banner-Fall von der ersten Grid-Zeile abgehen.
-.terminal.session:has(.offline-banner) {
-  height: calc(100vh - 2.75rem - clamp(20px, 4vw, 44px) - 20px);
-  min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+// 20px reservieren unten Platz fuer das fixe Versions-Badge; mit Banner und
+// Stundenkarte waere die Karte sonst teilweise verdeckt.
+@media (min-width: 701px) {
+  .terminal.session:has(.offline-banner) {
+    height: calc(100vh - 2.75rem - clamp(20px, 4vw, 44px) - 20px);
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
 }
 
 h1,

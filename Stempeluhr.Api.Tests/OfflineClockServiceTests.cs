@@ -61,6 +61,110 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task JournalWriteFailure_DoesNotHideOtherRefusalsInTheBatch()
+    {
+        var blockingFile = Path.GetTempFileName();
+        try
+        {
+            var journal = new RejectedOfflineEventStore(Path.Combine(blockingFile, "rejected.json"));
+            var service = new OfflineClockService(new InMemorySettingsStore(TestSettings()),
+                new InMemoryEmployeeService(), new FakeKimaiClient(), new InMemoryEventIdStore(),
+                new KioskEventCoordinator(), journal, new RecordingLogger());
+
+            var result = await service.SyncKioskAsync([
+                Kiosk("rejected-1", "unknown", T08),
+                Kiosk("rejected-2", "unknown", T10),
+            ]);
+
+            Assert.Equal(["rejected-1", "rejected-2"],
+                result.Results.Where(item => item.Status == "rejected").Select(item => item.EventId));
+        }
+        finally
+        {
+            File.Delete(blockingFile);
+        }
+    }
+
+    [Fact]
+    public async Task MissingEventId_IsNotWrittenToAdminJournal()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-invalid-journal-{Guid.NewGuid():N}");
+        try
+        {
+            var journal = new RejectedOfflineEventStore(Path.Combine(directory, "rejected.json"));
+            var service = new OfflineClockService(new InMemorySettingsStore(TestSettings()),
+                new InMemoryEmployeeService(), new FakeKimaiClient(), new InMemoryEventIdStore(),
+                new KioskEventCoordinator(), journal, new RecordingLogger());
+
+            var result = await service.SyncKioskAsync([Kiosk("", "start", T08)]);
+
+            Assert.Equal("rejected", Assert.Single(result.Results).Status);
+            Assert.Empty(journal.List());
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task OutboxPermanentRefusal_IsJournaledAndReportedOnKioskRetry()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-outbox-journal-{Guid.NewGuid():N}");
+        try
+        {
+            var journal = new RejectedOfflineEventStore(Path.Combine(directory, "rejected.json"));
+            var kimai = new FakeKimaiClient { FailNextStatusCalls = 2 };
+            var service = new OfflineClockService(new InMemorySettingsStore(TestSettings()),
+                new InMemoryEmployeeService(), kimai, new InMemoryEventIdStore(),
+                new KioskEventCoordinator(), journal, new RecordingLogger());
+            var eventToReplay = Kiosk("outbox-1", "start", T08);
+
+            var initial = await service.SyncKioskAsync([eventToReplay]);
+            Assert.Equal("buffered", Assert.Single(initial.Results).Status);
+            kimai.StartFailures.Enqueue(new KimaiApiException(System.Net.HttpStatusCode.BadRequest, "simulated permanent"));
+            await service.FlushOutboxAsync();
+
+            Assert.Equal("outbox-1", Assert.Single(journal.List()).EventId);
+            var retry = await service.SyncKioskAsync([eventToReplay]);
+            Assert.Equal("rejected", Assert.Single(retry.Results).Status);
+            Assert.Equal(0, retry.Duplicates);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task OutboxRefusalWithBrokenJournal_IsRetriedInsteadOfSilentlyDuplicated()
+    {
+        var blockingFile = Path.GetTempFileName();
+        try
+        {
+            var journal = new RejectedOfflineEventStore(Path.Combine(blockingFile, "rejected.json"));
+            var kimai = new FakeKimaiClient { FailNextStatusCalls = 2 };
+            var service = new OfflineClockService(new InMemorySettingsStore(TestSettings()),
+                new InMemoryEmployeeService(), kimai, new InMemoryEventIdStore(),
+                new KioskEventCoordinator(), journal, new RecordingLogger());
+            var eventToReplay = Kiosk("outbox-1", "start", T08);
+            Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([eventToReplay])).Results).Status);
+            kimai.StartFailures.Enqueue(new KimaiApiException(System.Net.HttpStatusCode.BadRequest, "still rejected"));
+            await service.FlushOutboxAsync();
+
+            kimai.StartFailures.Enqueue(new KimaiApiException(System.Net.HttpStatusCode.BadRequest, "still rejected"));
+            var retry = await service.SyncKioskAsync([eventToReplay]);
+
+            Assert.Equal("rejected", Assert.Single(retry.Results).Status);
+            Assert.Equal(0, retry.Duplicates);
+        }
+        finally
+        {
+            File.Delete(blockingFile);
+        }
+    }
+
+    [Fact]
     public async Task TransientFailure_BuffersWholeBatch_AndReplaysInScanOrder()
     {
         var (service, kimai) = CreateService();
