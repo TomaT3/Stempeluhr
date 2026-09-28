@@ -65,12 +65,27 @@ public sealed class OfflineClockService(
         var buffered = 0;
         var results = new List<OfflineSyncEventResultDto>();
 
+        void RejectRegistered(OfflineKioskClockEventDto entry, string message)
+        {
+            results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", message));
+            // Journal each refusal before another event can abort the batch.
+            // Without a journal entry, a lost response must remain retryable.
+            if (!TryRecordRejected(entry, message))
+            {
+                eventIdStore.Remove(entry.EventId);
+            }
+        }
+
         // Malformed entries must be reported back explicitly so the sender can
         // drop them from its queue instead of silently retrying them forever.
         foreach (var invalid in events.Where(e => string.IsNullOrWhiteSpace(e.EventId) || string.IsNullOrWhiteSpace(e.EmployeeId)))
         {
-            results.Add(new OfflineSyncEventResultDto(invalid.EventId ?? string.Empty, "rejected",
-                "EventId und EmployeeId sind erforderlich."));
+            const string message = "EventId und EmployeeId sind erforderlich.";
+            results.Add(new OfflineSyncEventResultDto(invalid.EventId ?? string.Empty, "rejected", message));
+            if (!string.IsNullOrWhiteSpace(invalid.EventId))
+            {
+                TryRecordRejected(invalid, message);
+            }
         }
 
         var orderedKioskEvents = events
@@ -167,7 +182,7 @@ public sealed class OfflineClockService(
                         ex,
                         "Offline kiosk event {EventId} rejected ({Message}) - skipping the remaining {Skipped} event(s) of this batch",
                         entry.EventId, ex.Message, orderedKioskEvents.Count - i - 1);
-                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", ex.Message));
+                    RejectRegistered(entry, ex.Message);
                     var skipped = orderedKioskEvents.Count - i - 1;
                     const string skippedMessage = "Uebersprungen - die Anmeldedaten dieses Batches wurden abgelehnt.";
                     for (var s = i + 1; s < orderedKioskEvents.Count; s++)
@@ -181,7 +196,7 @@ public sealed class OfflineClockService(
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Offline kiosk event {EventId} permanently rejected", entry.EventId);
-                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", ex.Message));
+                    RejectRegistered(entry, ex.Message);
                 }
             }
 
@@ -190,18 +205,6 @@ public sealed class OfflineClockService(
         finally
         {
             _syncLock.Release();
-        }
-
-        // Persist the server's final refusals before returning them to the
-        // kiosk. The journal remains available from another admin computer.
-        foreach (var result in results.Where(result => result.Status == "rejected"))
-        {
-            var entry = events.FirstOrDefault(entry => entry.EventId == result.EventId);
-            if (entry is null || string.IsNullOrWhiteSpace(entry.EventId))
-            {
-                continue;
-            }
-            TryRecordRejected(entry, result.Message ?? string.Empty);
         }
 
         return new OfflineSyncResultDto(accepted, duplicates, buffered, results);

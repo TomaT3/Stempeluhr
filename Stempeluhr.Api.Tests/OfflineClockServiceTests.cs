@@ -53,6 +53,10 @@ public sealed class OfflineClockServiceTests
             Assert.Equal("rejected-1", entry.EventId);
             Assert.Equal(T08, entry.PerformedAt);
             Assert.DoesNotContain("wrong-pin", File.ReadAllText(path));
+
+            var retry = await service.SyncKioskAsync([Kiosk("rejected-1", "start", T08, "wrong-pin")]);
+            Assert.Equal("rejected", Assert.Single(retry.Results).Status);
+            Assert.Equal(0, retry.Duplicates);
         }
         finally
         {
@@ -189,6 +193,41 @@ public sealed class OfflineClockServiceTests
 
             var retry = await service.SyncKioskAsync([eventToReplay]);
             Assert.Equal("rejected", Assert.Single(retry.Results).Status);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LaterJournalReadFailure_DoesNotTurnEarlierRefusalIntoDuplicate()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-locked-batch-{Guid.NewGuid():N}");
+        try
+        {
+            var path = Path.Combine(directory, "rejected.json");
+            var duplicate = Kiosk("dup", "start", T10);
+            new RejectedOfflineEventStore(path).Record(new RejectedOfflineEvent(
+                duplicate.EventId, duplicate.EmployeeId, "Max", duplicate.Action,
+                duplicate.PerformedAt, DateTimeOffset.UtcNow, "abgelehnt"));
+            var ids = new InMemoryEventIdStore();
+            ids.TryRegister(duplicate.EventId);
+            var service = new OfflineClockService(new InMemorySettingsStore(TestSettings()),
+                new InMemoryEmployeeService(), new FakeKimaiClient(), ids,
+                new KioskEventCoordinator(), new RejectedOfflineEventStore(path), new RecordingLogger());
+            var batch = new[] { Kiosk("refused", "unknown", T08), duplicate };
+
+            using (var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var error = await Record.ExceptionAsync(() => service.SyncKioskAsync(batch));
+                Assert.True(error is IOException or UnauthorizedAccessException, error?.ToString());
+            }
+
+            var retry = await service.SyncKioskAsync(batch);
+            Assert.Equal("rejected", retry.Results.Single(result => result.EventId == "refused").Status);
+            Assert.Equal("rejected", retry.Results.Single(result => result.EventId == "dup").Status);
+            Assert.Equal(0, retry.Duplicates);
         }
         finally
         {
