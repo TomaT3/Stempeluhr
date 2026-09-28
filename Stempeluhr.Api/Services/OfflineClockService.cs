@@ -54,14 +54,17 @@ public sealed class OfflineClockService(
     // _syncLock like the list itself.
     private readonly HashSet<string> _kioskOutboxIds = new(StringComparer.Ordinal);
 
-    // Event IDs of task switches whose replay stopped the work sheet and then
-    // failed on the start. Only these may resume on the target while nothing
-    // runs: an ordinary clock-out right after a queued switch leaves the same
-    // Kimai state (latest stopped = work sheet ending near the event), so the
-    // Kimai state alone cannot tell our own half-done switch apart. Guarded
-    // by _syncLock; lost on restart - the replay then rejects instead of
-    // guessing (see ApplySwitchAsync).
-    private readonly HashSet<string> _interruptedSwitches = new(StringComparer.Ordinal);
+    // Two-step transitions (pauseEnd, switch) whose replay got Kimai's
+    // confirmation for the stop and then failed: event ID -> id of the sheet
+    // this replay stopped. Only these may resume while nothing runs, and only
+    // while that very sheet is still the latest stopped one. An ordinary
+    // clock-out on another terminal right after the queued event leaves the
+    // same Kimai state (latest stopped sheet ending near the event), so the
+    // Kimai state alone cannot tell our own half-done transition apart
+    // (issue #55); the sheet id also survives a failed end backdate, which
+    // the time window did not (issue #10). Guarded by _syncLock; lost on
+    // restart - the replay then rejects instead of guessing.
+    private readonly Dictionary<string, int> _interruptedTransitions = new(StringComparer.Ordinal);
 
     private readonly SemaphoreSlim _syncLock = new(1, 1);
 
@@ -397,80 +400,181 @@ public sealed class OfflineClockService(
                 return ($"Nachgetragen: Pausenbeginn {timestamp.ToLocalTime():HH:mm}", "paused");
 
             case "pauseEnd":
-                // Mirror the live path: only end a pause that is actually running.
-                if (status.State == "paused" && status.ActiveTimesheetId is int endPauseId)
-                {
-                    // Same replay-vs-live race as the stop case: a stale
-                    // pauseEnd must not kill a pause that began after it.
-                    if (IsSheetNewerThanEvent(status.StartedAt, timestamp))
-                    {
-                        logger.LogWarning(
-                            "Offline pauseEnd at {Timestamp}: pause timesheet started at {StartedAt} - after the event; obsolete no-op",
-                            timestamp, status.StartedAt);
-                        return (ObsoleteEventMessage, status.State);
-                    }
-
-                    RequireDefaultTarget(settings, employee);
-
-                    // Resume the task the pause interrupted (live parity,
-                    // ClockService.EndPauseAsync): read BEFORE stopping the
-                    // pause, while that sheet is still the latest stopped one.
-                    var resume = WorkTargetResolver.ResolveResume(
-                        settings, employee, await GetTimesheetBeforePauseAsync(settings, employee, cancellationToken))!;
-
-                    await kimai.StopAtAsync(settings, employee, endPauseId, timestamp, cancellationToken);
-                    await kimai.StartAtAsync(settings, employee, resume, timestamp, cancellationToken);
-                    return ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
-                }
-
-                if (!status.IsRunning)
-                {
-                    // Partial-application recovery: pauseEnd is a two-step
-                    // transaction (stop the pause timesheet, resume work). If a
-                    // previous replay stopped the pause but then failed
-                    // transiently on the resume-start, this retry arrives while
-                    // NOTHING is running. Answering the old no-op here would
-                    // acknowledge the event as applied and leave the employee
-                    // clocked out for the rest of the day.
-                    //
-                    // But "nothing running" alone proves nothing: a LIVE stop
-                    // or another terminal's action may have ended the pause
-                    // before this event ever reached Kimai. Resuming blindly
-                    // would book a phantom work timesheet that runs until the
-                    // next stamp. So require the fingerprint our own
-                    // interrupted attempt leaves behind: the latest STOPPED
-                    // timesheet is a PAUSE timesheet whose end matches this
-                    // event's timestamp (StopAt wrote it right before failing).
-                    // Two entries: the stopped pause plus the sheet it
-                    // interrupted, so the resume picks the task from before
-                    // the pause (live parity).
-                    var recent = await FindInterruptedTransitionAsync(settings, employee, timestamp, stoppedPause: true, 2, cancellationToken);
-                    if (recent is null)
-                    {
-                        logger.LogWarning(
-                            "Offline pauseEnd at {Timestamp}: no pause running and no matching interrupted pause stop - not resuming work",
-                            timestamp);
-                        return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
-                    }
-
-                    logger.LogWarning(
-                        "Offline pauseEnd at {Timestamp}: completing an interrupted pause end by resuming work",
-                        timestamp);
-
-                    var resumeAfterInterruption = WorkTargetResolver.ResolveResume(settings, employee, recent.ElementAtOrDefault(1))
-                        ?? RequireDefaultTarget(settings, employee);
-                    await kimai.StartAtAsync(settings, employee, resumeAfterInterruption, timestamp, cancellationToken);
-                    return ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
-                }
-
-                return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
+                return await ApplyTransitionAsync(eventId, () =>
+                    ApplyPauseEndAsync(settings, employee, status, eventId, timestamp, cancellationToken));
 
             case "switch":
-                return await ApplySwitchAsync(settings, employee, status, eventId, taskId, timestamp, cancellationToken);
+                return await ApplyTransitionAsync(eventId, () =>
+                    ApplySwitchAsync(settings, employee, status, eventId, taskId, timestamp, cancellationToken));
 
             default:
                 throw new InvalidOperationException($"Unbekannte Aktion: {action}");
         }
+    }
+
+    /// <summary>
+    /// Runs one two-step transition (pauseEnd, switch). Its marker in
+    /// <see cref="_interruptedTransitions"/> survives only a TRANSIENT failure
+    /// (the event buffers and comes back); any final outcome - applied, no-op,
+    /// rejected - ends it.
+    /// </summary>
+    private async Task<(string Message, string State)> ApplyTransitionAsync(
+        string eventId,
+        Func<Task<(string Message, string State)>> apply)
+    {
+        try
+        {
+            var result = await apply();
+            _interruptedTransitions.Remove(eventId);
+            return result;
+        }
+        catch (Exception ex) when (!(ex is KimaiApiException kimaiEx ? IsRetryable(kimaiEx) : IsTransientNetworkError(ex)))
+        {
+            _interruptedTransitions.Remove(eventId);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// First step of a transition: stop the sheet and backdate its end. The
+    /// marker is set as soon as Kimai confirmed the stop, before the backdate
+    /// that can fail on its own (issue #10): a retry then knows this replay
+    /// stopped that very sheet.
+    /// </summary>
+    private async Task StopTransitionAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        string eventId,
+        int timesheetId,
+        DateTimeOffset timestamp,
+        CancellationToken cancellationToken)
+    {
+        await kimai.StopAsync(settings, employee, timesheetId, cancellationToken);
+        _interruptedTransitions[eventId] = timesheetId;
+        await kimai.BackdateEndAsync(settings, employee, timesheetId, timestamp, cancellationToken);
+    }
+
+    private const string UnclearTransitionMessage = "nicht eindeutig nachtragbar - bitte in Kimai pruefen.";
+
+    /// <summary>
+    /// Retry of a transition while nothing runs: when an earlier replay of
+    /// THIS event stopped the latest stopped sheet, returns the
+    /// <paramref name="count"/> latest stopped sheets (that one first) with
+    /// its end backdated to the event, so the caller resumes. Returns null
+    /// when this server stopped nothing for the event. Rejects when it did,
+    /// but something ended or booked after that stop.
+    /// </summary>
+    private async Task<IReadOnlyList<KimaiRecentTimesheetDto>?> ResumeOwnInterruptedStopAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        string eventId,
+        string what,
+        DateTimeOffset timestamp,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        if (!_interruptedTransitions.TryGetValue(eventId, out var stoppedId))
+        {
+            return null;
+        }
+
+        var recent = await kimai.GetRecentStoppedTimesheetsAsync(settings, employee, count, cancellationToken);
+        if (recent.FirstOrDefault()?.Id != stoppedId)
+        {
+            logger.LogWarning(
+                "Offline {What} {EventId} at {Timestamp}: sheet {TimesheetId} stopped by this replay is no longer the latest stopped one - rejecting",
+                what, eventId, timestamp, stoppedId);
+            throw new InvalidOperationException($"{what} {UnclearTransitionMessage}");
+        }
+
+        if (recent[0].EndedAt is not { } ended || Math.Abs((ended - timestamp).TotalSeconds) >= 1)
+        {
+            // The stop went through, its backdate did not (issue #10): the
+            // sheet still ends at the moment of that first attempt.
+            await kimai.BackdateEndAsync(settings, employee, stoppedId, timestamp, cancellationToken);
+        }
+
+        logger.LogWarning(
+            "Offline {What} {EventId} at {Timestamp}: completing the interrupted transition after stopping sheet {TimesheetId}",
+            what, eventId, timestamp, stoppedId);
+        return recent;
+    }
+
+    /// <summary>
+    /// Pause end: stop the pause sheet, resume the task the pause interrupted
+    /// from the event's timestamp on (live parity, ClockService.EndPauseAsync).
+    /// </summary>
+    private async Task<(string Message, string State)> ApplyPauseEndAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        ClockStatusDto status,
+        string eventId,
+        DateTimeOffset timestamp,
+        CancellationToken cancellationToken)
+    {
+        var applied = ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
+
+        // Mirror the live path: only end a pause that is actually running.
+        if (status.State == "paused" && status.ActiveTimesheetId is int endPauseId)
+        {
+            // Same replay-vs-live race as the stop case: a stale
+            // pauseEnd must not kill a pause that began after it.
+            if (IsSheetNewerThanEvent(status.StartedAt, timestamp))
+            {
+                logger.LogWarning(
+                    "Offline pauseEnd at {Timestamp}: pause timesheet started at {StartedAt} - after the event; obsolete no-op",
+                    timestamp, status.StartedAt);
+                return (ObsoleteEventMessage, status.State);
+            }
+
+            RequireDefaultTarget(settings, employee);
+
+            // Read BEFORE stopping the pause, while the sheet it interrupted
+            // is still the latest stopped one.
+            var resume = WorkTargetResolver.ResolveResume(
+                settings, employee, await GetTimesheetBeforePauseAsync(settings, employee, cancellationToken))!;
+
+            await StopTransitionAsync(settings, employee, eventId, endPauseId, timestamp, cancellationToken);
+            await kimai.StartAtAsync(settings, employee, resume, timestamp, cancellationToken);
+            return applied;
+        }
+
+        if (status.IsRunning)
+        {
+            return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
+        }
+
+        // Nothing runs. Either an earlier replay of this event stopped the
+        // pause and then failed on the resume - answering a no-op would leave
+        // the employee clocked out for the rest of the day - or the pause
+        // ended elsewhere. Two entries: the stopped pause plus the sheet it
+        // interrupted, so the resume picks the task from before the pause.
+        if (await ResumeOwnInterruptedStopAsync(settings, employee, eventId, "Pausenende", timestamp, 2, cancellationToken) is { } recent)
+        {
+            var resumeAfterInterruption = WorkTargetResolver.ResolveResume(settings, employee, recent.ElementAtOrDefault(1))
+                ?? RequireDefaultTarget(settings, employee);
+            await kimai.StartAtAsync(settings, employee, resumeAfterInterruption, timestamp, cancellationToken);
+            return applied;
+        }
+
+        if (await FindInterruptedTransitionAsync(settings, employee, timestamp, stoppedPause: true, 1, cancellationToken) is not null)
+        {
+            // Looks like a half-done pause end, but this server did not stop
+            // the pause for this event: typically a clock-out on another
+            // terminal seconds after the queued pause end (issue #55), or a
+            // restart lost the marker. Resuming would book work that runs
+            // all night; acknowledging would hide a possibly lost pause end.
+            // Reject: the kiosk reports it for a check.
+            logger.LogWarning(
+                "Offline pauseEnd {EventId} at {Timestamp}: pause stopped near the event, but not by this replay - rejecting",
+                eventId, timestamp);
+            throw new InvalidOperationException($"Pausenende {UnclearTransitionMessage}");
+        }
+
+        logger.LogWarning(
+            "Offline pauseEnd at {Timestamp}: no pause running and no matching interrupted pause stop - not resuming work",
+            timestamp);
+        return ("Keine laufende Pause - Nachtrag nicht moeglich.", status.State);
     }
 
     /// <summary>
@@ -489,32 +593,6 @@ public sealed class OfflineClockService(
         DateTimeOffset timestamp,
         CancellationToken cancellationToken)
     {
-        // The marker survives only a TRANSIENT failure (the event buffers and
-        // comes back); any final outcome - applied, no-op, rejected - ends it.
-        var interruptedHere = _interruptedSwitches.Contains(eventId);
-        try
-        {
-            var result = await ApplySwitchCoreAsync(settings, employee, status, eventId, interruptedHere, taskId, timestamp, cancellationToken);
-            _interruptedSwitches.Remove(eventId);
-            return result;
-        }
-        catch (Exception ex) when (!(ex is KimaiApiException kimaiEx ? IsRetryable(kimaiEx) : IsTransientNetworkError(ex)))
-        {
-            _interruptedSwitches.Remove(eventId);
-            throw;
-        }
-    }
-
-    private async Task<(string Message, string State)> ApplySwitchCoreAsync(
-        RuntimeSettings settings,
-        EmployeeSettings employee,
-        ClockStatusDto status,
-        string eventId,
-        bool interruptedHere,
-        string? taskId,
-        DateTimeOffset timestamp,
-        CancellationToken cancellationToken)
-    {
         if (status.State == "paused")
         {
             return ("In Pause - Wechsel nicht nachtragbar.", status.State);
@@ -526,11 +604,21 @@ public sealed class OfflineClockService(
         {
             // Partial-application recovery: a previous replay of THIS event
             // stopped the work sheet but failed transiently on the start.
-            // The Kimai fingerprint (latest stopped = work sheet ending at
-            // the event) is necessary but not sufficient - an ordinary
-            // clock-out on another terminal right after the queued switch
-            // leaves the same state - so resuming also requires our own
-            // marker (_interruptedSwitches).
+            if (await ResumeOwnInterruptedStopAsync(settings, employee, eventId, "Wechsel", timestamp, 1, cancellationToken) is not null)
+            {
+                if (target is null)
+                {
+                    // Our own stop already ended the work - a silent no-op would
+                    // leave the employee clocked out without any notice.
+                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(taskId)
+                        ? "Projekt und Aktivitaet muessen konfiguriert sein."
+                        : "Taetigkeit nicht mehr vorhanden.");
+                }
+
+                await kimai.StartAtAsync(settings, employee, target, timestamp, cancellationToken);
+                return (SwitchAppliedMessage(target, timestamp), "working");
+            }
+
             var stopped = (await FindInterruptedTransitionAsync(settings, employee, timestamp, stoppedPause: false, 1, cancellationToken))?[0];
             if (stopped is null
                 || (target is not null && WorkTargetResolver.BooksOn(target, stopped.ProjectId, stopped.ActivityId)))
@@ -540,30 +628,15 @@ public sealed class OfflineClockService(
                 return ("Lief nicht - Wechsel nicht nachtragbar.", status.State);
             }
 
-            if (!interruptedHere)
-            {
-                // Looks like a half-done switch, but this server did not stop
-                // that sheet for this event (clock-out elsewhere, or a restart
-                // lost the marker). Starting the target would book a sheet
-                // that runs all night; acknowledging would hide a possibly
-                // lost switch. Reject: the kiosk reports it for a check.
-                logger.LogWarning(
-                    "Offline switch {EventId} at {Timestamp}: work sheet stopped near the event, but not by this replay - rejecting",
-                    eventId, timestamp);
-                throw new InvalidOperationException("Wechsel nicht eindeutig nachtragbar - bitte in Kimai pruefen.");
-            }
-
-            if (target is null)
-            {
-                // Our own stop already ended the work - a silent no-op would
-                // leave the employee clocked out without any notice.
-                throw new InvalidOperationException(string.IsNullOrWhiteSpace(taskId)
-                    ? "Projekt und Aktivitaet muessen konfiguriert sein."
-                    : "Taetigkeit nicht mehr vorhanden.");
-            }
-
-            await StartSwitchTargetAsync(settings, employee, eventId, target, timestamp, cancellationToken);
-            return (SwitchAppliedMessage(target, timestamp), "working");
+            // Looks like a half-done switch, but this server did not stop
+            // that sheet for this event (clock-out elsewhere, or a restart
+            // lost the marker). Starting the target would book a sheet that
+            // runs all night; acknowledging would hide a possibly lost
+            // switch. Reject: the kiosk reports it for a check.
+            logger.LogWarning(
+                "Offline switch {EventId} at {Timestamp}: work sheet stopped near the event, but not by this replay - rejecting",
+                eventId, timestamp);
+            throw new InvalidOperationException($"Wechsel {UnclearTransitionMessage}");
         }
 
         if (target is null)
@@ -590,33 +663,9 @@ public sealed class OfflineClockService(
             return (ObsoleteEventMessage, status.State);
         }
 
-        await kimai.StopAtAsync(settings, employee, switchStopId, timestamp, cancellationToken);
-        await StartSwitchTargetAsync(settings, employee, eventId, target, timestamp, cancellationToken);
+        await StopTransitionAsync(settings, employee, eventId, switchStopId, timestamp, cancellationToken);
+        await kimai.StartAtAsync(settings, employee, target, timestamp, cancellationToken);
         return (SwitchAppliedMessage(target, timestamp), "working");
-    }
-
-    /// <summary>
-    /// Second step of a switch. A failure leaves the employee stopped, so the
-    /// event is marked as interrupted by this server: its retry may then
-    /// resume on the target (see <see cref="_interruptedSwitches"/>).
-    /// </summary>
-    private async Task StartSwitchTargetAsync(
-        RuntimeSettings settings,
-        EmployeeSettings employee,
-        string eventId,
-        KimaiTimesheetTarget target,
-        DateTimeOffset timestamp,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await kimai.StartAtAsync(settings, employee, target, timestamp, cancellationToken);
-        }
-        catch
-        {
-            _interruptedSwitches.Add(eventId);
-            throw;
-        }
     }
 
     private static string SwitchAppliedMessage(KimaiTimesheetTarget target, DateTimeOffset timestamp)
@@ -697,17 +746,17 @@ public sealed class OfflineClockService(
     }
 
     /// <summary>
-    /// True when the Kimai state matches an interrupted two-step transaction
+    /// True when the Kimai state LOOKS like an interrupted two-step transaction
     /// (pauseEnd: <paramref name="stoppedPause"/> true, switch: false): the
     /// latest stopped timesheet is a PAUSE (resp. WORK) timesheet that ended
-    /// at this event's timestamp - exactly what StopAt(sheet, timestamp)
-    /// writes in the successful first step before the following start fails
-    /// transiently. The small tolerance only absorbs timestamp rounding;
-    /// anything further away (a later live stop, another terminal's action)
-    /// must NOT trigger a phantom start. A transient failure of the lookup
-    /// itself propagates to the caller, so the event buffers and retries as
-    /// usual. Returns the <paramref name="count"/> latest stopped timesheets
-    /// (the matching one first), or null when the state does not match.
+    /// at this event's timestamp. Used only when this server holds no marker
+    /// for the event (<see cref="_interruptedTransitions"/>), to tell "ended
+    /// elsewhere right after the event - reject" from "nothing to do - no-op".
+    /// The small tolerance only absorbs timestamp rounding and clock skew. A
+    /// transient failure of the lookup itself propagates to the caller, so
+    /// the event buffers and retries as usual. Returns the
+    /// <paramref name="count"/> latest stopped timesheets (the matching one
+    /// first), or null when the state does not match.
     /// </summary>
     private async Task<IReadOnlyList<KimaiRecentTimesheetDto>?> FindInterruptedTransitionAsync(
         RuntimeSettings settings,

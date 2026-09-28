@@ -39,6 +39,18 @@ public interface IKimaiClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Sets the end of an already stopped timesheet to <paramref name="endedAt"/>
+    /// (second half of <see cref="StopAtAsync"/>). Lets the offline replay
+    /// tell a confirmed stop apart from a failed backdate.
+    /// </summary>
+    Task BackdateEndAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int timesheetId,
+        DateTimeOffset endedAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the <paramref name="count"/> most recently STOPPED timesheets
     /// of the employee, latest end first (empty if none exist). Used by the
     /// offline replay to verify that a "nothing is running" state really
@@ -86,4 +98,4 @@ public interface IKimaiClient
 }
 
 /// <summary>Minimal view of a finished timesheet, for replay verification and pause resume.</summary>
-public sealed record KimaiRecentTimesheetDto(int? ActivityId, DateTimeOffset? EndedAt, int? ProjectId = null);
+public sealed record KimaiRecentTimesheetDto(int? ActivityId, DateTimeOffset? EndedAt, int? ProjectId = null, int? Id = null);
