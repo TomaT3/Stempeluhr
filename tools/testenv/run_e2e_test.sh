@@ -53,9 +53,21 @@ wait_for() { # url timeout_s
   return 1
 }
 
+# Der Sync ist pro Client-IP auf 20 Einheiten/min gedrosselt, der Test
+# braucht mehr. Die API vertraut im Test 127.0.0.1 als Proxy
+# (Stempeluhr:KnownProxies), und jeder Aufruf kommt mit eigener
+# X-Forwarded-For-IP. Der Zähler liegt in einer Datei, weil post_sync meist
+# in einer Subshell ($(...)) läuft.
+next_client_ip() {
+  local n
+  n=$(( $(cat "$WORK/client-ip-counter" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$WORK/client-ip-counter"
+  echo "10.0.$(( n / 256 )).$(( n % 256 ))"
+}
+
 post_sync() { # json
   curl -s -m 15 -X POST "$API_URL/api/kiosk/clock/sync" \
-    -H 'Content-Type: application/json' -d "$1"
+    -H 'Content-Type: application/json' -H "X-Forwarded-For: $(next_client_ip)" -d "$1"
 }
 
 # ---------------------------------------------------------------- Setup
@@ -94,6 +106,7 @@ echo "  Fake-Kimai läuft (PID $KIMAI_PID)"
 dotnet run --project "$ROOT/Stempeluhr.Api/Stempeluhr.Api.csproj" --no-build \
   --urls "$API_URL" -- \
   "Stempeluhr:SettingsPath=$WORK/settings.json" \
+  "Stempeluhr:KnownProxies:0=127.0.0.1" \
   > "$WORK/api.log" 2>&1 & API_PID=$!
 wait_for "$API_URL/healthz" 30 || wait_for "$API_URL/api/health" 5 || {
   # Fallback: erster Endpoint, der eine Antwort liefert
@@ -287,6 +300,27 @@ assert_status '"rejected"' "$R" "Falsche PIN → rejected"
 
 R=$(post_sync "{\"events\":[{\"eventId\":\"${RUN}-bad-card-1\",\"employeeId\":\"unbekannt\",\"pin\":\"1234\",\"action\":\"start\",\"performedAt\":\"2026-08-23T08:00:00+02:00\"}]}")
 assert_status '"rejected"' "$R" "Unbekannter Mitarbeiter → rejected"
+
+# ------------------------------------------------- Test 3a: Rate-Limit Sync
+say "Test 3a: Sync ist pro Client auf 20 Einheiten/min gedrosselt (Issue #53)"
+
+limited_post() { # path json
+  curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST "$API_URL$1" \
+    -H 'Content-Type: application/json' -H 'X-Forwarded-For: 10.99.0.1' -d "$2"
+}
+
+LIMIT_OK=1
+for _ in $(seq 1 20); do
+  [[ "$(limited_post /api/kiosk/clock/sync '{"events":[]}')" == "200" ]] || LIMIT_OK=0
+done
+[[ $LIMIT_OK == 1 ]] && ok "20 Sync-Anfragen eines Clients gehen durch" \
+  || bad "Sync drosselt vor der 20. Anfrage"
+CODE=$(limited_post /api/kiosk/clock/sync '{"events":[]}')
+[[ "$CODE" == "429" ]] && ok "21. Sync-Anfrage desselben Clients → 429" \
+  || bad "21. Sync-Anfrage desselben Clients → erwartet 429, war $CODE"
+CODE=$(limited_post /api/kiosk/identify '{"cardId":"04000000","terminalId":"e2e-limit"}')
+[[ "$CODE" != "429" ]] && ok "Identify hat ein eigenes Budget (war $CODE)" \
+  || bad "Identify teilt das erschöpfte Sync-Budget (429)"
 
 # ------------------------------------------------- Test 3b: Karte zuordnen (Admin)
 say "Test 3b: Kiosk-Identifikation erscheint als letzte Karte für die Admin-Seite"
