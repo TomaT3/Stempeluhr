@@ -2,6 +2,7 @@
 
 import json
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -38,7 +39,11 @@ from stempeluhr_nfc_agent import (  # noqa: E402
     AGENT_VERSION,
     AgentConfig,
     LocalScanServer,
+    origin_of,
 )
+
+KIOSK = "https://stempeluhr.example.com"
+FOREIGN = "https://evil.example.org"
 
 
 def make_config() -> AgentConfig:
@@ -69,7 +74,84 @@ def post(url: str):
         return error.code
 
 
+def request(url: str, method: str = "GET", origin: str | None = None):
+    """(status, headers) of a request, optionally sent with an Origin header."""
+    data = b"{}" if method == "POST" else None
+    req = urllib.request.Request(url, data=data, method=method)
+    if origin is not None:
+        req.add_header("Origin", origin)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            response.read()
+            return response.status, response.headers
+    except urllib.error.HTTPError as error:
+        error.read()
+        return error.code, error.headers
+
+
+def test_origin_of() -> None:
+    assert origin_of("https://Stempeluhr.example.com/") == KIOSK
+    assert origin_of("https://stempeluhr.example.com:443/app") == KIOSK
+    assert origin_of("http://nas:5100") == "http://nas:5100"
+    assert origin_of("http://nas:80") == "http://nas"
+    assert origin_of("http://[::1]:8080") == "http://[::1]:8080"
+
+
+def test_config_origin() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config.json"
+        # A config.json of an existing Pi: no kiosk_origin key.
+        path.write_text('{"api_base_url": "https://stempeluhr.example.com/"}', encoding="utf-8")
+        assert AgentConfig.load(path).allowed_origin == KIOSK
+
+        path.write_text(
+            '{"api_base_url": "http://nas:5100", "kiosk_origin": "https://stempeluhr.example.com"}',
+            encoding="utf-8",
+        )
+        assert AgentConfig.load(path).allowed_origin == KIOSK
+
+
+def test_origin_restriction() -> None:
+    """Issue #13: only the kiosk page may read and ack scans."""
+    server = LocalScanServer(port=0, allowed_origin="https://Stempeluhr.example.com:443/")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        latest = f"{server.url}/scan/latest"
+        ack = f"{server.url}/scan/ack"
+        server.publish_scan("04AABBCC", 1724265600.0)
+
+        # The kiosk itself: preflight, read and ack work, and the header names it.
+        status, headers = request(latest, "OPTIONS", KIOSK)
+        assert status == 204, f"kiosk preflight should return 204, got {status}"
+        assert headers.get("Access-Control-Allow-Origin") == KIOSK, headers
+        status, headers = request(latest, origin=KIOSK)
+        assert status == 200, f"kiosk GET should return 200, got {status}"
+        assert headers.get("Access-Control-Allow-Origin") == KIOSK, headers
+
+        # A foreign page: refused, without any CORS header, and the scan
+        # stays unconsumed for the kiosk.
+        for method, url in (("OPTIONS", ack), ("GET", latest), ("POST", ack)):
+            status, headers = request(url, method, FOREIGN)
+            assert status == 403, f"foreign {method} {url} should return 403, got {status}"
+            assert headers.get("Access-Control-Allow-Origin") is None, headers
+        assert server.latest_scan().consumed is False, "foreign ack must not consume"
+
+        # No Origin: not a web page (curl, updater) - allowed as before.
+        status, _ = request(f"{server.url}/health", origin=FOREIGN)
+        assert status == 200, f"health stays open, got {status}"
+        status, _ = request(ack, "POST")
+        assert status == 200, f"ack without Origin should return 200, got {status}"
+        assert server.latest_scan().consumed is True
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def main() -> int:
+    test_origin_of()
+    test_config_origin()
+    test_origin_restriction()
+
     config = make_config()
     assert (
         AgentConfig.__dataclass_fields__["local_port"].default == 8737

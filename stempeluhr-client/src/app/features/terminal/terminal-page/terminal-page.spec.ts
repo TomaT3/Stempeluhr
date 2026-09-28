@@ -451,12 +451,36 @@ describe('TerminalPage', () => {
       expect(options[0].disabled).toBe(true);
       expect(fixture.nativeElement.querySelector('.action-button.stop')).toBeNull();
 
+      vi.advanceTimersByTime(400);
       options[1].click();
       fixture.detectChanges();
 
       expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx');
       expect(fixture.componentInstance.taskPickerOpen()).toBe(false);
       expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
+    });
+
+    it('ignores a second tap right after opening the picker (issue #59)', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlockWorking(fixture);
+
+      (fixture.nativeElement.querySelector('.action-button.switch') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      const options = [...fixture.nativeElement.querySelectorAll('.task-button')] as HTMLButtonElement[];
+
+      // A bouncing double tap lands on the option now under the finger.
+      vi.advanceTimersByTime(150);
+      options[1].click();
+      fixture.detectChanges();
+
+      expect(clockImpl).not.toHaveBeenCalled();
+      expect(enqueueKiosk).not.toHaveBeenCalled();
+      expect(fixture.componentInstance.taskPickerOpen()).toBe(true);
+
+      vi.advanceTimersByTime(250);
+      options[1].click();
+
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx');
     });
 
     it('names the main task as configured and says since when the section runs', () => {
@@ -640,6 +664,32 @@ describe('TerminalPage', () => {
       expect(startOptions(fixture)).toEqual([]);
       expect(fixture.nativeElement.querySelector('.action-button.start')).not.toBeNull();
       expect(fixture.nativeElement.querySelector('.action-button.stop')).not.toBeNull();
+    });
+
+    it('ignores a second tap right after Einstempeln opened the choice (issue #59)', () => {
+      window.localStorage.setItem(
+        'stempeluhr.employee-card-cache.v1',
+        JSON.stringify({ '04ABCD': { ...session.employee, tasks } }),
+      );
+      failPolls = true;
+      localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+      const fixture = TestBed.createComponent(TerminalPage);
+      vi.advanceTimersByTime(1_000);
+      fixture.detectChanges();
+
+      (fixture.nativeElement.querySelector('.action-button.start') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      // The main task now lies under the finger.
+      startOptions(fixture)[0].click();
+      fixture.detectChanges();
+
+      expect(enqueueKiosk).not.toHaveBeenCalled();
+      expect(startOptions(fixture).length).toBe(2);
+
+      vi.advanceTimersByTime(400);
+      startOptions(fixture)[0].click();
+
+      expect(enqueueKiosk).toHaveBeenCalledWith(expect.objectContaining({ action: 'start', taskId: null }));
     });
 
     describe('with a cached card while online', () => {

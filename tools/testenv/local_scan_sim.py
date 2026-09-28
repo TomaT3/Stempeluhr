@@ -70,7 +70,9 @@ def main() -> int:
     import stempeluhr_nfc_agent as agent  # noqa: E402
 
     config = agent.AgentConfig.load(config_path)
-    scan_server = agent.LocalScanServer(port=config.local_port)
+    scan_server = agent.LocalScanServer(
+        port=config.local_port, allowed_origin=config.allowed_origin
+    )
     scan_server.start_background()
 
     # Report the actually bound port so the test driver can curl it.

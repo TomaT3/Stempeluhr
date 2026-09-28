@@ -18,14 +18,8 @@ builder.Services.AddSingleton<IOfflineEventIdStore>(sp => new FileOfflineEventId
 // flushed by the background service below.
 builder.Services.AddSingleton<IOfflineClockService, OfflineClockService>();
 builder.Services.AddHostedService<OfflineOutboxBackgroundService>();
-// Throttles the unauthenticated kiosk sync endpoint (per client IP, fixed
-// window; real per-client IPs require Stempeluhr:KnownProxies - see above).
-builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 20));
-// Separate limiter for the unauthenticated kiosk identify endpoint. More
-// generous than the sync limiter: a shift change can scan many cards in a
-// minute, but 60/min still caps brute-forcing card ids (4-byte UIDs) and
-// protects Kimai from a request flood (each identify hits GetStatusAsync).
-builder.Services.AddSingleton(_ => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 60));
+// Separate throttles for the unauthenticated kiosk sync and identify endpoints.
+builder.Services.AddKioskRateLimiters();
 builder.Services.AddScoped<IClockService, ClockService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 // Telegram-Notifier: Singleton + named HttpClient. Die Notify-Task läuft

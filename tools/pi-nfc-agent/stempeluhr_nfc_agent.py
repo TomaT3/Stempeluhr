@@ -17,6 +17,7 @@ import logging
 import sys
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,26 @@ def read_version(path: Path = VERSION_FILE) -> str:
 AGENT_VERSION = read_version()
 
 
+def origin_of(url: str) -> str:
+    """Browser origin of a URL (``scheme://host[:port]``, default ports omitted).
+
+    Written the way browsers send the ``Origin`` header, so the two compare
+    as plain strings.
+    """
+    parts = urllib.parse.urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is None or port == {"http": 80, "https": 443}.get(scheme):
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     api_base_url: str
@@ -58,6 +79,14 @@ class AgentConfig:
     # How long the kiosk UI may take to ack a published scan before the scan
     # is dropped.
     selection_timeout_seconds: float = 10.0
+    # Origin of the kiosk page, the only one allowed to read and ack scans.
+    # Optional: install.sh opens the kiosk at api_base_url, so that is the
+    # default. Only a kiosk loaded from elsewhere needs the key.
+    kiosk_origin: str | None = None
+
+    @property
+    def allowed_origin(self) -> str:
+        return origin_of(self.kiosk_origin or self.api_base_url)
 
     @staticmethod
     def load(path: Path) -> "AgentConfig":
@@ -82,6 +111,7 @@ class AgentConfig:
             selection_timeout_seconds=float(
                 raw.get("selection_timeout_seconds") or 10
             ),
+            kiosk_origin=raw.get("kiosk_origin") or None,
         )
 
 
@@ -98,11 +128,16 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming convention
         scan_server: LocalScanServer = self.server.scan_server  # type: ignore[attr-defined]
         if self.path == "/health":
+            # Open to everyone: the updater calls it without an Origin. A
+            # foreign page gets no CORS header and cannot read it anyway.
             self._send_json(200, {"ok": True, "version": AGENT_VERSION})
             return
 
         if self.path != "/scan/latest":
             self._send_json(404, {"error": "not found"})
+            return
+
+        if self._reject_foreign_origin():
             return
 
         scan = scan_server.latest_scan()
@@ -121,8 +156,17 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming convention
         scan_server: LocalScanServer = self.server.scan_server  # type: ignore[attr-defined]
+        # Read the (ignored) body first: closing the socket with unread data
+        # can reset the connection before the client sees the answer.
+        length = int(self.headers.get("Content-Length") or 0)
+        if 0 < length <= 65536:
+            self.rfile.read(length)
+
         if self.path != "/scan/ack":
             self._send_json(404, {"error": "not found"})
+            return
+
+        if self._reject_foreign_origin():
             return
 
         if scan_server.ack_latest():
@@ -134,8 +178,10 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         # CORS preflight: the kiosk UI runs on a different origin (the
         # backend host) than this loopback server, so the browser blocks
         # both the GET and the POST without these headers.
+        if self._reject_foreign_origin():
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_allow_origin()
         self.send_header("Access-Control-Allow-Methods", "GET, POST")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         # Chrome's Private Network Access: a request from a PUBLIC site
@@ -145,11 +191,31 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
 
-    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
+    def _reject_foreign_origin(self) -> bool:
+        """Answers 403 to a browser request from any page but the kiosk.
+
+        Otherwise every site open in the kiosk browser could read the last
+        card UID and ack it away. Requests without an Origin (curl, the
+        updater) are not from a web page and stay allowed.
+        """
+        scan_server: LocalScanServer = self.server.scan_server  # type: ignore[attr-defined]
+        origin = self.headers.get("Origin")
+        if scan_server.allows_origin(origin):
+            return False
+        scan_server.warn_foreign_origin(origin)
+        self._send_json(403, {"error": "origin not allowed"}, allow_origin=False)
+        return True
+
+    def _send_allow_origin(self) -> None:
+        scan_server: LocalScanServer = self.server.scan_server  # type: ignore[attr-defined]
+        self.send_header("Access-Control-Allow-Origin", scan_server.allowed_origin or "*")
+
+    def _send_json(self, status: int, payload: dict[str, Any], allow_origin: bool = True) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        if allow_origin:
+            self._send_allow_origin()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -164,12 +230,19 @@ class LocalScanServer:
     The Angular UI polls ``GET /scan/latest`` and confirms handling via
     ``POST /scan/ack``. ``GET /health`` reports the agent version for the
     updater. Binds only on 127.0.0.1 so the endpoint is never reachable from
-    the network.
+    the network. With ``allowed_origin`` only that web page may read and ack
+    scans; ``None`` allows every origin (tests and tools only).
     """
 
-    def __init__(self, port: int = DEFAULT_LOCAL_SCAN_PORT) -> None:
+    def __init__(
+        self, port: int = DEFAULT_LOCAL_SCAN_PORT, allowed_origin: str | None = None
+    ) -> None:
         self._scan: LastScan | None = None
         self._lock = threading.Lock()
+        self.allowed_origin = origin_of(allowed_origin) if allowed_origin else None
+        # Origins already warned about: a foreign page polls every second and
+        # would flood the journal otherwise.
+        self._warned_origins: set[str] = set()
         outer = self
 
         class _Server(http.server.ThreadingHTTPServer):
@@ -182,6 +255,24 @@ class LocalScanServer:
     def url(self) -> str:
         """Base URL, resolving port 0 to the actually bound port."""
         return f"http://127.0.0.1:{self._httpd.server_address[1]}"
+
+    def allows_origin(self, origin: str | None) -> bool:
+        if self.allowed_origin is None or origin is None:
+            return True
+        return origin_of(origin) == self.allowed_origin
+
+    def warn_foreign_origin(self, origin: str | None) -> None:
+        key = origin or ""
+        with self._lock:
+            if key in self._warned_origins or len(self._warned_origins) >= 20:
+                return
+            self._warned_origins.add(key)
+        LOGGER.warning(
+            "Local scan server: rejected request from origin %r (allowed: %s). "
+            "If this is the kiosk, set kiosk_origin in config.json.",
+            origin,
+            self.allowed_origin,
+        )
 
     def publish_scan(self, card_id: str, scanned_at_epoch: float) -> None:
         """Records a new scan, replacing any previous one."""
@@ -264,14 +355,18 @@ def main() -> int:
     try:
         # The bind() in the constructor raises OSError when the port is
         # already taken - fail with a clear log line instead of a traceback.
-        scan_server = LocalScanServer(port=config.local_port)
+        scan_server = LocalScanServer(
+            port=config.local_port, allowed_origin=config.allowed_origin
+        )
         scan_thread = scan_server.start_background()
     except OSError as error:
         LOGGER.error(
             "Cannot start local scan server on port %d: %s", config.local_port, error
         )
         return 1
-    LOGGER.info("Local scan server listening on %s", scan_server.url)
+    LOGGER.info(
+        "Local scan server listening on %s for %s", scan_server.url, scan_server.allowed_origin
+    )
 
     try:
         run(config, scan_server)

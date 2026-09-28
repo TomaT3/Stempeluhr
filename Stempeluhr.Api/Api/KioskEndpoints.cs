@@ -52,7 +52,7 @@ public static class KioskEndpoints
             KioskIdentifyRequest request,
             IClockService clockService,
             INfcClockEventStore eventStore,
-            RequestRateLimiter kioskIdentifyRateLimiter,
+            [FromKeyedServices(KioskRateLimiters.IdentifyKey)] RequestRateLimiter kioskIdentifyRateLimiter,
             CancellationToken cancellationToken) =>
         {
             // The endpoint is unauthenticated (the kiosk has no token) and
@@ -85,7 +85,7 @@ public static class KioskEndpoints
             HttpRequest httpRequest,
             OfflineKioskSyncRequest request,
             IOfflineClockService offlineClockService,
-            RequestRateLimiter kioskSyncRateLimiter,
+            [FromKeyedServices(KioskRateLimiters.SyncKey)] RequestRateLimiter kioskSyncRateLimiter,
             ILogger<Program> logger,
             CancellationToken cancellationToken) =>
         {

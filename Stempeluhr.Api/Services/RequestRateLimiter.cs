@@ -74,3 +74,28 @@ public sealed class RequestRateLimiter(TimeSpan window, int maxRequests)
         }
     }
 }
+
+/// <summary>
+/// The kiosk endpoints' limiters. Both are the same type, so they are keyed
+/// services: a plain singleton registered twice resolves to the LAST
+/// registration for every consumer (issue #53: sync then ran on the identify
+/// budget, and both shared one instance).
+/// </summary>
+public static class KioskRateLimiters
+{
+    public const string SyncKey = "kiosk-sync";
+    public const string IdentifyKey = "kiosk-identify";
+
+    public static IServiceCollection AddKioskRateLimiters(this IServiceCollection services)
+    {
+        // Throttles the unauthenticated kiosk sync endpoint (per client IP, fixed
+        // window; real per-client IPs require Stempeluhr:KnownProxies - see Program.cs).
+        services.AddKeyedSingleton(SyncKey, (_, _) => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 20));
+        // Separate limiter for the unauthenticated kiosk identify endpoint. More
+        // generous than the sync limiter: a shift change can scan many cards in a
+        // minute, but 60/min still caps brute-forcing card ids (4-byte UIDs) and
+        // protects Kimai from a request flood (each identify hits GetStatusAsync).
+        services.AddKeyedSingleton(IdentifyKey, (_, _) => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 60));
+        return services;
+    }
+}
