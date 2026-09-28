@@ -3,6 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 
 import { OfflineKioskClockEvent } from '../models/offline.models';
+import { lastKnownStatus, rememberProjectedStatus } from './offline-cache';
 import { OfflineQueueService } from './offline-queue';
 
 describe('OfflineQueueService sync batching', () => {
@@ -47,6 +48,30 @@ describe('OfflineQueueService sync batching', () => {
     httpMock.verify();
     vi.useRealTimers();
     window.localStorage.clear();
+  });
+
+  it('confirms a projection only after the last queued action has a server state', async () => {
+    const first = kioskEvent('first');
+    const later = { ...kioskEvent('later'), action: 'stop' as const, performedAt: '2026-08-24T09:00:00Z' };
+    rememberProjectedStatus('max', { state: 'clockedOut', stateText: 'Ausgestempelt',
+      isRunning: false, activeTimesheetId: null, startedAt: null, durationSeconds: 0 });
+    service.enqueueKiosk(first);
+    service.enqueueKiosk(later);
+
+    service.syncNow().subscribe();
+    httpMock.expectOne(kioskEndpoint).flush({ accepted: 1, duplicates: 0, buffered: 1,
+      results: [
+        { eventId: 'first', status: 'applied', state: 'working' },
+        { eventId: 'later', status: 'buffered' },
+      ] });
+    await drainMicrotasks();
+    expect(lastKnownStatus('max')?.origin).toBe('projected');
+
+    service.syncNow().subscribe();
+    httpMock.expectOne(kioskEndpoint).flush({ accepted: 1, duplicates: 0, buffered: 0,
+      results: [{ eventId: 'later', status: 'applied', state: 'clockedOut' }] });
+    await drainMicrotasks();
+    expect(lastKnownStatus('max')?.origin).toBe('observed');
   });
 
   it('splits a queue larger than the server batch limit into consecutive requests', async () => {
@@ -266,7 +291,7 @@ describe('OfflineQueueService sync batching', () => {
       await drainMicrotasks();
       expect(service.rejected()).toHaveLength(1);
 
-      service.acknowledgeRejected();
+      service.acknowledgeRejected(['k1']);
 
       expect(service.rejected()).toHaveLength(0);
       // The record survives: the time may still be missing in Kimai, and this
@@ -281,7 +306,7 @@ describe('OfflineQueueService sync batching', () => {
       service.enqueueKiosk(first);
       flushRejected([first]);
       await drainMicrotasks();
-      service.acknowledgeRejected();
+      service.acknowledgeRejected(['k1']);
       expect(service.rejected()).toHaveLength(0);
 
       const second = kioskEvent('k2');
@@ -292,6 +317,22 @@ describe('OfflineQueueService sync batching', () => {
       expect(service.rejected()).toHaveLength(1);
       expect(service.rejected()[0].eventId).toBe('k2');
       expect(service.rejected()[0].acknowledgedAt).toBeUndefined();
+    });
+
+    it('does not acknowledge a refusal arriving after the displayed IDs were captured', async () => {
+      const first = kioskEvent('k1');
+      service.enqueueKiosk(first);
+      flushRejected([first]);
+      await drainMicrotasks();
+      const displayedIds = service.rejected().map(entry => entry.eventId);
+
+      const second = kioskEvent('k2');
+      service.enqueueKiosk(second);
+      flushRejected([second]);
+      await drainMicrotasks();
+      service.acknowledgeRejected(displayedIds);
+
+      expect(service.rejected().map(entry => entry.eventId)).toEqual(['k2']);
     });
 
     it('reads back records left over from an earlier kiosk session', () => {

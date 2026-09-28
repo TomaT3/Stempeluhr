@@ -1,5 +1,6 @@
 import { ClockStatus, Employee } from '../models/kiosk.models';
 import {
+  confirmSyncedStatus,
   forgetEmployeePin,
   formatShortTime,
   lastKnownStatus,
@@ -208,6 +209,18 @@ describe('offline-cache', () => {
 
       expect(lastKnownStatus('max')?.origin).toBe('observed');
       expect(toOfflineStatus(lastKnownStatus('max')!).stateText).toContain('Nicht eingestempelt');
+    });
+
+    it('uses the server state even after a no-op and drops unconfirmed details', () => {
+      rememberProjectedStatus('max', { ...idleStatus, state: 'working', isRunning: true,
+        stateText: 'Kunde X', activeTimesheetId: 123, startedAt: '2026-09-18T08:00:00Z' });
+      confirmSyncedStatus('max', 'invalid');
+      expect(lastKnownStatus('max')?.origin).toBe('projected');
+
+      confirmSyncedStatus('max', 'paused');
+      expect(lastKnownStatus('max')).toMatchObject({ origin: 'observed', status: {
+        state: 'paused', stateText: 'Pause', activeTimesheetId: null, startedAt: null,
+      } });
     });
 
     it('knows nothing about an employee it never saw', () => {

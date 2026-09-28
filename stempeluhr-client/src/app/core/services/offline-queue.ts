@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { inject, Injectable, computed, signal } from '@angular/core';
 import { defer, finalize, firstValueFrom, Observable, of, Subject, timeout } from 'rxjs';
 import { catchError } from 'rxjs/operators';
+import { confirmSyncedStatus } from './offline-cache';
 
 import {
   OfflineKioskClockEvent,
@@ -198,6 +199,13 @@ export class OfflineQueueService {
 
         if (detail.status === 'rejected') {
           this.recordRejected(detail, chunkById.get(detail.eventId));
+        } else if (detail.status === 'applied' && detail.state) {
+          const event = chunkById.get(detail.eventId);
+          // An earlier result must not confirm a later local projection.
+          if (event && this.queued().filter(entry => entry.event.employeeId === event.employeeId)
+              .at(-1)?.event.eventId === event.eventId) {
+            confirmSyncedStatus(event.employeeId, detail.state);
+          }
         }
       }
 
@@ -273,10 +281,11 @@ export class OfflineQueueService {
    * The records stay in storage - only their notice disappears: pressing the
    * button by mistake must not destroy the last trace of a missing booking.
    */
-  acknowledgeRejected(): void {
+  acknowledgeRejected(ids: readonly string[]): void {
     const acknowledgedAt = new Date().toISOString();
+    const visibleIds = new Set(ids);
     this.rejectedStamps.update(entries =>
-      entries.map(entry => (entry.acknowledgedAt ? entry : { ...entry, acknowledgedAt })),
+      entries.map(entry => (entry.acknowledgedAt || !visibleIds.has(entry.eventId) ? entry : { ...entry, acknowledgedAt })),
     );
     this.writeRejectedStorage(this.rejectedStamps());
   }

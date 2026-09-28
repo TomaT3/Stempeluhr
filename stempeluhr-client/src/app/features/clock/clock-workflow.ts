@@ -118,6 +118,7 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** Neuester abgelehnter Stempel - das ist der, den der Hinweis zeigt. */
   readonly latestRejectedStamp = computed(() => this.rejectedStamps().at(-1) ?? null);
+  readonly rejectedStampIds = computed(() => JSON.stringify(this.rejectedStamps().map(stamp => stamp.eventId)));
 
   /** Stundenübersicht des angemeldeten Mitarbeiters (Heute/Woche/Monat, Netto). */
   readonly hoursOverview = signal<HoursOverview | null>(null);
@@ -594,8 +595,10 @@ export abstract class ClockWorkflow implements OnDestroy {
    * Marks the refused stamps as dealt with. Whoever repaired the missing time
    * in Kimai presses this - without it the notice would nag forever.
    */
-  dismissRejectedStamps(): void {
-    this.offlineQueue.acknowledgeRejected();
+  dismissRejectedStamps(event: Event): void {
+    const button = event.currentTarget as HTMLButtonElement;
+    const ids = JSON.parse(button.dataset['rejectedIds'] ?? '[]') as string[];
+    this.offlineQueue.acknowledgeRejected(ids);
   }
 
   /** Action wording for the notice about refused stamps. */

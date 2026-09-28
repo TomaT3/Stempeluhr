@@ -7,6 +7,9 @@ using Stempeluhr.Api.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<IRuntimeSettingsStore, RuntimeSettingsStore>();
+builder.Services.AddSingleton(sp => new RejectedOfflineEventStore(
+    Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "rejected-offline-events.json"),
+    sp.GetRequiredService<ILogger<RejectedOfflineEventStore>>()));
 builder.Services.AddSingleton<IEmployeeService, EmployeeService>();
 builder.Services.AddSingleton<IAdminAuthorizationService, AdminAuthorizationService>();
 builder.Services.AddSingleton<INfcClockEventStore, NfcClockEventStore>();

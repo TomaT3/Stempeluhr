@@ -38,7 +38,7 @@
     @if (rejectedStamps().length > 0) {
       <p class="message" role="alert">
         {{ rejectedStamps().length }} Offline-Stempel nicht nachgetragen – bitte Admin informieren.
-        <button type="button" (click)="dismissRejectedStamps()">Alle erledigt</button>
+        <button type="button" [attr.data-rejected-ids]="rejectedStampIds()" (click)="dismissRejectedStamps($event)">Alle erledigt</button>
       </p>
     }
   </section>

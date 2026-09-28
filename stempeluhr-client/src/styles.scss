@@ -34,6 +34,10 @@ body {
   --color-primary-strong: #173fa5;
   --color-success: #16865c;
   --color-danger: #c9432f;
+  --gradient-start: linear-gradient(180deg, #199968, var(--color-success));
+  --gradient-pause: linear-gradient(180deg, #d09221, #b7791f);
+  --gradient-stop: linear-gradient(180deg, #d8523d, var(--color-danger));
+  --gradient-switch: linear-gradient(180deg, #3d6fd8, var(--color-primary));
   /* Fehlermeldungen am Kiosk (Hinweiszeile, abgelehnter Nachtrag) */
   --color-danger-text: #8a3a2f;
   --color-danger-border: #d8b4a6;
@@ -74,6 +78,7 @@ body {
   --color-border-strong: #4e5e78;
   --color-primary: #3a6ee2;
   --color-primary-strong: #6f9bf5;
+  --gradient-switch: linear-gradient(180deg, #5b8afa, var(--color-primary));
   --color-danger-text: #f0a08f;
   --color-danger-border: #6b3a2c;
   --color-danger-surface: #33201a;
@@ -103,6 +108,10 @@ input {
 
 button {
   line-height: 1.1;
+}
+
+.task-button:disabled:not(.start-task) {
+  cursor: default;
 }
 
 button,

@@ -36,6 +36,7 @@ public sealed class OfflineClockService(
     IKimaiClient kimai,
     IOfflineEventIdStore eventIdStore,
     KioskEventCoordinator kioskEvents,
+    RejectedOfflineEventStore rejectedEvents,
     ILogger<OfflineClockService> logger) : IOfflineClockService
 {
     private const string BufferedStatus = "buffered";
@@ -64,12 +65,27 @@ public sealed class OfflineClockService(
         var buffered = 0;
         var results = new List<OfflineSyncEventResultDto>();
 
+        void RejectRegistered(OfflineKioskClockEventDto entry, string message)
+        {
+            results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", message));
+            // Journal each refusal before another event can abort the batch.
+            // Without a journal entry, a lost response must remain retryable.
+            if (!TryRecordRejected(entry, message))
+            {
+                eventIdStore.Remove(entry.EventId);
+            }
+        }
+
         // Malformed entries must be reported back explicitly so the sender can
         // drop them from its queue instead of silently retrying them forever.
         foreach (var invalid in events.Where(e => string.IsNullOrWhiteSpace(e.EventId) || string.IsNullOrWhiteSpace(e.EmployeeId)))
         {
-            results.Add(new OfflineSyncEventResultDto(invalid.EventId ?? string.Empty, "rejected",
-                "EventId und EmployeeId sind erforderlich."));
+            const string message = "EventId und EmployeeId sind erforderlich.";
+            results.Add(new OfflineSyncEventResultDto(invalid.EventId ?? string.Empty, "rejected", message));
+            if (!string.IsNullOrWhiteSpace(invalid.EventId))
+            {
+                TryRecordRejected(invalid, message);
+            }
         }
 
         var orderedKioskEvents = events
@@ -114,8 +130,21 @@ public sealed class OfflineClockService(
 
                 if (!eventIdStore.TryRegister(entry.EventId))
                 {
-                    duplicates++;
-                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "duplicate", null));
+                    // A read error must propagate as 5xx here. Returning
+                    // "duplicate" without checking the journal could silently
+                    // discard an outbox event that was actually rejected.
+                    var refused = rejectedEvents.Find(entry.EventId);
+                    if (refused is not null)
+                    {
+                        // An outbox flush can reject after the original sync
+                        // answered "buffered". Tell the kiosk on its retry.
+                        results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", refused.Message));
+                    }
+                    else
+                    {
+                        duplicates++;
+                        results.Add(new OfflineSyncEventResultDto(entry.EventId, "duplicate", null));
+                    }
                     continue;
                 }
 
@@ -153,7 +182,7 @@ public sealed class OfflineClockService(
                         ex,
                         "Offline kiosk event {EventId} rejected ({Message}) - skipping the remaining {Skipped} event(s) of this batch",
                         entry.EventId, ex.Message, orderedKioskEvents.Count - i - 1);
-                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", ex.Message));
+                    RejectRegistered(entry, ex.Message);
                     var skipped = orderedKioskEvents.Count - i - 1;
                     const string skippedMessage = "Uebersprungen - die Anmeldedaten dieses Batches wurden abgelehnt.";
                     for (var s = i + 1; s < orderedKioskEvents.Count; s++)
@@ -167,7 +196,7 @@ public sealed class OfflineClockService(
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Offline kiosk event {EventId} permanently rejected", entry.EventId);
-                    results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", ex.Message));
+                    RejectRegistered(entry, ex.Message);
                 }
             }
 
@@ -179,6 +208,29 @@ public sealed class OfflineClockService(
         }
 
         return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
+    }
+
+    /// <summary>
+    /// The journal is secondary to the sync response. If its disk is full or
+    /// read-only, return the refusal anyway so the kiosk retains its local
+    /// record instead of blocking the whole batch behind a permanent 5xx.
+    /// </summary>
+    private bool TryRecordRejected(OfflineKioskClockEventDto entry, string message)
+    {
+        try
+        {
+            var employeeName = settingsStore.Load().Employees
+                .FirstOrDefault(employee => employee.Id == entry.EmployeeId)?.DisplayName ?? string.Empty;
+            rejectedEvents.Record(new RejectedOfflineEvent(
+                entry.EventId, entry.EmployeeId, employeeName, entry.Action,
+                entry.PerformedAt, DateTimeOffset.UtcNow, message));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Could not persist rejected offline event {EventId}", entry.EventId);
+            return false;
+        }
     }
 
     /// <summary>
@@ -920,8 +972,15 @@ public sealed class OfflineClockService(
             }
             catch (Exception ex)
             {
-                // Permanent failure: log and drop so one bad event cannot block the outbox.
+                // Permanent failure: keep a journal record so a kiosk that got
+                // "buffered" can learn about the refusal on its next retry.
+                // If persistence fails, free the ID so that retry can receive
+                // a fresh verdict instead of a silent "duplicate".
                 logger.LogError(ex, "Outbox: dropping kiosk event {EventId} after permanent error", kioskEntry.EventId);
+                if (!TryRecordRejected(kioskEntry, ex.Message))
+                {
+                    eventIdStore.Remove(kioskEntry.EventId);
+                }
                 _kioskOutboxIds.Remove(kioskEntry.EventId);
                 drained++;
             }

@@ -266,6 +266,26 @@ export function rememberProjectedStatus(employeeId: string, status: ClockStatus)
   rememberStatus(employeeId, status, 'projected');
 }
 
+/** Promote only the state the replay response actually confirmed. */
+export function confirmSyncedStatus(employeeId: string, state: string): void {
+  if (state !== 'clockedOut' && state !== 'working' && state !== 'paused') {
+    return;
+  }
+  const entry = lastKnownStatus(employeeId);
+  if (!entry || entry.origin !== 'projected') {
+    return;
+  }
+  const stateText = state === 'clockedOut' ? 'Ausgestempelt' : state === 'paused' ? 'Pause' : 'Eingestempelt';
+  rememberObservedStatus(employeeId, {
+    isRunning: state !== 'clockedOut',
+    activeTimesheetId: null,
+    startedAt: null,
+    durationSeconds: 0,
+    state,
+    stateText,
+  });
+}
+
 function rememberStatus(employeeId: string, status: ClockStatus, origin: OfflineStatusOrigin): void {
   if (!employeeId) {
     return;

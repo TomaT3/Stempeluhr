@@ -7,6 +7,25 @@ public static class AdminEndpoints
 {
     public static IEndpointRouteBuilder MapAdminEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/admin/rejected-offline-events", (
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            RejectedOfflineEventStore rejectedEvents) =>
+            authorization.IsAdmin(request) ? Results.Ok(rejectedEvents.List()) : Results.Unauthorized());
+
+        app.MapPut("/api/admin/rejected-offline-events/{eventId}/resolved", (
+            string eventId,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            RejectedOfflineEventStore rejectedEvents) =>
+        {
+            if (!authorization.IsAdmin(request))
+            {
+                return Results.Unauthorized();
+            }
+            return rejectedEvents.Resolve(eventId) ? Results.Ok() : Results.NotFound();
+        });
+
         app.MapGet("/api/admin/settings", (
             HttpRequest request,
             IRuntimeSettingsStore settingsStore,

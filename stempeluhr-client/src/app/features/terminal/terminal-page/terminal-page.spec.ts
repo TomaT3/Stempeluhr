@@ -320,7 +320,7 @@ describe('TerminalPage', () => {
 
     (fixture.nativeElement.querySelector('.rejected-dismiss') as HTMLButtonElement).click();
 
-    expect(acknowledgeRejected).toHaveBeenCalledTimes(1);
+    expect(acknowledgeRejected).toHaveBeenCalledExactlyOnceWith(['r1']);
   });
 
   it('names the effect of the button: it clears ALL refused stamps at once', () => {
@@ -353,6 +353,10 @@ describe('TerminalPage', () => {
     // One detail line is shown, but the click discards every entry - the label
     // has to say so, otherwise two unread cases disappear with one press.
     expect(button.textContent?.trim()).toBe('Alle erledigt');
+    rejectedStamps.update(entries => [...entries, { ...entries[0], eventId: 'r3' }]);
+    // The new signal value has not reached the rendered button yet.
+    button.click();
+    expect(acknowledgeRejected).toHaveBeenCalledExactlyOnceWith(['r1', 'r2']);
   });
 
   it('hides the refused-stamp notice while a session is open - and shows it again after back()', () => {

@@ -1,0 +1,29 @@
+.rejections {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.toolbar, .entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.toolbar { flex-wrap: wrap; }
+.toolbar label { display: flex; align-items: center; gap: 8px; }
+.entry-list { display: grid; gap: 12px; }
+.entry {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+.entry div { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.entry small { color: var(--color-muted); }
+button { cursor: pointer; }
+
+@media (max-width: 650px) {
+  .entry { align-items: start; flex-direction: column; }
+}

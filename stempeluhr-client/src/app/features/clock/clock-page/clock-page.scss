@@ -1,3 +1,7 @@
+@use '../../../../styles/start-choice' as start-choice;
+
+@include start-choice.choice(14px);
+
 :host {
   display: block;
 }
@@ -233,15 +237,15 @@ h2 {
 
 .stamp-button.start,
 .task-button.start-task {
-  background: linear-gradient(180deg, #199968, var(--color-success));
+  background: var(--gradient-start);
 }
 
 .stamp-button.pause {
-  background: linear-gradient(180deg, #d09221, #b7791f);
+  background: var(--gradient-pause);
 }
 
 .stamp-button.stop {
-  background: linear-gradient(180deg, #d8523d, var(--color-danger));
+  background: var(--gradient-stop);
 }
 
 .task-switch-button,
@@ -288,24 +292,8 @@ h2 {
   text-align: center;
 }
 
-.task-button:disabled {
-  cursor: default;
-}
-
-.start-choice-title {
-  margin: 0;
-  color: var(--color-muted);
-  font-weight: 800;
-}
-
 .task-button.start-task {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 14px;
   min-height: 72px;
-  border-color: transparent;
-  color: #fff;
 }
 
 /* Kleines Dreieck: nur die Kanten verkleinern, sonst geht die Form verloren. */
