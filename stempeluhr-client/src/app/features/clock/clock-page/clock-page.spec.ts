@@ -272,6 +272,35 @@ describe('ClockPage', () => {
     fixture.destroy();
   });
 
+  it('reports a switch Kimai refused like an error and keeps the message longer (issue #56)', () => {
+    vi.useFakeTimers();
+    const fixture = TestBed.createComponent(ClockPage);
+    const component = fixture.componentInstance;
+    unlock(fixture);
+
+    component.switchTask('kx');
+    clockResult.next({
+      ...status,
+      isRunning: true,
+      activeTimesheetId: 8,
+      state: 'working',
+      stateText: 'Eingestempelt',
+      warning: 'Kunde X nicht moeglich - weiter auf Standard-Taetigkeit',
+    });
+
+    const audio = TestBed.inject(AudioFeedback) as unknown as { playBeeps: ReturnType<typeof vi.fn> };
+    expect(audio.playBeeps).toHaveBeenLastCalledWith(2);
+    expect(component.message()).toBe('Kunde X nicht moeglich - weiter auf Standard-Taetigkeit');
+
+    vi.advanceTimersByTime(2200);
+    expect(component.isUnlocked()).toBe(true);
+
+    vi.advanceTimersByTime(3800);
+    expect(component.isUnlocked()).toBe(false);
+    expect(component.message()).toBe('');
+    fixture.destroy();
+  });
+
   it('keeps the hours card hidden before login and clears it on back()', () => {
     const fixture = TestBed.createComponent(ClockPage);
     const component = fixture.componentInstance;

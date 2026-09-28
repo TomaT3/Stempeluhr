@@ -32,6 +32,11 @@ export interface ClockStatus {
    * und Cache-Einträgen - dann gilt `!activeTaskId` (siehe isOnDefaultTask).
    */
   activeIsDefaultTask?: boolean | null;
+  /**
+   * Die Aktion ist nicht wie gewählt gelungen: was stattdessen gebucht ist
+   * (z. B. ein von Kimai abgelehnter Wechsel). Ersetzt `stateText` als Meldung.
+   */
+  warning?: string | null;
 }
 
 /** Läuft die Arbeit auf der Standard-Tätigkeit? Ältere Status ohne Flag: kein activeTaskId. */

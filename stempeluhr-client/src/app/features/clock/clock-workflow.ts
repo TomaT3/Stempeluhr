@@ -45,6 +45,10 @@ const HEALTH_TIMEOUT_MS = 10_000;
  * buchende Option (Issue #59).
  */
 const CHOICE_TAP_GUARD_MS = 400;
+/** Zurück zum Ruhebildschirm nach einer abgeschlossenen Aktion. */
+const RESET_MS = 2200;
+/** Dasselbe, wenn die Antwort eine Warnung trägt (z. B. abgelehnter Wechsel, Issue #56). */
+const WARNING_RESET_MS = 6000;
 
 /** A stamp as captured at button press (see sendClockAction). */
 interface PendingStamp {
@@ -960,11 +964,13 @@ export abstract class ClockWorkflow implements OnDestroy {
         if (stamp.employeeId) {
           rememberObservedStatus(stamp.employeeId, status);
         }
-        this.message.set(status.stateText);
+        this.message.set(status.warning || status.stateText);
         this.isBusy.set(false);
-        this.audioFeedback.playBeeps(1);
+        // Anders gebucht als gewählt: wie ein Fehler piepen und die Meldung
+        // länger stehen lassen, sonst geht sie im Weggehen unter.
+        this.audioFeedback.playBeeps(status.warning ? 2 : 1);
         this.loadHoursOverview(stamp.pin);
-        this.scheduleReset();
+        this.scheduleReset(status.warning ? WARNING_RESET_MS : RESET_MS);
       },
       error: (err) => {
         const status = err?.status ?? 0;
@@ -1043,12 +1049,12 @@ export abstract class ClockWorkflow implements OnDestroy {
     return `${Date.now().toString(16)}${Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')}`;
   }
 
-  private scheduleReset(): void {
+  private scheduleReset(delayMs = RESET_MS): void {
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
     }
 
-    this.resetTimer = window.setTimeout(() => this.back(), 2200);
+    this.resetTimer = window.setTimeout(() => this.back(), delayMs);
   }
 
   private readTerminalId(): string | null {

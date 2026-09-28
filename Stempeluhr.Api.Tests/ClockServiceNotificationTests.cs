@@ -335,6 +335,97 @@ public sealed class ClockServiceNotificationTests
         Assert.Equal(0, kimai.StopCalls);
     }
 
+    // --- Switch rejected by Kimai after the stop (issue #56) -------------
+
+    private static KimaiApiException KimaiError(int statusCode) =>
+        new((System.Net.HttpStatusCode)statusCode, "simulated");
+
+    [Fact]
+    public async Task Switch_TargetRejectedByKimai_ContinuesOnThePreviousTask()
+    {
+        // Kimai refuses the target (no team access, archived project, ...)
+        // after the stop went through: the employee must not end up clocked
+        // out, and the kiosk has to say that the switch did not happen.
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
+        kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
+        kimai.StartFailures.Enqueue(KimaiError(400));
+
+        var response = await service.ClockAsync(SwitchRequest("kx"));
+
+        Assert.Equal(ClockActionResult.Success, response.Result);
+        Assert.Equal("Kunde X nicht moeglich - weiter auf Standard-Taetigkeit", response.Status!.Warning);
+        Assert.Equal("Eingestempelt", response.Status.StateText);
+        Assert.Equal(1, kimai.StopCalls);
+        var continued = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((1, 2), (continued.ProjectId, continued.ActivityId));
+        Assert.Empty(notifier.Calls);
+    }
+
+    [Fact]
+    public async Task Switch_BackToDefaultRejected_ContinuesOnTheTaskThatRan()
+    {
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(WorkingOnTask);
+        kimai.EnqueueStatus(WorkingOnTask);
+        kimai.StartFailures.Enqueue(KimaiError(403));
+
+        var response = await service.ClockAsync(SwitchRequest(null));
+
+        Assert.Equal("Standard-Taetigkeit nicht moeglich - weiter auf Kunde X", response.Status!.Warning);
+        var continued = Assert.Single(kimai.StartedTargets);
+        Assert.Equal((20, 21), (continued.ProjectId, continued.ActivityId));
+        Assert.Empty(notifier.Calls);
+    }
+
+    [Theory]
+    [InlineData(400)]
+    [InlineData(503)]
+    public async Task Switch_TargetAndContinuationFail_KeepsTheOriginalError(int continuationStatus)
+    {
+        var (service, kimai, notifier) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
+        kimai.StartFailures.Enqueue(KimaiError(400));
+        kimai.StartFailures.Enqueue(KimaiError(continuationStatus));
+
+        var error = await Assert.ThrowsAsync<KimaiApiException>(() => service.ClockAsync(SwitchRequest("kx")));
+
+        // A 4xx: the kiosk shows "Kimai konnte nicht speichern" instead of
+        // queueing a switch that Kimai will never accept.
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, error.StatusCode);
+        Assert.Equal(2, kimai.StartAttempts);
+        Assert.Empty(notifier.Calls);
+    }
+
+    [Fact]
+    public async Task Switch_ToDefaultRejectedFromUnknownSheet_HasNothingToContinueOn()
+    {
+        // The stopped sheet matches no task: continuing would mean the default
+        // task again - the very target Kimai just refused.
+        var (service, kimai, _) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(Working);
+        kimai.StartFailures.Enqueue(KimaiError(400));
+
+        await Assert.ThrowsAsync<KimaiApiException>(() => service.ClockAsync(SwitchRequest(null)));
+
+        Assert.Equal(1, kimai.StartAttempts);
+    }
+
+    [Fact]
+    public async Task Switch_TransientStartFailure_IsNotCompensated()
+    {
+        // 5xx/network: the kiosk queues the switch, the replay decides -
+        // continuing on the old task here would pre-empt it.
+        var (service, kimai, _) = Create(SettingsWithTask());
+        kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
+        kimai.StartFailures.Enqueue(KimaiError(502));
+
+        var error = await Assert.ThrowsAsync<KimaiApiException>(() => service.ClockAsync(SwitchRequest("kx")));
+
+        Assert.Equal(System.Net.HttpStatusCode.BadGateway, error.StatusCode);
+        Assert.Equal(1, kimai.StartAttempts);
+    }
+
     [Fact]
     public async Task Start_OnTask_BooksTheTaskAndNamesIt()
     {
@@ -573,8 +664,20 @@ public sealed class ClockServiceNotificationTests
         /// <summary>How often the resume lookup reached Kimai.</summary>
         public int RecentStoppedCalls { get; private set; }
 
+        /// <summary>The next start calls fail with these exceptions, in order.</summary>
+        public Queue<Exception> StartFailures { get; } = new();
+
+        /// <summary>Every start call, failed ones included.</summary>
+        public int StartAttempts { get; private set; }
+
         public Task StartAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget t, CancellationToken ct = default)
         {
+            StartAttempts++;
+            if (StartFailures.TryDequeue(out var failure))
+            {
+                return Task.FromException(failure);
+            }
+
             StartedTargets.Add(t);
             if (t.ActivityId == s.PauseActivityId)
             {
