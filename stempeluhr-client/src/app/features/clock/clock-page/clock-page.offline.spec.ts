@@ -495,6 +495,117 @@ describe('ClockPage offline behaviour', () => {
     expect(component.message()).toBe('NFC-Karte ist keinem Mitarbeiter zugeordnet.');
   });
 
+  describe('late identify answers for an uncached card (issue #28)', () => {
+    const anna = { ...session.employee, id: 'anna', displayName: 'Anna Beispiel', initials: 'AB' };
+    let identifyCalls: Subject<NfcClockEvent>[];
+
+    function identified(cardId: string, employee: typeof session.employee): NfcClockEvent {
+      return {
+        eventId: `ev-${cardId}`,
+        occurredAt: new Date().toISOString(),
+        terminalId: 'term-1',
+        cardId,
+        employee,
+        status,
+        message: 'NFC-Karte erkannt.',
+        success: true,
+      };
+    }
+
+    function scan(cardId: string, offsetMs = 0): void {
+      localScanValue = { cardId, scannedAt: new Date(Date.now() + offsetMs).toISOString(), consumed: false };
+      vi.advanceTimersByTime(1_000);
+      localScanValue = null;
+    }
+
+    beforeEach(() => {
+      // Every identify call gets its own answer, in call order.
+      identifyCalls = [];
+      vi.mocked(TestBed.inject(KioskApi).identify).mockImplementation(() => {
+        const subject = new Subject<NfcClockEvent>();
+        identifyCalls.push(subject);
+        return subject;
+      });
+    });
+
+    it('keeps the later scan when the earlier answer arrives last', () => {
+      const component = createComponent().componentInstance;
+      scan('7788AA');
+      scan('5566BB', 1_000);
+      expect(identifyCalls.length).toBe(2);
+
+      identifyCalls[1].next(identified('5566BB', anna));
+      identifyCalls[0].next(identified('7788AA', session.employee));
+
+      expect(component.selectedEmployee()?.id).toBe('anna');
+      expect(component.message()).toContain('Anna');
+      // The late answer still belongs to its card: the cache takes it.
+      const cache = JSON.parse(window.localStorage.getItem('stempeluhr.employee-card-cache.v1') ?? '{}');
+      expect(cache['7788AA'].id).toBe('max');
+    });
+
+    it('drops the earlier answer even when it arrives before the later scan answers', () => {
+      const component = createComponent().componentInstance;
+      scan('7788AA');
+      scan('5566BB', 1_000);
+
+      identifyCalls[0].next(identified('7788AA', session.employee));
+      expect(component.isUnlocked()).toBe(false);
+
+      identifyCalls[1].next(identified('5566BB', anna));
+      expect(component.selectedEmployee()?.id).toBe('anna');
+    });
+
+    it('keeps a cached card scanned while the answer is pending', () => {
+      window.localStorage.setItem(
+        'stempeluhr.employee-card-cache.v1',
+        JSON.stringify({ '5566BB': anna }),
+      );
+      const component = createComponent().componentInstance;
+      scan('7788AA');
+      scan('5566bb', 1_000);
+      expect(component.selectedEmployee()?.id).toBe('anna');
+
+      identifyCalls[0].next(identified('7788AA', session.employee));
+
+      expect(component.selectedEmployee()?.id).toBe('anna');
+      expect(component.isUnlocked()).toBe(true);
+    });
+
+    function loginAnnaByPin(component: ClockPage): void {
+      component.pressDigit('1');
+      component.pressDigit('2');
+      component.pressDigit('3');
+      component.pressDigit('4');
+      pinLoginResult.next({ ...session, employee: anna });
+      expect(component.selectedEmployee()?.id).toBe('anna');
+    }
+
+    it('keeps a PIN login made while the answer is pending', () => {
+      const component = createComponent().componentInstance;
+      scan('7788AA');
+      loginAnnaByPin(component);
+
+      identifyCalls[0].next(identified('7788AA', session.employee));
+
+      expect(component.selectedEmployee()?.id).toBe('anna');
+      expect(component.message()).not.toContain('Max');
+    });
+
+    it('never announces an unknown card over a newer session', () => {
+      const component = createComponent().componentInstance;
+      scan('7788AA');
+      loginAnnaByPin(component);
+      playBeeps.mockClear();
+
+      identifyCalls[0].error({ status: 0 });
+
+      expect(component.message()).not.toBe('Unbekannte Karte');
+      expect(playBeeps).not.toHaveBeenCalled();
+      expect(component.selectedEmployee()?.id).toBe('anna');
+    });
+  });
+
   it('acks scans even while UNLOCKED so the agent fallback never fires on them', () => {
     // Unlock first (offline card login), then a second tap must be consumed
     // (ack) WITHOUT switching employees - otherwise every tap would block
