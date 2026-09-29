@@ -574,6 +574,68 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task InvalidAndUnknownEmployeeEvents_AreRejectedWithoutJournalEntry()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-unknown-journal-{Guid.NewGuid():N}");
+        try
+        {
+            var journal = new RejectedOfflineEventStore(Path.Combine(directory, "rejected.json"));
+            var service = new OfflineClockService(new InMemorySettingsStore(TestSettings()),
+                new InMemoryEmployeeService(), new FakeKimaiClient(), new InMemoryEventIdStore(),
+                new KioskEventCoordinator(), journal, new RecordingLogger());
+            var batch = Enumerable.Range(0, 50)
+                .Select(i => Kiosk($"invalid-{i}", "start", T08) with { EmployeeId = "" })
+                .Append(Kiosk("unknown-employee", "start", T10) with { EmployeeId = "missing" })
+                .ToArray();
+
+            var result = await service.SyncKioskAsync(batch);
+
+            Assert.All(result.Results, item => Assert.Equal("rejected", item.Status));
+            Assert.Empty(journal.List());
+            Assert.False(File.Exists(Path.Combine(directory, "rejected.json")));
+
+            // Not journaled, so the retry must get a fresh verdict, never "duplicate".
+            var retry = await service.SyncKioskAsync(batch);
+            Assert.All(retry.Results, item => Assert.Equal("rejected", item.Status));
+            Assert.Equal(0, retry.Duplicates);
+            Assert.Empty(journal.List());
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task OutboxRefusalForRemovedEmployee_IsNotJournaledAndStaysRejectedOnRetry()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-outbox-removed-{Guid.NewGuid():N}");
+        try
+        {
+            var journal = new RejectedOfflineEventStore(Path.Combine(directory, "rejected.json"));
+            var settings = TestSettings();
+            var kimai = new FakeKimaiClient { FailNextStatusCalls = 2 };
+            var service = new OfflineClockService(new InMemorySettingsStore(settings),
+                new InMemoryEmployeeService(), kimai, new InMemoryEventIdStore(),
+                new KioskEventCoordinator(), journal, new RecordingLogger());
+            var eventToReplay = Kiosk("outbox-removed", "start", T08, "") with { AuthenticatedTerminalId = "pi-1" };
+
+            Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([eventToReplay])).Results).Status);
+            settings.Employees.Clear();
+            await service.FlushOutboxAsync();
+
+            Assert.Empty(journal.List());
+            var retry = await service.SyncKioskAsync([eventToReplay]);
+            Assert.Equal("rejected", Assert.Single(retry.Results).Status);
+            Assert.Equal(0, retry.Duplicates);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task OutboxPermanentRefusal_IsJournaledAndReportedOnKioskRetry()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"stempeluhr-outbox-journal-{Guid.NewGuid():N}");
