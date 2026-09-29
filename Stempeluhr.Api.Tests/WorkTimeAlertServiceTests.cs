@@ -60,6 +60,41 @@ public sealed class WorkTimeAlertServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PauseReplayedIntoAWarnedBlock_WarnsTheNewBlockOnItsOwn()
+    {
+        // Terminal offline over noon: Kimai first shows work without a break
+        // and warns; the replay then inserts the pause.
+        var kimai = new StubKimaiClient();
+        var start = Now.AddHours(-6).AddMinutes(-5); // 09:55 local
+        kimai.Timesheets["max"] = [Running(start)];
+        var telegram = new RecordingNotifier();
+        var clock = new ManualClock(Now);
+        var alerts = new WorkTimeAlertStore(AlertPath);
+        async Task CheckAt(DateTimeOffset at)
+        {
+            clock.Now = at;
+            await CreateService(kimai, telegram, alerts, clock: clock).CheckAsync();
+        }
+
+        await CheckAt(Now);
+        Assert.Single(telegram.Messages);
+
+        var resumed = start.AddHours(4).AddMinutes(30); // 14:25 local
+        kimai.Timesheets["max"] =
+        [
+            new KimaiTimesheetEntryDto(1, start, start.AddHours(4), 4 * 3600, 5),
+            new KimaiTimesheetEntryDto(2, start.AddHours(4), resumed, 1800, 99),
+            Running(resumed),
+        ];
+        await CheckAt(Now.AddMinutes(5));
+        await CheckAt(resumed.AddHours(6).AddMinutes(-1));
+        Assert.Single(telegram.Messages);
+
+        await CheckAt(resumed.AddHours(6).AddMinutes(1));
+        Assert.Contains("⚠️ Max · über 6 Std. ohne Pause (ab 14:25, 6:01 Std.)", telegram.Messages);
+    }
+
+    [Fact]
     public async Task ShiftWarningFollowsLater_AsItsOwnMessage()
     {
         var kimai = new StubKimaiClient();

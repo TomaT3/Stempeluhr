@@ -183,7 +183,7 @@ public sealed class WorkTimeLimitCalculatorTests
     }
 
     [Fact]
-    public void EarlierEntryAddedLater_StillOverlapsTheReportedGroup()
+    public void EarlierEntryAddedLater_StillCountsAsTheReportedGroup()
     {
         var reported = Assert.Single(Evaluate([Work(Now.AddHours(-7), null)]));
 
@@ -192,11 +192,11 @@ public sealed class WorkTimeLimitCalculatorTests
             [Work(Now.AddHours(-8), Now.AddHours(-7).AddMinutes(-5)), Work(Now.AddHours(-7), null)], later));
 
         Assert.Equal(Now.AddHours(-8), extended.Start);
-        Assert.True(extended.Overlaps(reported.Start, reported.End));
+        Assert.True(extended.WasCoveredBy(reported.Start, reported.End));
     }
 
     [Fact]
-    public void NextBlockAfterARealBreak_DoesNotOverlapTheReportedOne()
+    public void NextBlockAfterARealBreak_IsNotTheReportedOne()
     {
         var blockEnd = Now.AddHours(-1);
         var reported = Assert.Single(Evaluate([Work(blockEnd.AddHours(-7), null)], blockEnd));
@@ -205,7 +205,41 @@ public sealed class WorkTimeLimitCalculatorTests
             [Work(blockEnd.AddHours(-7), blockEnd), Work(blockEnd.AddMinutes(15), null)], blockEnd.AddHours(7)),
             violation => violation.Start > reported.Start);
 
-        Assert.False(next.Overlaps(reported.Start, reported.End));
+        Assert.False(next.WasCoveredBy(reported.Start, reported.End));
+    }
+
+    [Fact]
+    public void PauseInsertedIntoAReportedBlock_LeavesTheNewBlockUnreported()
+    {
+        // Warned at 15:00 for 08:00-15:00; then corrected to 08:00-12:00 and
+        // 12:30-19:00. The second block reaches 6 h only at 18:30.
+        var reported = Assert.Single(Evaluate(
+            [Work("2026-09-30T08:00:00+02:00", null)], Parse("2026-09-30T15:00:00+02:00")));
+
+        var split = Assert.Single(Evaluate(
+            [
+                Work("2026-09-30T08:00:00+02:00", "2026-09-30T12:00:00+02:00"),
+                Pause("2026-09-30T12:00:00+02:00", "2026-09-30T12:30:00+02:00"),
+                Work("2026-09-30T12:30:00+02:00", "2026-09-30T19:00:00+02:00"),
+            ],
+            Parse("2026-09-30T19:05:00+02:00")),
+            violation => violation.Kind == WorkTimeViolationKind.Continuous);
+
+        Assert.Equal(Parse("2026-09-30T18:30:00+02:00"), split.LimitReachedAt);
+        Assert.False(split.WasCoveredBy(reported.Start, reported.End));
+    }
+
+    [Fact]
+    public void LimitReachedAt_SkipsShortBreaks()
+    {
+        var violation = Assert.Single(Evaluate(
+            [
+                Work("2026-09-30T08:00:00+02:00", "2026-09-30T12:00:00+02:00"),
+                Pause("2026-09-30T12:00:00+02:00", "2026-09-30T12:10:00+02:00"),
+                Work("2026-09-30T12:10:00+02:00", "2026-09-30T14:15:00+02:00"),
+            ]));
+
+        Assert.Equal(Parse("2026-09-30T14:10:00+02:00"), violation.LimitReachedAt);
     }
 
     [Fact]

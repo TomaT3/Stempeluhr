@@ -13,22 +13,26 @@ public enum WorkTimeViolationKind
 
 /// <summary>
 /// Eine überschrittene Grenze für die Gruppe von <paramref name="Start"/> bis
-/// <paramref name="End"/> (laufend: jetzt). Der Merker erkennt eine schon
-/// gemeldete Gruppe an der Überlappung dieses Zeitraums, nicht am Beginn:
-/// Ein später davor nachgetragener oder korrigierter Eintrag verschiebt den
-/// Beginn, bleibt aber dieselbe Gruppe.
+/// <paramref name="End"/> (laufend: jetzt). <paramref name="LimitReachedAt"/>
+/// ist der Zeitpunkt, an dem die Arbeit der Gruppe die Grenze erreichte.
 /// </summary>
 public sealed record WorkTimeViolation(
     WorkTimeViolationKind Kind,
     DateTimeOffset Start,
     DateTimeOffset End,
-    int WorkedSeconds)
+    int WorkedSeconds,
+    DateTimeOffset LimitReachedAt)
 {
     /// <summary>
-    /// Gruppen einer Art sind durch mindestens die Schwelle getrennt; ein
-    /// gemeinsamer Zeitpunkt heißt also: dieselbe (ggf. erweiterte) Gruppe.
+    /// Ob eine Warnung für den Zeitraum <paramref name="start"/> bis
+    /// <paramref name="end"/> (Stand beim Versand) schon diese Gruppe meinte:
+    /// Sie überschneidet sich damit und hatte die Grenze bis dahin schon
+    /// erreicht. Ein später davor nachgetragener oder vorgezogener Beginn
+    /// bleibt so dieselbe Gruppe. Ein Block, der erst durch eine nachträglich
+    /// eingefügte Pause entsteht, erreicht die Grenze dagegen erst nach dem
+    /// Versand und bekommt eine eigene Warnung.
     /// </summary>
-    public bool Overlaps(DateTimeOffset start, DateTimeOffset end) => Start <= end && start <= End;
+    public bool WasCoveredBy(DateTimeOffset start, DateTimeOffset end) => start <= End && LimitReachedAt <= end;
 }
 
 /// <summary>
@@ -101,6 +105,7 @@ public static class WorkTimeLimitCalculator
             var end = start;
             var running = false;
             var worked = TimeSpan.Zero;
+            DateTimeOffset? limitReachedAt = null;
 
             for (; index < intervals.Length && intervals[index].Begin - end < separatingGap; index++)
             {
@@ -109,6 +114,10 @@ public static class WorkTimeLimitCalculator
                 var countedFrom = interval.Begin > end ? interval.Begin : end;
                 if (interval.End > countedFrom)
                 {
+                    if (limitReachedAt is null && worked + (interval.End - countedFrom) >= limit)
+                    {
+                        limitReachedAt = countedFrom + (limit - worked);
+                    }
                     worked += interval.End - countedFrom;
                     end = interval.End;
                 }
@@ -117,7 +126,7 @@ public static class WorkTimeLimitCalculator
 
             if (worked > limit && (running || now - end <= ReportWindow))
             {
-                violations.Add(new WorkTimeViolation(kind, start, end, (int)worked.TotalSeconds));
+                violations.Add(new WorkTimeViolation(kind, start, end, (int)worked.TotalSeconds, limitReachedAt!.Value));
             }
         }
     }

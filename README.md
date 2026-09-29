@@ -230,7 +230,9 @@ unterbricht „am Stück“ erst ab 15 Minuten, ein Tätigkeitswechsel nie. Eine
 Schicht endet erst nach 8 Stunden ohne Arbeit, unabhängig von Mitternacht:
 Nachtschichten und geteilte Dienste zählen als Ganzes. Jede Überschreitung
 meldet sich einmal pro Block bzw. Schicht, auch wenn davor später noch Zeit
-nachgetragen oder der Beginn in Kimai korrigiert wird;
+nachgetragen oder der Beginn in Kimai korrigiert wird. Teilt eine nachträglich
+eingetragene Pause einen schon gemeldeten Block, meldet sich der neue Block
+eigenständig, sobald er selbst die Grenze erreicht;
 `data/work-time-alerts.json` merkt sich gesendete Warnungen auch über einen
 Neustart. Scheitert der Versand,
 folgt der nächste Versuch bei der nächsten Prüfung. Fälle, die schon länger als
