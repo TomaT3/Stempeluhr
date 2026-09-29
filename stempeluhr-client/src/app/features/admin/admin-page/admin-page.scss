@@ -69,17 +69,19 @@ button {
   box-shadow: 0 6px 18px rgba(24, 39, 75, 0.08);
 }
 
-.admin-nav a {
+.admin-nav button {
   padding: 9px 12px;
   border-radius: 8px;
   color: #30415f;
   font-size: 0.9rem;
   font-weight: 800;
-  text-decoration: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
-.admin-nav a:hover,
-.admin-nav a:focus-visible {
+.admin-nav button:hover,
+.admin-nav button:focus-visible {
   background: #edf3ff;
   color: #204ecf;
 }

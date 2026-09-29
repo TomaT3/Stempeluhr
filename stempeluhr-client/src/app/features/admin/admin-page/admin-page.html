@@ -33,10 +33,10 @@
       <a class="admin-link-button" routerLink="/admin/offline-rejections">Offline-Stempel</a>
     </div>
     <nav class="admin-nav" aria-label="Adminbereiche">
-      <a href="#kimai">Kimai &amp; Zugang</a>
-      <a href="#booking">Buchungsvorgaben</a>
-      <a href="#nfc">NFC-Kartenleser</a>
-      <a href="#employees">Mitarbeiter</a>
+      <button type="button" (click)="scrollToSection('kimai')">Kimai &amp; Zugang</button>
+      <button type="button" (click)="scrollToSection('booking')">Buchungsvorgaben</button>
+      <button type="button" (click)="scrollToSection('nfc')">NFC-Kartenleser</button>
+      <button type="button" (click)="scrollToSection('employees')">Mitarbeiter</button>
     </nav>
     <div class="admin-layout">
       <fieldset class="admin-editor" [disabled]="adminBusy()" [attr.inert]="adminBusy() ? '' : null">

@@ -58,4 +58,69 @@ describe('AdminPage', () => {
     http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
     http.verify();
   });
+
+  it('shows the editor with saved selections when Kimai lists fail', async () => {
+    localStorage.removeItem('stempeluhr.admin.nfcTerminalId');
+    await TestBed.configureTestingModule({
+      imports: [AdminPage],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
+    }).compileComponents();
+
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(AdminPage);
+    fixture.componentInstance.adminPassword.set('test-password');
+    fixture.componentInstance.loadAdminSettings();
+
+    const settings: AdminSettings = {
+      baseUrl: '',
+      hasAdminPassword: true,
+      hasAdminApiToken: false,
+      defaultProjectId: 42,
+      defaultActivityId: 73,
+      pauseActivityId: null,
+      employees: [],
+    };
+    http.expectOne('/api/admin/settings').flush(settings);
+    http.expectOne('/api/admin/kimai-projects').flush('Kimai nicht konfiguriert', { status: 400, statusText: 'Bad Request' });
+    http.expectOne('/api/admin/kimai-activities').flush('Kimai nicht konfiguriert', { status: 400, statusText: 'Bad Request' });
+    http.expectOne('/api/admin/employee-statuses').flush([]);
+    fixture.detectChanges();
+
+    const page = fixture.nativeElement as HTMLElement;
+    expect(page.querySelector<HTMLFieldSetElement>('.admin-editor')?.disabled).toBe(false);
+    const selects = page.querySelectorAll<HTMLSelectElement>('#booking select');
+    expect(Array.from(selects, select => select.value)).toEqual(['42', '73', '']);
+    expect(fixture.componentInstance.adminMessage()).toContain('Kimai-Projekte oder Aktivitäten');
+    http.expectOne('/api/health').flush({});
+    http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
+    http.verify();
+  });
+
+  it('scrolls section navigation in place instead of following base-relative anchors', async () => {
+    await TestBed.configureTestingModule({
+      imports: [AdminPage],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(AdminPage);
+    fixture.componentInstance.adminSettings.set({
+      baseUrl: '',
+      hasAdminPassword: true,
+      hasAdminApiToken: true,
+      defaultProjectId: null,
+      defaultActivityId: null,
+      pauseActivityId: null,
+      employees: [],
+    });
+    fixture.detectChanges();
+
+    const page = fixture.nativeElement as HTMLElement;
+    expect(page.querySelector('.admin-nav a')).toBeNull();
+    const section = page.querySelector<HTMLElement>('#booking')!;
+    section.scrollIntoView = vi.fn();
+    document.body.appendChild(page);
+    page.querySelectorAll<HTMLButtonElement>('.admin-nav button')[1].click();
+    expect(section.scrollIntoView).toHaveBeenCalled();
+    page.remove();
+  });
 });

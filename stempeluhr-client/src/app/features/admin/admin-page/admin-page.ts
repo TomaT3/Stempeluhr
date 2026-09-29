@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { DatePipe } from '@angular/common';
 import { Component, OnDestroy, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { forkJoin, of, switchMap } from 'rxjs';
+import { catchError, forkJoin, of, switchMap } from 'rxjs';
 
 import { AdminEmployee, AdminEmployeeStatus, AdminEmployeeTask, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../../../core/models/admin.models';
 import { NfcClockEvent } from '../../../core/models/kiosk.models';
@@ -52,17 +52,22 @@ export class AdminPage implements OnDestroy {
     this.kimaiActivities.set([]);
     this.adminMessage.set('');
     this.adminApi.getSettings(password).pipe(
+      // Kimai-Fehler blockieren den Editor nicht: Ohne gültige URL/Token muss
+      // der Admin genau diese Felder erreichen können. Gespeicherte Auswahlen
+      // bleiben über die Fallback-Optionen der Selects sichtbar.
       switchMap(settings => forkJoin({
         settings: of(settings),
-        projects: this.adminApi.importKimaiProjects(password, settings.baseUrl),
-        activities: this.adminApi.importKimaiActivities(password, settings.baseUrl),
+        projects: this.adminApi.importKimaiProjects(password, settings.baseUrl).pipe(catchError(() => of(null))),
+        activities: this.adminApi.importKimaiActivities(password, settings.baseUrl).pipe(catchError(() => of(null))),
       })),
     ).subscribe({
       next: ({ settings, projects, activities }) => {
-        this.kimaiProjects.set(projects);
-        this.kimaiActivities.set(activities);
+        this.kimaiProjects.set(projects ?? []);
+        this.kimaiActivities.set(activities ?? []);
         this.adminSettings.set(this.withEditableTokens(settings));
-        this.adminMessage.set('');
+        this.adminMessage.set(projects === null || activities === null
+          ? 'Kimai-Projekte oder Aktivitäten konnten nicht geladen werden. Bitte Verbindung und Token prüfen und die Listen aktualisieren.'
+          : '');
         this.adminDirty.set(false);
         this.adminBusy.set(false);
         this.initialLoading.set(false);
@@ -70,9 +75,7 @@ export class AdminPage implements OnDestroy {
         this.startNfcPolling();
       },
       error: (error: HttpErrorResponse) => {
-        this.adminMessage.set(error.url?.includes('kimai-')
-          ? 'Kimai-Projekte oder Aktivitäten konnten nicht geladen werden. Bitte Verbindung und Token prüfen und erneut laden.'
-          : this.adminLoginErrorMessage(error));
+        this.adminMessage.set(this.adminLoginErrorMessage(error));
         this.adminBusy.set(false);
         this.initialLoading.set(false);
       },
@@ -129,6 +132,12 @@ export class AdminPage implements OnDestroy {
         this.adminBusy.set(false);
       },
     });
+  }
+
+  // Echte Anker würden wegen <base href="/"> auf /#… statt /admin#… zeigen und
+  // die Seite samt ungespeicherter Änderungen verlassen.
+  scrollToSection(id: string): void {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   importKimaiActivities(): void {
