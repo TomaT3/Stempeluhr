@@ -781,14 +781,68 @@ describe('TerminalPage', () => {
         });
         const fixture = scanCachedCard();
         const component = fixture.componentInstance;
+        const queue = TestBed.inject(OfflineQueueService);
         expect(component.actionsBlocked()).toBe(true);
-        expect(TestBed.inject(OfflineQueueService).authorizeEmployeeCard)
-          .toHaveBeenCalledExactlyOnceWith('max', '04ABCD');
+        // Only the cache vouches for the card so far (issue #75).
+        expect(queue.authorizeEmployeeCard).not.toHaveBeenCalled();
+        expect(queue.syncNow).toHaveBeenCalled();
 
         identify$.next(identifyEvent({}));
+        expect(queue.authorizeEmployeeCard).toHaveBeenCalledExactlyOnceWith('max', '04ABCD');
         expect(component.clockState.status()).toBeNull();
         expect(lastKnownStatus('max')?.origin).toBe('projected');
         expect(component.actionsBlocked()).toBe(true);
+      });
+
+      it('never attaches a moved card to the stamps of its former owner (issue #75)', () => {
+        pendingQueue.set([
+          { kind: 'kiosk', event: { employeeId: 'max' } },
+          { kind: 'kiosk', event: { employeeId: 'anna' } },
+        ]);
+        const fixture = scanCachedCard();
+        const queue = TestBed.inject(OfflineQueueService);
+        expect(queue.authorizeEmployeeCard).not.toHaveBeenCalled();
+
+        identify$.next(identifyEvent({
+          employee: { ...session.employee, id: 'anna', displayName: 'Anna', tasks },
+          status: null,
+        }));
+
+        expect(queue.authorizeEmployeeCard).toHaveBeenCalledExactlyOnceWith('anna', '04ABCD');
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('anna');
+      });
+
+      it('keeps the stamps waiting for the PIN when identify fails', () => {
+        pendingQueue.set([{ kind: 'kiosk', event: { employeeId: 'max' } }]);
+        const fixture = scanCachedCard();
+        const component = fixture.componentInstance;
+
+        identify$.error({ status: 429 });
+
+        expect(TestBed.inject(OfflineQueueService).authorizeEmployeeCard).not.toHaveBeenCalled();
+        // Nothing replays without the card - never claim otherwise.
+        expect(component.actionsBlocked()).toBe(true);
+        expect(component.message()).toBe('Karte nicht bestätigt – bitte erneut anmelden.');
+      });
+
+      it('says so when the server no longer knows the cached card', () => {
+        pendingQueue.set([{ kind: 'kiosk', event: { employeeId: 'max' } }]);
+        const fixture = scanCachedCard();
+
+        identify$.next(identifyEvent({ success: false, employee: null, status: null, message: 'Unbekannte Karte' }));
+
+        expect(TestBed.inject(OfflineQueueService).authorizeEmployeeCard).not.toHaveBeenCalled();
+        expect(fixture.componentInstance.message()).toBe('Karte nicht bestätigt – bitte erneut anmelden.');
+      });
+
+      it('keeps quiet about a failed identify when no stamps wait for the card', () => {
+        const fixture = scanCachedCard();
+        const before = fixture.componentInstance.message();
+
+        identify$.error({ status: 429 });
+
+        expect(fixture.componentInstance.message()).toBe(before);
+        expect(fixture.componentInstance.actionsBlocked()).toBe(false);
       });
 
       it('offers the tasks the server knows now, not the ones cached with the card', () => {
