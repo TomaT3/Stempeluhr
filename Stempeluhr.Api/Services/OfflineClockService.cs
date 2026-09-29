@@ -118,6 +118,13 @@ public sealed class OfflineClockService(
                 return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
             }
 
+            // Employees whose PIN is locked (issue #8). Their events are
+            // answered "buffered" WITHOUT a server copy and without registering
+            // the ID: the kiosk keeps them and retries after the lock, and they
+            // never block the outbox for everybody else. (An employee who
+            // already waits in the outbox was queued behind it above.)
+            var lockedEmployees = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             void BufferKioskFrom(IReadOnlyList<OfflineKioskClockEventDto> pendingEvents, int failedIndex)
             {
                 // The failed event and everything after it must replay
@@ -127,18 +134,20 @@ public sealed class OfflineClockService(
                 for (var i = failedIndex; i < pendingEvents.Count; i++)
                 {
                     var pending = pendingEvents[i];
-                    AddToOutbox(pending);
                     buffered++;
+                    if (lockedEmployees.Contains(pending.EmployeeId))
+                    {
+                        // An earlier event of this employee stayed with the
+                        // kiosk (lock). A server copy of this later one could
+                        // replay ahead of it once the lock expires.
+                        results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, LockedMessage));
+                        continue;
+                    }
+
+                    AddToOutbox(pending);
                     results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, BufferedMessage));
                 }
             }
-
-            // Employees whose PIN is locked (issue #8). Their events are
-            // answered "buffered" WITHOUT a server copy and without registering
-            // the ID: the kiosk keeps them and retries after the lock, and they
-            // never block the outbox for everybody else. (An employee who
-            // already waits in the outbox was queued behind it above.)
-            var lockedEmployees = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             for (var i = 0; i < orderedKioskEvents.Count; i++)
             {

@@ -462,6 +462,36 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task OutageAfterALockedEvent_KeepsTheLockedEmployeesLaterEventsWithTheKiosk()
+    {
+        var clock = new ManualClock(T08);
+        var guard = new PinAttemptGuard(clock: clock);
+        var (service, kimai, _) = CreateServiceWithPinGuard(guard);
+        for (var i = 0; i < PinAttemptGuard.EmployeeThreshold; i++) guard.RecordFailure(PinAttemptGuard.EmployeeKey("max"));
+        kimai.FailNextStatusCalls = 2;
+        var batch = new[]
+        {
+            Kiosk("max-start", "start", T08),
+            Kiosk("anna-start", "start", T10, "5678") with { EmployeeId = "anna" },
+            Kiosk("max-stop", "stop", T12),
+        };
+
+        var locked = await service.SyncKioskAsync(batch);
+
+        Assert.All(locked.Results, r => Assert.Equal("buffered", r.Status));
+        // Max's stop must not wait in the outbox while his start stays with
+        // the kiosk: after the lock it would replay first, as a no-op.
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await service.FlushOutboxAsync();
+        Assert.DoesNotContain(kimai.Operations, op => op.Kind == "stop");
+
+        var retry = await service.SyncKioskAsync(batch);
+
+        Assert.Equal(new[] { "applied", "duplicate", "applied" }, retry.Results.Select(r => r.Status));
+        Assert.Equal(("stop", T12), kimai.Operations.Last());
+    }
+
+    [Fact]
     public async Task KimaiOutage_StillQueuesTheWholeBatchBehindTheBacklog()
     {
         var guard = new PinAttemptGuard(clock: new ManualClock(T08));
