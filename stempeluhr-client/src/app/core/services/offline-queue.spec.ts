@@ -78,6 +78,26 @@ describe('OfflineQueueService sync batching', () => {
     await drainMicrotasks();
   });
 
+  it('replays a PIN-less backlog with the card used to identify the same employee', async () => {
+    window.localStorage.setItem('stempeluhr.offline-queue.v1', JSON.stringify([
+      { kind: 'kiosk', event: { ...kioskEvent('card-start'), pin: undefined, needsPin: true } },
+      { kind: 'kiosk', event: { ...kioskEvent('card-stop'), pin: undefined, needsPin: true, action: 'stop' } },
+    ]));
+    const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+    httpMock.expectNone(kioskEndpoint);
+
+    restarted.authorizeEmployeeCard('MAX', '04ABCD');
+    await drainMicrotasks();
+    const replay = httpMock.expectOne(kioskEndpoint);
+    expect(replay.request.body.events.map((event: OfflineKioskClockEvent) => event.eventId))
+      .toEqual(['card-start', 'card-stop']);
+    expect(replay.request.body.events.every((event: OfflineKioskClockEvent) =>
+      event.nfcCardId === '04ABCD' && !event.pin)).toBe(true);
+    replay.flush(resultFor(replay.request.body.events, 'applied'));
+    await drainMicrotasks();
+    expect(restarted.pendingCount()).toHaveLength(0);
+  });
+
   it('retains the legacy terminal path until authenticated capability is proven', async () => {
     const previousUrl = window.location.href;
     window.history.replaceState(null, '', '/terminal?terminalId=%20pi-1%20');

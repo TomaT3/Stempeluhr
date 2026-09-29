@@ -243,6 +243,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     // down) emits nothing, so the terminal stays unlocked while a PIN login
     // is still impossible.
     const recoveredSubscription = this.offlineQueue.recovered.subscribe(() => {
+      const wasOffline = this.isOffline();
       this.isOffline.set(false);
       // Race guard against an in-flight ONLINE action: while a queue flush
       // runs (up to its chunk deadline), the employee can act again because
@@ -261,7 +262,8 @@ export abstract class ClockWorkflow implements OnDestroy {
       if (this.pendingResetOnRecovery) {
         this.pendingResetOnRecovery = false;
         this.back();
-      } else if (this.selectedEmployee() && !this.hasPendingForEmployee(this.selectedEmployee()?.id)) {
+      } else if ((this.replayStatusPending() || wasOffline)
+        && this.selectedEmployee() && !this.hasPendingForEmployee(this.selectedEmployee()?.id)) {
         this.refreshStatusAfterReplay();
       }
     });
@@ -822,7 +824,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (employee) {
       const sessionCardId = normalized ?? cardId;
       this.applyOfflineIdentity(employee, sessionCardId, null);
-      this.message.set(`${employee.displayName} - bitte Aktion waehlen.`);
+      this.resumeCardBacklog(employee, sessionCardId);
       this.audioFeedback.playBeeps(1);
       // Seit der Local-Poll IMMER läuft, trifft der Cache-Pfad auch online
       // zu - dort ist die API erreichbar, also Status UND Mitarbeiter still
@@ -850,13 +852,13 @@ export abstract class ClockWorkflow implements OnDestroy {
               // Karte inzwischen umgehängt: ein Identitätswechsel wie jeder
               // andere - nie Name, Status oder Auswahl des alten stehen lassen.
               this.applyOfflineIdentity(event.employee, sessionCardId, null, event.status);
-              this.message.set(`${event.employee.displayName} - bitte Aktion waehlen.`);
+              this.resumeCardBacklog(event.employee, sessionCardId);
               return;
             }
             if (event.employee) {
               this.selectedEmployee.set(event.employee);
             }
-            if (event.status) {
+            if (event.status && !this.replayStatusPending()) {
               this.applyObservedStatus(employee.id, event.status);
             }
           },
@@ -895,7 +897,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         }
         if (event.success && event.employee) {
           this.applyOfflineIdentity(event.employee, event.cardId ?? identifyCardId, null, event.status);
-          this.message.set(`${event.employee.displayName} - bitte Aktion waehlen.`);
+          this.resumeCardBacklog(event.employee, event.cardId ?? identifyCardId);
           this.audioFeedback.playBeeps(1);
         } else {
           this.message.set(event.message || 'Unbekannte Karte');
@@ -910,6 +912,15 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.audioFeedback.playBeeps(2);
       },
     });
+  }
+
+  private resumeCardBacklog(employee: Employee, cardId: string): void {
+    if (this.replayStatusPending()) {
+      this.message.set('Ausstehende Stempel werden nachgetragen.');
+      this.offlineQueue.authorizeEmployeeCard(employee.id, cardId);
+    } else {
+      this.message.set(`${employee.displayName} - bitte Aktion waehlen.`);
+    }
   }
 
   /**

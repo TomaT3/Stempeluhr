@@ -6,6 +6,7 @@ import { of, Subject, throwError } from 'rxjs';
 import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent } from '../../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../../core/models/offline.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
+import { lastKnownStatus, rememberProjectedStatus } from '../../../core/services/offline-cache';
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
 import { OfflineQueueService } from '../../../core/services/offline-queue';
@@ -94,6 +95,7 @@ describe('TerminalPage', () => {
           provide: OfflineQueueService,
           useValue: {
             authorizeEmployee: vi.fn(),
+            authorizeEmployeeCard: vi.fn(),
             needsPin: signal(false),
             enqueueKiosk,
             syncNow: vi.fn(() => of([])),
@@ -177,6 +179,17 @@ describe('TerminalPage', () => {
 
     expect(component.hoursOverview()).toBeNull();
     expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
+  });
+
+  it('does not refresh an unrelated employee when another backlog recovers', () => {
+    const fixture = TestBed.createComponent(TerminalPage);
+    unlock(fixture);
+    fixture.componentInstance.message.set('Stempel gespeichert');
+    recovered$.next();
+
+    expect(pinLogin).toHaveBeenCalledTimes(1);
+    expect(fixture.componentInstance.message()).toBe('Stempel gespeichert');
+    expect(fixture.componentInstance.actionsBlocked()).toBe(false);
   });
 
   it('offers BOTH directions instead of a fake "Nicht eingestempelt" when the status is unknown', () => {
@@ -759,6 +772,23 @@ describe('TerminalPage', () => {
         expect(startOptions(fixture).length).toBe(2);
         // Known status: there is no Ein-/Ausstempeln to go back to.
         expect(fixture.nativeElement.querySelector('.task-cancel')).toBeNull();
+      });
+
+      it('keeps a projected status while queued card stamps replay', () => {
+        pendingQueue.set([{ kind: 'kiosk', event: { employeeId: 'max' } }]);
+        rememberProjectedStatus('max', {
+          ...status, isRunning: true, state: 'working', stateText: 'Eingestempelt',
+        });
+        const fixture = scanCachedCard();
+        const component = fixture.componentInstance;
+        expect(component.actionsBlocked()).toBe(true);
+        expect(TestBed.inject(OfflineQueueService).authorizeEmployeeCard)
+          .toHaveBeenCalledExactlyOnceWith('max', '04ABCD');
+
+        identify$.next(identifyEvent({}));
+        expect(component.clockState.status()).toBeNull();
+        expect(lastKnownStatus('max')?.origin).toBe('projected');
+        expect(component.actionsBlocked()).toBe(true);
       });
 
       it('offers the tasks the server knows now, not the ones cached with the card', () => {

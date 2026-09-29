@@ -125,6 +125,14 @@ export class OfflineQueueService {
     this.syncNow().subscribe();
   }
 
+  authorizeEmployeeCard(employeeId: string, cardId: string): void {
+    this.queued.update(entries => entries.map(entry =>
+      entry.event.employeeId.toLowerCase() === employeeId.toLowerCase()
+      && this.isMissingPin(entry.event)
+        ? { ...entry, event: { ...entry.event, nfcCardId: cardId } } : entry));
+    this.syncNow().subscribe();
+  }
+
   readonly needsPin = computed(() => this.queued().some(({ event }) => this.isMissingPin(event)));
 
   enqueueKiosk(event: OfflineKioskClockEvent): void {
@@ -235,7 +243,6 @@ export class OfflineQueueService {
         if (event.terminalId !== terminalId) break;
         chunk.push(event);
       }
-      if (chunk.length === 0) { replayAborted = true; break; }
       offset += chunk.length;
       let result: OfflineSyncResult;
       try {

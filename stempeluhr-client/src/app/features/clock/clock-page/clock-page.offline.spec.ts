@@ -113,6 +113,7 @@ describe('ClockPage offline behaviour', () => {
           provide: OfflineQueueService,
           useValue: {
             authorizeEmployee: vi.fn(),
+            authorizeEmployeeCard: vi.fn(),
             needsPin: signal(false),
             enqueueKiosk,
             syncNow,
