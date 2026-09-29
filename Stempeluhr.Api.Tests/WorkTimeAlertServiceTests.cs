@@ -95,6 +95,35 @@ public sealed class WorkTimeAlertServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PauseReplayedAfterADelayedWarning_WarnsTheNewBlockRightAway()
+    {
+        // The first check only runs after an outage, 11 h into the shift.
+        var kimai = new StubKimaiClient();
+        var start = Now.AddHours(-11); // 05:00 local
+        kimai.Timesheets["max"] = [Running(start)];
+        var telegram = new RecordingNotifier();
+        var clock = new ManualClock(Now);
+        var alerts = new WorkTimeAlertStore(AlertPath);
+
+        await CreateService(kimai, telegram, alerts, clock: clock).CheckAsync();
+        Assert.Equal(2, telegram.Messages.Count); // continuous and shift
+
+        var resumed = start.AddHours(4).AddMinutes(30); // 09:30 local
+        kimai.Timesheets["max"] =
+        [
+            new KimaiTimesheetEntryDto(1, start, start.AddHours(4), 4 * 3600, 5),
+            new KimaiTimesheetEntryDto(2, start.AddHours(4), resumed, 1800, 99),
+            Running(resumed),
+        ];
+        clock.Now = Now.AddMinutes(5);
+        await CreateService(kimai, telegram, alerts, clock: clock).CheckAsync();
+
+        // The shift stays warned; only the split-off block is new.
+        Assert.Equal(3, telegram.Messages.Count);
+        Assert.Equal("⚠️ Max · über 6 Std. ohne Pause (ab 09:30, 6:35 Std.)", telegram.Messages[2]);
+    }
+
+    [Fact]
     public async Task ShiftWarningFollowsLater_AsItsOwnMessage()
     {
         var kimai = new StubKimaiClient();

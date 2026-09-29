@@ -13,26 +13,28 @@ public enum WorkTimeViolationKind
 
 /// <summary>
 /// Eine überschrittene Grenze für die Gruppe von <paramref name="Start"/> bis
-/// <paramref name="End"/> (laufend: jetzt). <paramref name="LimitReachedAt"/>
-/// ist der Zeitpunkt, an dem die Arbeit der Gruppe die Grenze erreichte.
+/// <paramref name="End"/> (laufend: jetzt). <paramref name="StartMayBeCut"/>:
+/// Die Gruppe beginnt so nah am Abfragefenster, dass davor liegende
+/// Timesheets fehlen könnten - der sichtbare Beginn ist dann nicht der echte.
 /// </summary>
 public sealed record WorkTimeViolation(
     WorkTimeViolationKind Kind,
     DateTimeOffset Start,
     DateTimeOffset End,
     int WorkedSeconds,
-    DateTimeOffset LimitReachedAt)
+    bool StartMayBeCut = false)
 {
     /// <summary>
-    /// Ob eine Warnung für den Zeitraum <paramref name="start"/> bis
+    /// Ob die Warnung für die Gruppe <paramref name="start"/> bis
     /// <paramref name="end"/> (Stand beim Versand) schon diese Gruppe meinte:
-    /// Sie überschneidet sich damit und hatte die Grenze bis dahin schon
-    /// erreicht. Ein später davor nachgetragener oder vorgezogener Beginn
-    /// bleibt so dieselbe Gruppe. Ein Block, der erst durch eine nachträglich
-    /// eingefügte Pause entsteht, erreicht die Grenze dagegen erst nach dem
-    /// Versand und bekommt eine eigene Warnung.
+    /// Sie überschneidet sich damit und beginnt nicht später. Ein davor
+    /// nachgetragener oder vorgezogener Beginn bleibt so dieselbe Gruppe.
+    /// Ein Block, den eine nachträglich eingetragene Pause abspaltet, beginnt
+    /// erst nach der Pause und bekommt eine eigene Warnung - auch wenn die
+    /// erste Warnung erst verspätet kam.
     /// </summary>
-    public bool WasCoveredBy(DateTimeOffset start, DateTimeOffset end) => start <= End && LimitReachedAt <= end;
+    public bool WasCoveredBy(DateTimeOffset start, DateTimeOffset end) =>
+        start <= End && Start <= end && (Start <= start || StartMayBeCut);
 }
 
 /// <summary>
@@ -64,15 +66,17 @@ public static class WorkTimeLimitCalculator
     /// </summary>
     public static readonly TimeSpan ReportWindow = TimeSpan.FromHours(24);
 
-    /// <summary>
-    /// Timesheets vor dem Abfragefenster fehlen in <paramref name="entries"/>.
-    /// Eine dort abgeschnittene Gruppe zählt nur weniger Arbeit - das kann
-    /// keine falsche Warnung auslösen, und eine schon gemeldete Gruppe
-    /// überlappt weiterhin mit ihrem Merker.
-    /// </summary>
+    /// <param name="windowStart">
+    /// Beginn des Kimai-Abfragefensters; davor liegende Timesheets fehlen in
+    /// <paramref name="entries"/>. Eine dort abgeschnittene Gruppe zählt nur
+    /// weniger Arbeit - das löst keine falsche Warnung aus. Sie wird aber mit
+    /// <see cref="WorkTimeViolation.StartMayBeCut"/> markiert, damit ihr
+    /// sichtbar späterer Beginn eine schon gesendete Warnung nicht wiederholt.
+    /// </param>
     public static IReadOnlyList<WorkTimeViolation> Evaluate(
         IReadOnlyCollection<KimaiTimesheetEntryDto> entries,
         int? pauseActivityId,
+        DateTimeOffset windowStart,
         DateTimeOffset now)
     {
         var intervals = entries
@@ -85,8 +89,8 @@ public static class WorkTimeLimitCalculator
             .ToArray();
 
         var violations = new List<WorkTimeViolation>();
-        Collect(intervals, MinimumBreak, ContinuousLimit, WorkTimeViolationKind.Continuous, now, violations);
-        Collect(intervals, ShiftRest, ShiftLimit, WorkTimeViolationKind.Shift, now, violations);
+        Collect(intervals, MinimumBreak, ContinuousLimit, WorkTimeViolationKind.Continuous, windowStart, now, violations);
+        Collect(intervals, ShiftRest, ShiftLimit, WorkTimeViolationKind.Shift, windowStart, now, violations);
         return violations;
     }
 
@@ -95,6 +99,7 @@ public static class WorkTimeLimitCalculator
         TimeSpan separatingGap,
         TimeSpan limit,
         WorkTimeViolationKind kind,
+        DateTimeOffset windowStart,
         DateTimeOffset now,
         List<WorkTimeViolation> violations)
     {
@@ -105,7 +110,6 @@ public static class WorkTimeLimitCalculator
             var end = start;
             var running = false;
             var worked = TimeSpan.Zero;
-            DateTimeOffset? limitReachedAt = null;
 
             for (; index < intervals.Length && intervals[index].Begin - end < separatingGap; index++)
             {
@@ -114,10 +118,6 @@ public static class WorkTimeLimitCalculator
                 var countedFrom = interval.Begin > end ? interval.Begin : end;
                 if (interval.End > countedFrom)
                 {
-                    if (limitReachedAt is null && worked + (interval.End - countedFrom) >= limit)
-                    {
-                        limitReachedAt = countedFrom + (limit - worked);
-                    }
                     worked += interval.End - countedFrom;
                     end = interval.End;
                 }
@@ -126,7 +126,8 @@ public static class WorkTimeLimitCalculator
 
             if (worked > limit && (running || now - end <= ReportWindow))
             {
-                violations.Add(new WorkTimeViolation(kind, start, end, (int)worked.TotalSeconds, limitReachedAt!.Value));
+                violations.Add(new WorkTimeViolation(
+                    kind, start, end, (int)worked.TotalSeconds, start - windowStart < separatingGap));
             }
         }
     }

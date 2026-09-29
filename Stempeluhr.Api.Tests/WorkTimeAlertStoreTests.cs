@@ -50,5 +50,5 @@ public sealed class WorkTimeAlertStoreTests : IDisposable
     }
 
     private static WorkTimeViolation Violation(WorkTimeViolationKind kind, DateTimeOffset start, DateTimeOffset end) =>
-        new(kind, start, end, (int)(end - start).TotalSeconds, end);
+        new(kind, start, end, (int)(end - start).TotalSeconds);
 }

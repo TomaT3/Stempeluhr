@@ -81,7 +81,7 @@ public sealed class WorkTimeAlertService(
             TimeZoneInfo.ConvertTime(now, timeZone).DateTime,
             cancellationToken);
 
-        foreach (var violation in WorkTimeLimitCalculator.Evaluate(entries, settings.PauseActivityId, now))
+        foreach (var violation in WorkTimeLimitCalculator.Evaluate(entries, settings.PauseActivityId, windowStart, now))
         {
             if (alerts.HasSent(employee.Id, violation)) continue;
 

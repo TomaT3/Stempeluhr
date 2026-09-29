@@ -13,8 +13,8 @@ public sealed record WorkTimeAlert(
 /// <summary>
 /// Remembers which work time warnings Telegram already accepted, so a check
 /// every few minutes - and after a restart - sends each warning only once.
-/// A group counts as warned when it overlaps a sent period and had reached
-/// the limit by its end (see <see cref="WorkTimeViolation.WasCoveredBy"/>).
+/// A group counts as warned when it overlaps a sent period and does not
+/// start later (see <see cref="WorkTimeViolation.WasCoveredBy"/>).
 /// </summary>
 public sealed class WorkTimeAlertStore(string filePath, ILogger<WorkTimeAlertStore>? logger = null)
 {

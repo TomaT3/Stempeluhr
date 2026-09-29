@@ -225,21 +225,50 @@ public sealed class WorkTimeLimitCalculatorTests
             Parse("2026-09-30T19:05:00+02:00")),
             violation => violation.Kind == WorkTimeViolationKind.Continuous);
 
-        Assert.Equal(Parse("2026-09-30T18:30:00+02:00"), split.LimitReachedAt);
+        Assert.Equal(Parse("2026-09-30T12:30:00+02:00"), split.Start);
         Assert.False(split.WasCoveredBy(reported.Start, reported.End));
     }
 
     [Fact]
-    public void LimitReachedAt_SkipsShortBreaks()
+    public void PauseInsertedAfterADelayedWarning_LeavesTheNewBlockUnreported()
     {
-        var violation = Assert.Single(Evaluate(
+        // API or Telegram down: the first warning went out only at 20:00,
+        // when the split-off block had already passed 6 h (18:30).
+        var reported = Assert.Single(Evaluate(
+            [Work("2026-09-30T08:00:00+02:00", null)], Parse("2026-09-30T20:00:00+02:00")),
+            violation => violation.Kind == WorkTimeViolationKind.Continuous);
+
+        var split = Assert.Single(Evaluate(
             [
                 Work("2026-09-30T08:00:00+02:00", "2026-09-30T12:00:00+02:00"),
-                Pause("2026-09-30T12:00:00+02:00", "2026-09-30T12:10:00+02:00"),
-                Work("2026-09-30T12:10:00+02:00", "2026-09-30T14:15:00+02:00"),
-            ]));
+                Pause("2026-09-30T12:00:00+02:00", "2026-09-30T12:30:00+02:00"),
+                Work("2026-09-30T12:30:00+02:00", null),
+            ],
+            Parse("2026-09-30T20:05:00+02:00")),
+            violation => violation.Kind == WorkTimeViolationKind.Continuous);
 
-        Assert.Equal(Parse("2026-09-30T14:10:00+02:00"), violation.LimitReachedAt);
+        Assert.False(split.WasCoveredBy(reported.Start, reported.End));
+    }
+
+    [Fact]
+    public void GroupCutByTheQueryWindow_StaysCoveredByItsWarning()
+    {
+        // Worked with less than 8 h rest for days: the shift group reaches
+        // back beyond the lookback, so its visible start moves later.
+        var reported = new WorkTimeViolation(WorkTimeViolationKind.Shift, Now.AddHours(-60), Now.AddHours(-40), 36000);
+        var windowStart = Now - WorkTimeLimitCalculator.Lookback;
+
+        var cut = Assert.Single(WorkTimeLimitCalculator.Evaluate(
+            [
+                Work(windowStart.AddHours(2), windowStart.AddHours(10)),
+                Work(windowStart.AddHours(16), Now.AddHours(-16)),
+                Work(Now.AddHours(-10), null),
+            ],
+            PauseActivity, windowStart, Now),
+            violation => violation.Kind == WorkTimeViolationKind.Shift);
+
+        Assert.True(cut.StartMayBeCut);
+        Assert.True(cut.WasCoveredBy(reported.Start, reported.End));
     }
 
     [Fact]
@@ -257,7 +286,8 @@ public sealed class WorkTimeLimitCalculatorTests
     private static IReadOnlyList<WorkTimeViolation> Evaluate(
         IReadOnlyCollection<KimaiTimesheetEntryDto> entries, DateTimeOffset? now = null)
     {
-        return WorkTimeLimitCalculator.Evaluate(entries, PauseActivity, now ?? Now);
+        var at = now ?? Now;
+        return WorkTimeLimitCalculator.Evaluate(entries, PauseActivity, at - WorkTimeLimitCalculator.Lookback, at);
     }
 
     private static KimaiTimesheetEntryDto Work(string begin, string? end, int activityId = WorkActivity) =>
