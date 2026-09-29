@@ -87,8 +87,9 @@ Weitere Regeln:
 - Stempel, die der Server beim Nachtrag endgültig ablehnt (z. B. Mitarbeiter
   inzwischen deaktiviert), zeigt das Terminal im Ruhezustand an, bis jemand sie in
   Kimai nachgetragen und „Alle erledigt“ gedrückt hat.
-  Abgelehnte Nachträge werden zusätzlich ohne PIN und Karten-ID in
-  `data/rejected-offline-events.json` erfasst. Im Adminbereich unter
+  Abgelehnte Nachträge eingerichteter Mitarbeiter werden zusätzlich ohne PIN
+  und Karten-ID in `data/rejected-offline-events.json` erfasst; Nachträge ohne
+  oder mit unbekannter Mitarbeiter-ID lehnt die API nur ab. Im Adminbereich unter
   „Abgelehnte Offline-Stempel“ sind sie auch von einem anderen Rechner aus
   einsehbar und können nach dem manuellen Nachtrag markiert werden. „Alle
   erledigt“ am Kiosk quittiert nur den lokalen Hinweis und setzt die
