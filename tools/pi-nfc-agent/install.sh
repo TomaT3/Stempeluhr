@@ -127,7 +127,7 @@ path.write_text(json.dumps(config, indent=2) + "\n")
 PY
 fi
 if [ -z "$(config_value terminal_token)" ]; then
-  log "HINWEIS: Terminal-Token fehlt; Offline-Nachtrag benötigt --terminal-token-file (siehe Pi-Anleitung)."
+  log "HINWEIS: Terminal-Token fehlt; Nachtrag bleibt im Legacy-Modus; für PIN-freie Queue --terminal-token-file setzen (siehe Pi-Anleitung)."
 fi
 
 log "Agent von $SERVER installieren"

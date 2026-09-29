@@ -6,11 +6,15 @@ namespace Stempeluhr.Api.Services;
 
 public static class TerminalAuthentication
 {
+    public static bool IsTerminalRequest(HttpRequest request) =>
+        request.Headers.ContainsKey("X-Terminal-Id") ||
+        request.Headers.Authorization.ToString().Split(' ', 2)[0].Equals("Bearer", StringComparison.OrdinalIgnoreCase);
+
     public static string? Authenticate(HttpRequest request, RuntimeSettings settings)
     {
         var id = request.Headers["X-Terminal-Id"].ToString();
         var authorization = request.Headers.Authorization.ToString();
-        if (!authorization.StartsWith("Bearer ", StringComparison.Ordinal)
+        if (!authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
             || !settings.TerminalTokens.TryGetValue(id, out var expected)
             || string.IsNullOrWhiteSpace(expected)) return null;
 
@@ -20,7 +24,7 @@ public static class TerminalAuthentication
     }
 
     public static object[] Catalog(RuntimeSettings settings, IEmployeeService employees) =>
-        settings.Employees.Where(e => e.IsEnabled && !string.IsNullOrWhiteSpace(e.ApiToken))
+        settings.Employees.Where(e => e.CanClock)
             .Select(e =>
             {
                 var salt = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();

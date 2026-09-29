@@ -110,6 +110,15 @@ if run_update --force; then ok "update.sh --force endet erfolgreich"; else bad "
 grep -q "current/stempeluhr_nfc_agent.py" "$WORK/systemd/stempeluhr-nfc-agent.service" \
   && ok "Service startet aus current/" || bad "Service-Unit zeigt nicht auf current/"
 
+# Existing config deliberately has no terminal_token. Capability discovery must
+# fail explicitly while the original scan bridge stays usable after update.
+AUTH_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: http://127.0.0.1:$SERVER_PORT" \
+  "http://127.0.0.1:$AGENT_PORT/terminal/catalog")
+[ "$AUTH_STATUS" = "503" ] && ok "Alte config ohne Token: Katalog meldet 503 (Legacy-Fallback)" || bad "Katalog: $AUTH_STATUS"
+SCAN_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: http://127.0.0.1:$SERVER_PORT" \
+  "http://127.0.0.1:$AGENT_PORT/scan/latest")
+[ "$SCAN_STATUS" = "404" ] && ok "Alte config: Scan-Brücke läuft ohne Token" || bad "Scan-Brücke: $SCAN_STATUS"
+
 say "2: Gleiche Version - nichts zu tun"
 PID_BEFORE="$(cat "$WORK/agent.pid")"
 if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi

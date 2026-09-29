@@ -318,10 +318,9 @@ public sealed class OfflineClockService(
     {
         if (entry.AuthenticatedTerminalId is not null)
         {
-            return settings.Employees.FirstOrDefault(e => e.IsEnabled
-                && !string.IsNullOrWhiteSpace(e.ApiToken)
+            return settings.Employees.FirstOrDefault(e => e.CanClock
                 && string.Equals(e.Id, entry.EmployeeId, StringComparison.OrdinalIgnoreCase))
-                ?? throw new KioskAuthenticationException("Mitarbeiter nicht gefunden oder deaktiviert.");
+                ?? throw new InvalidOperationException("Mitarbeiter nicht gefunden oder deaktiviert.");
         }
 
         var byPin = employees.FindEmployee(settings, new ClockRequest(entry.EmployeeId, entry.Pin));

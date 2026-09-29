@@ -3,6 +3,8 @@ import { ClockAction } from './kiosk.models';
 export interface OfflineKioskClockEvent {
   /** Terminal bridge used for PIN-free replay, persisted across reloads. */
   terminalId?: string | null;
+  /** Compatibility mode until this agent proves terminal authentication. */
+  legacyTerminalId?: string;
   /** Non-terminal browser needs a fresh PIN after a reload. */
   needsPin?: boolean;
   eventId: string;

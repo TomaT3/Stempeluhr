@@ -22,11 +22,13 @@ Private-Network-Header erlauben den Zugriff nur aus der Kiosk-Seite: Deren
 Origin ist die von `api_base_url` (oder `kiosk_origin`). Eine andere Seite
 im Kiosk-Browser bekommt für `/scan/*` ein 403 und kann Scans weder lesen
 noch bestätigen. Anfragen ohne `Origin` (curl, Updater) bleiben erlaubt,
-`/health` ist offen. Für `/terminal/*` ist die genaue konfigurierte Origin
+`/health` ist offen. Für `/terminal/*` ist die konfigurierte Origin (normalisiert wie bei Scans)
 auch bei curl Pflicht. Der Agent setzt `Authorization: Bearer …` und
 `X-Terminal-Id` selbst, folgt keinen Redirects und liefert das Token nie aus.
-Ein abweichendes `terminalId` im Sync-Event wird mit 409 abgewiesen.
-Fehlendes Token ergibt 503; 401 bei Entzug/Rotation wird an den Browser
+Der Agent setzt die eigene Terminal-ID; eine abweichende Kiosk-URL blockiert
+den Nachtrag nicht.
+Fehlendes Token ergibt 503 (Browser behält bis zum ersten erfolgreichen
+Katalogabruf den Legacy-Nachtrag); 401 bei Entzug/Rotation wird an den Browser
 weitergereicht. Die Queue bleibt dabei erhalten.
 
 ## Dateien

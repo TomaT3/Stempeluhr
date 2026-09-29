@@ -103,12 +103,12 @@
                800x480 nicht scrollt; nur die Liste scrollt bei vielen. -->
           <p class="start-choice-title" id="start-choice-title">Einstempeln auf</p>
           <div class="task-list" role="group" aria-labelledby="start-choice-title">
-            <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="start(null)">
+            <button class="task-button start-task" type="button" [disabled]="actionsBlocked()" (click)="start(null)">
               <span class="icon play" aria-hidden="true"></span>
               <span>{{ defaultTaskLabel() }}</span>
             </button>
             @for (task of employeeTasks(); track task.id) {
-              <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="start(task.id)">
+              <button class="task-button start-task" type="button" [disabled]="actionsBlocked()" (click)="start(task.id)">
                 <span class="icon play" aria-hidden="true"></span>
                 <span>{{ task.label }}</span>
               </button>
@@ -127,7 +127,7 @@
               class="task-button"
               type="button"
               [class.active]="onDefaultTask()"
-              [disabled]="isBusy() || onDefaultTask()"
+              [disabled]="actionsBlocked() || onDefaultTask()"
               (click)="switchTask(null)">
               {{ defaultTaskLabel() }}
             </button>
@@ -136,7 +136,7 @@
                 class="task-button"
                 type="button"
                 [class.active]="clockState.status()?.activeTaskId === task.id"
-                [disabled]="isBusy() || clockState.status()?.activeTaskId === task.id"
+                [disabled]="actionsBlocked() || clockState.status()?.activeTaskId === task.id"
                 (click)="switchTask(task.id)">
                 {{ task.label }}
               </button>
@@ -144,31 +144,31 @@
           </div>
           <button class="task-cancel" type="button" (click)="closeTaskPicker()">Abbrechen</button>
         } @else if (clockState.isWorking()) {
-          <button class="action-button pause" type="button" (click)="startPause()" [disabled]="isBusy()">
+          <button class="action-button pause" type="button" (click)="startPause()" [disabled]="actionsBlocked()">
             <span class="icon pause"></span>
             <span>Pause</span>
           </button>
           @if (employeeTasks().length > 0) {
-            <button class="action-button switch" type="button" (click)="openTaskPicker()" [disabled]="isBusy()">
+            <button class="action-button switch" type="button" (click)="openTaskPicker()" [disabled]="actionsBlocked()">
               <span class="icon swap" aria-hidden="true">⇄</span>
               <span>Tätigkeit wechseln</span>
             </button>
           }
-          <button class="action-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+          <button class="action-button stop" type="button" (click)="stop()" [disabled]="actionsBlocked()">
             <span class="icon square"></span>
             <span>Ausstempeln</span>
           </button>
         } @else if (clockState.isPaused()) {
-          <button class="action-button start" type="button" (click)="endPause()" [disabled]="isBusy()">
+          <button class="action-button start" type="button" (click)="endPause()" [disabled]="actionsBlocked()">
             <span class="icon play"></span>
             <span>Fortsetzen</span>
           </button>
-          <button class="action-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+          <button class="action-button stop" type="button" (click)="stop()" [disabled]="actionsBlocked()">
             <span class="icon square"></span>
             <span>Ausstempeln</span>
           </button>
         } @else if (clockState.status()) {
-          <button class="action-button start single" type="button" (click)="start()" [disabled]="isBusy()">
+          <button class="action-button start single" type="button" (click)="start()" [disabled]="actionsBlocked()">
             <span class="icon play"></span>
             <span>Einstempeln</span>
           </button>
@@ -176,11 +176,11 @@
           <!-- Status unbekannt: beide Richtungen anbieten. Der Nachtrag prueft
                serverseitig und verwirft einen Stempel, der nicht passt. Mit
                weiteren Tätigkeiten öffnet Einstempeln erst die Auswahl. -->
-          <button class="action-button start" type="button" (click)="requestStart()" [disabled]="isBusy()">
+          <button class="action-button start" type="button" (click)="requestStart()" [disabled]="actionsBlocked()">
             <span class="icon play"></span>
             <span>Einstempeln</span>
           </button>
-          <button class="action-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+          <button class="action-button stop" type="button" (click)="stop()" [disabled]="actionsBlocked()">
             <span class="icon square"></span>
             <span>Ausstempeln</span>
           </button>

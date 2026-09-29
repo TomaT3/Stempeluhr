@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read an ACR122U NFC reader via PC/SC and hand scans to the kiosk UI.
 
-The agent is a pure UID bridge: every card scan is published on a loopback
+The agent bridges UIDs and authenticated offline requests: every card scan is published on a loopback
 HTTP server (``GET /scan/latest``) and the kiosk web app confirms it via
 ``POST /scan/ack``. A scan only IDENTIFIES the employee - the actual stamp is
 triggered by a button in the kiosk UI, which also owns the offline queue.
@@ -96,8 +96,8 @@ class AgentConfig:
         with path.open("r", encoding="utf-8") as config_file:
             raw: dict[str, Any] = json.load(config_file)
 
-        # api_base_url is only needed by the updater (update.sh), but a
-        # missing value means a broken installation - fail loudly.
+        # Both the updater and the authenticated terminal proxy need this URL.
+        # A missing value means a broken installation - fail loudly.
         api_base_url = str(raw.get("api_base_url", "")).rstrip("/")
         if not api_base_url:
             raise ValueError("api_base_url is required")
@@ -187,9 +187,23 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
 
     def _terminal_proxy(self, path: str, post: bool = False) -> None:
         server: LocalScanServer = self.server.scan_server
-        # These privileged routes require the exact configured browser origin,
-        # including for requests without Origin (DNS rebinding/CSRF protection).
-        if not server.allowed_origin or self.headers.get("Origin") != server.allowed_origin:
+        # Read bounded POST bodies before replying, including 403/503. Closing
+        # with unread data can turn an actionable HTTP status into a reset.
+        raw_body = None
+        if post:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 262144:
+                    raise ValueError()
+                raw_body = self.rfile.read(length)
+            except ValueError:
+                self.close_connection = True
+                self._send_json(400, {"error": "invalid sync batch"})
+                return
+        # Missing Origin is still forbidden for privileged routes. Normalize
+        # explicit origins in the same way as the scan routes.
+        origin = self.headers.get("Origin")
+        if not origin or not server.allowed_origin or not server.allows_origin(origin):
             self._send_json(403, {"error": "origin not allowed"}, allow_origin=False)
             return
         config = server.config
@@ -199,20 +213,16 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         body = None
         if post:
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= 262144:
-                    raise ValueError()
-                payload = json.loads(self.rfile.read(length))
+                payload = json.loads(raw_body)
                 events = payload["events"]
                 if not isinstance(events, list) or len(events) > 100:
                     raise ValueError()
-                # Only forward event data, never arbitrary URLs or headers.
+                # The agent is authoritative for terminal identity. A renamed
+                # kiosk URL must not permanently strand an existing queue.
                 for event in events:
                     if not isinstance(event, dict):
                         raise ValueError()
-                    if event.get("terminalId") != config.terminal_id:
-                        self._send_json(409, {"error": "terminal id mismatch"})
-                        return
+                    event["terminalId"] = config.terminal_id
                     event.pop("pin", None)
                     event.pop("nfcCardId", None)
                 body = json.dumps({"events": events}).encode("utf-8")

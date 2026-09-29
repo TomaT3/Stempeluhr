@@ -196,15 +196,39 @@ def test_terminal_proxy() -> None:
         assert "nfcCardId" not in seen[-1][2]["events"][0]
         payload["events"][0]["terminalId"] = "wrong-terminal"
         req.data = json.dumps(payload).encode()
+        with urllib.request.urlopen(req) as response:
+            assert response.status == 200
+        assert seen[-1][2]["events"][0]["terminalId"] == "pi-1"
+        assert len(seen) == 3
+        assert request(agent.url + "/terminal/catalog", origin="https://STEMPELUHR.example.com:443")[0] == 200
+        assert len(seen) == 4
+        for origin in (None, FOREIGN):
+            req = urllib.request.Request(agent.url + "/terminal/sync", data=b"x" * 64000)
+            if origin:
+                req.add_header("Origin", origin)
+            try:
+                urllib.request.urlopen(req)
+                raise AssertionError("foreign/missing origin accepted")
+            except urllib.error.HTTPError as error:
+                assert error.code == 403
+                error.read()
+        unconfigured = LocalScanServer(port=0, allowed_origin=KIOSK)
+        unconfigured.start_background()
         try:
-            urllib.request.urlopen(req)
-            raise AssertionError("wrong terminal accepted")
-        except urllib.error.HTTPError as error:
-            assert error.code == 409
-        assert len(seen) == 2
+            req = urllib.request.Request(unconfigured.url + "/terminal/sync", data=b"x" * 64000,
+                                         headers={"Origin": KIOSK})
+            try:
+                urllib.request.urlopen(req)
+                raise AssertionError("missing token accepted")
+            except urllib.error.HTTPError as error:
+                assert error.code == 503
+                error.read()
+        finally:
+            unconfigured.shutdown()
+            unconfigured.server_close()
         redirect = True
         assert request(agent.url + "/terminal/catalog", origin=KIOSK)[0] == 502
-        assert len(seen) == 3  # Redirect target must not receive the bearer token.
+        assert len(seen) == 5  # Redirect target must not receive the bearer token.
     finally:
         agent.shutdown()
         agent.server_close()

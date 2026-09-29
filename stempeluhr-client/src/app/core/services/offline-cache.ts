@@ -200,9 +200,10 @@ export async function rememberEmployeePin(pin: string, employee: Employee): Prom
 
   // The employee may also have an entry for a PREVIOUS pin - that one can
   // only be stale too (the server just accepted this one), so it goes as well.
-  const entries = readPinCache().filter(entry => entry.employee.id !== employee.id);
+  const cached = readPinCache();
+  const entries = cached.filter(entry => entry.employee.id !== employee.id);
   entries.push({ salt, verifier, employee });
-  writeJson(PIN_CACHE_KEY, entries.slice(-Math.max(MAX_PIN_ENTRIES, readPinCache().length)));
+  writeJson(PIN_CACHE_KEY, entries.slice(-Math.max(MAX_PIN_ENTRIES, cached.length)));
 }
 
 /**

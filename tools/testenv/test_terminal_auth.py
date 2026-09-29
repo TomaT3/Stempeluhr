@@ -10,8 +10,10 @@ from pathlib import Path
 base, settings_path = sys.argv[1:]
 
 
-def request(path, body=None, token=None, terminal="test-terminal"):
+def request(path, body=None, token=None, terminal="test-terminal", authorization=None):
     headers = {"Content-Type": "application/json"}
+    if authorization is not None:
+        headers["Authorization"] = authorization
     if token is not None:
         headers.update({"Authorization": "Bearer " + token, "X-Terminal-Id": terminal})
     req = urllib.request.Request(base + path, headers=headers,
@@ -48,5 +50,12 @@ assert request("/api/kiosk/clock/sync", {"events": [event]}, token=token)[0] == 
 assert request("/api/kiosk/catalog", token="rotated-terminal-token")[0] == 200
 settings["terminalTokens"].clear()
 path.write_text(json.dumps(settings))
+assert request("/api/kiosk/catalog", token="rotated-terminal-token")[0] == 401
+settings["terminalTokens"] = None
+path.write_text(json.dumps(settings))
+legacy = dict(event, eventId=str(uuid.uuid4()), pin="1234")
+status, result = request("/api/kiosk/clock/sync", {"events": [legacy]}, authorization="Basic cHJveHk6c2VjcmV0")
+assert status == 200 and result["results"][0]["status"] == "applied", result
+assert request("/api/kiosk/clock/sync", {"events": []}, authorization="Bearer invalid")[0] == 401
 assert request("/api/kiosk/catalog", token="rotated-terminal-token")[0] == 401
 print("Terminal authentication integration passed")

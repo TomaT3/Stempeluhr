@@ -35,6 +35,22 @@ public sealed class OfflineClockServiceTests
     private static readonly DateTimeOffset T1230 = Parse("2026-08-24T12:30:00Z");
 
     [Fact]
+    public async Task RemovedTerminalEmployeesDoNotContainOrReorderOtherEvents()
+    {
+        var (service, kimai) = CreateService();
+        var result = await service.SyncKioskAsync([
+            Kiosk("start", "start", T08, "") with { AuthenticatedTerminalId = "pi-1" },
+            Kiosk("removed-1", "start", T10, "") with { EmployeeId = "removed", AuthenticatedTerminalId = "pi-1" },
+            Kiosk("removed-2", "stop", T10.AddMinutes(1), "") with { EmployeeId = "removed", AuthenticatedTerminalId = "pi-1" },
+            Kiosk("stop", "stop", T12, "") with { AuthenticatedTerminalId = "pi-1" }
+        ]);
+        Assert.Equal(new[] { "applied", "rejected", "rejected", "applied" }, result.Results.Select(r => r.Status));
+        Assert.Equal(0, result.Buffered);
+        Assert.Equal(new[] { "start", "stop" }, kimai.Operations.Select(op => op.Kind));
+        Assert.Equal(T12, kimai.Operations.Last().At);
+    }
+
+    [Fact]
     public async Task TerminalAuthenticationSurvivesOutboxAndReplaysInOrder()
     {
         var (service, kimai) = CreateService();

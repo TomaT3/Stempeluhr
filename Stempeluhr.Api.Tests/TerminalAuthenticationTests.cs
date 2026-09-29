@@ -10,6 +10,33 @@ namespace Stempeluhr.Api.Tests;
 
 public sealed class TerminalAuthenticationTests
 {
+    [Theory]
+    [InlineData("Basic abc", false)]
+    [InlineData("Bearer abc", true)]
+    [InlineData("bearer abc", true)]
+    [InlineData("Bearer", true)]
+    public void OnlyTerminalCredentialsOptIntoTerminalAuthentication(string authorization, bool expected)
+    {
+        var request = new DefaultHttpContext().Request;
+        request.Headers.Authorization = authorization;
+        Assert.Equal(expected, TerminalAuthentication.IsTerminalRequest(request));
+        request.Headers["X-Terminal-Id"] = "pi-1";
+        Assert.True(TerminalAuthentication.IsTerminalRequest(request));
+    }
+
+    [Fact]
+    public void NullTerminalTokensAreNormalizedForAuthenticationAndAdmin()
+    {
+        var settings = JsonSerializer.Deserialize<RuntimeSettings>("{\"terminalTokens\":null}",
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Empty(settings.TerminalTokens);
+        var request = new DefaultHttpContext().Request;
+        request.Headers.Authorization = "Bearer token";
+        request.Headers["X-Terminal-Id"] = "pi-1";
+        Assert.Null(TerminalAuthentication.Authenticate(request, settings));
+        Assert.Empty(AdminSettingsDto.FromSettings(settings).TerminalIds);
+    }
+
     [Fact]
     public void TokensAreBoundToTerminalAndCanBeRotatedOrRevoked()
     {

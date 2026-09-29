@@ -131,9 +131,9 @@ public static class KioskEndpoints
                 forwardedFirst.Length == 0 ? "-" : forwardedFirst,
                 request.Events?.Count ?? 0);
 
-            var hasTerminalAuth = httpRequest.Headers.ContainsKey("Authorization")
-                || httpRequest.Headers.ContainsKey("X-Terminal-Id");
-            var terminalId = TerminalAuthentication.Authenticate(httpRequest, settingsStore.Load());
+            var hasTerminalAuth = TerminalAuthentication.IsTerminalRequest(httpRequest);
+            var terminalId = hasTerminalAuth
+                ? TerminalAuthentication.Authenticate(httpRequest, settingsStore.Load()) : null;
             if (hasTerminalAuth && terminalId is null) return Results.Unauthorized();
 
             if (request.Events is { Count: > MaxSyncBatchSize })
