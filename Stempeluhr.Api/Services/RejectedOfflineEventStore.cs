@@ -18,6 +18,7 @@ public sealed record RejectedOfflineEvent(
 public sealed class RejectedOfflineEventStore(string filePath, ILogger<RejectedOfflineEventStore>? logger = null)
 {
     private const int MaxResolvedEntries = 1000;
+    private static readonly TimeSpan SendHistoryRetention = TimeSpan.FromDays(1);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly object _gate = new();
     private List<RejectedOfflineEvent>? _entries;
@@ -167,6 +168,14 @@ public sealed class RejectedOfflineEventStore(string filePath, ILogger<RejectedO
             .Take(MaxResolvedEntries)
             .Select(entry => entry.EventId)
             .ToHashSet(StringComparer.Ordinal);
+        // The notifier derives its daily Telegram limit from TelegramNotifiedAt.
+        // Keep one entry per send of the last day (covers the whole current
+        // UTC day), so trimming can never hand out that budget a second time.
+        var sendCutoff = DateTimeOffset.UtcNow - SendHistoryRetention;
+        keptResolvedIds.UnionWith(entries
+            .Where(entry => entry.ResolvedAt is not null && entry.TelegramNotifiedAt >= sendCutoff)
+            .GroupBy(entry => entry.TelegramNotifiedAt)
+            .Select(send => send.First().EventId));
         // Resolved entries no longer await Telegram (see AwaitsTelegram), so
         // they are trimmed regardless of their delivery state.
         return entries.Where(entry => entry.ResolvedAt is null

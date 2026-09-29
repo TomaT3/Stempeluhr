@@ -212,6 +212,59 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task RefusalResolvedDuringTimezoneLookup_IsDroppedFromTheBatch()
+    {
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-race-{Guid.NewGuid():N}.json"));
+        var (_, telegram, notifier, kimai) = CreateServiceWithTelegramAndKimai(existingJournal: journal);
+        journal.Record(NotificationEntry("entered-meanwhile", T08));
+        journal.Record(NotificationEntry("still-open", T10));
+        kimai.DuringTimezoneLookup = () => journal.Resolve("entered-meanwhile");
+
+        await notifier.ProcessPendingAsync();
+
+        var text = Assert.Single(telegram.Messages);
+        Assert.StartsWith("⚠️ Offline-Stempel nicht übernommen", text);
+        Assert.Contains("24.08. 12:00 Europe/Berlin", text); // still-open, 10:00 UTC
+        Assert.DoesNotContain("24.08. 10:00", text);
+        Assert.Null(journal.Find("entered-meanwhile")!.TelegramNotifiedAt);
+        Assert.NotNull(journal.Find("still-open")!.TelegramNotifiedAt);
+    }
+
+    [Fact]
+    public async Task TrimmingResolvedEntries_DoesNotFreeTheDailyTelegramLimit()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"stempeluhr-trim-{Guid.NewGuid():N}.json");
+        // The journal trims against the real clock, so the notifier uses it too.
+        var now = DateTimeOffset.UtcNow;
+        var clock = new ManualClock(now);
+        var entries = new List<RejectedOfflineEvent>();
+        for (var i = 0; i < 20; i++)
+        {
+            // 20 sends today, resolved long ago relative to the newer entries below.
+            entries.Add(NotificationEntry($"sent-{i}", T08) with
+            {
+                TelegramNotifiedAt = now.AddTicks(-(i + 1)),
+                ResolvedAt = now.AddHours(-2)
+            });
+        }
+        for (var i = 0; i < 1000; i++)
+        {
+            entries.Add(NotificationEntry($"resolved-{i}", T08) with { ResolvedAt = now.AddMinutes(-1) });
+        }
+        File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(entries,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+
+        var journal = new RejectedOfflineEventStore(path);
+        var (_, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(existingJournal: journal, clock: clock);
+        journal.Record(NotificationEntry("waiting", T10)); // trims to 1000 resolved entries
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        await notifier.ProcessPendingAsync();
+
+        Assert.Empty(telegram.Messages);
+    }
+
+    [Fact]
     public async Task DeliveryThatCannotBeJournaled_IsNotResent_AndIsRecordedLater()
     {
         var path = Path.Combine(Path.GetTempPath(), $"stempeluhr-readonly-{Guid.NewGuid():N}.json");
@@ -2158,12 +2211,16 @@ public sealed class OfflineClockServiceTests
         /// <summary>null mimics a Kimai error response (IKimaiClient contract).</summary>
         public string? TimezoneId { get; set; } = "Europe/Berlin";
 
+        /// <summary>Runs while the lookup is "in flight", e.g. an admin action.</summary>
+        public Action? DuringTimezoneLookup { get; set; }
+
         public Task<string?> GetCurrentUserTimezoneAsync(
             RuntimeSettings settings,
             EmployeeSettings employee,
             CancellationToken cancellationToken = default)
         {
             TimezoneCalls++;
+            DuringTimezoneLookup?.Invoke();
             return Task.FromResult(TimezoneId);
         }
 

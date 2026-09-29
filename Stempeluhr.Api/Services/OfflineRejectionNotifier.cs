@@ -56,9 +56,10 @@ public sealed class OfflineRejectionNotifier(
 
             var all = rejectedEvents.Snapshot();
             var alreadySent = _unpersistedSends.SelectMany(send => send.EventIds).ToHashSet(StringComparer.Ordinal);
-            var pending = all.Where(entry => RejectedOfflineEventStore.AwaitsTelegram(entry)
-                    && !alreadySent.Contains(entry.EventId))
+            RejectedOfflineEvent[] Pending(IEnumerable<RejectedOfflineEvent> entries) => entries
+                .Where(entry => RejectedOfflineEventStore.AwaitsTelegram(entry) && !alreadySent.Contains(entry.EventId))
                 .OrderBy(entry => entry.PerformedAt).ToArray();
+            var pending = Pending(all);
             if (pending.Length == 0) return;
 
             // Send times from the future (clock stepped back after a send)
@@ -71,13 +72,22 @@ public sealed class OfflineRejectionNotifier(
             if (sendTimes.Count(at => at.UtcDateTime.Date == now.UtcDateTime.Date) >= DailyLimit) return;
             if (sendTimes.Length > 0 && now - sendTimes.Max() < MinimumInterval) return;
 
+            // The timezone lookups await Kimai for seconds; an admin may resolve
+            // a case meanwhile. Re-read the batch after every lookup, so the
+            // last check against the journal directly precedes the send.
+            var zones = new Dictionary<string, TimeZoneInfo>(StringComparer.OrdinalIgnoreCase);
+            while (new[] { pending[0], pending[^1] }.FirstOrDefault(entry => !zones.ContainsKey(entry.EmployeeId))
+                   is { } withoutZone)
+            {
+                zones[withoutZone.EmployeeId] = await ResolveTimeZoneAsync(settings, withoutZone, cancellationToken);
+                pending = Pending(rejectedEvents.Snapshot());
+                if (pending.Length == 0) return;
+            }
+
             var first = pending[0];
             var latest = pending[^1];
-            var firstZone = await ResolveTimeZoneAsync(settings, first, cancellationToken);
-            var lastZone = latest.EmployeeId.Equals(first.EmployeeId, StringComparison.OrdinalIgnoreCase)
-                ? firstZone : await ResolveTimeZoneAsync(settings, latest, cancellationToken);
             var text = TelegramMessageFactory.BuildOfflineRejectionSummary(
-                first, firstZone, latest, lastZone, pending.Length);
+                first, zones[first.EmployeeId], latest, zones[latest.EmployeeId], pending.Length);
 
             // A failed send remains pending. A successful send is recorded
             // before the next batch can start, including across restarts.
