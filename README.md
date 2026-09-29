@@ -218,6 +218,23 @@ ebenso Ablehnungen, die bei ausgeschaltetem Telegram entstanden sind. Im
 Journal als erledigt markierte Fälle werden nicht mehr gemeldet. Alle
 Ablehnungen bleiben unabhängig davon im Admin-Journal sichtbar.
 
+Außerdem warnt die API, wenn jemand **mehr als 6 Stunden am Stück ohne
+Pause** oder **mehr als 10 Stunden in einer Schicht** arbeitet, z. B.
+`⚠️ Anna Mustermann · über 6 Std. ohne Pause (ab 07:58, 6:05 Std.)` oder
+`⚠️ Anna Mustermann · über 10 Std. in der Schicht seit 29.09. 22:00 (10:02 Std.)`.
+Ein Hintergrunddienst prüft dazu alle 5 Minuten die Kimai-Timesheets der
+letzten 48 Stunden, die Warnung kommt also schon, während noch gestempelt ist.
+Offline-Nachträge und Stempel anderer Terminals zählen genauso.
+Gezählt wird nur Arbeit, keine Pause-Aktivität. Eine Pause oder Ausstempel-Lücke
+unterbricht „am Stück“ erst ab 15 Minuten, ein Tätigkeitswechsel nie. Eine
+Schicht endet erst nach 8 Stunden ohne Arbeit, unabhängig von Mitternacht:
+Nachtschichten und geteilte Dienste zählen als Ganzes. Jede Überschreitung
+meldet sich einmal pro Block bzw. Schicht; `data/work-time-alerts.json` merkt
+sich gesendete Warnungen auch über einen Neustart. Scheitert der Versand,
+folgt der nächste Versuch bei der nächsten Prüfung. Fälle, die schon länger als
+24 Stunden vorbei sind, werden nicht mehr gemeldet. Ohne Telegram-Konfiguration
+fragt der Dienst Kimai gar nicht erst ab.
+
 1. Bei @BotFather `/newbot` ausführen, Token kopieren.
 2. Private Gruppe anlegen, Bot hinzufügen und zum Admin machen.
 3. Eine Nachricht in die Gruppe schreiben, dann
