@@ -347,6 +347,16 @@ separater Schritt (siehe [Update](#update)).
   schon angenommene Server-Outbox-Einträge werden weiterhin abgearbeitet.
 - `/pi/` liefert öffentlichen Repo-Code aus; die Integrität sichern HTTPS und
   die SHA-256 in `agent.json`.
+- Fehlversuchs-Sperre für PINs (im Speicher der API): Nach 5 falschen PINs oder
+  Karten in Folge für einen Mitarbeiter sperrt die API ihn für 1, dann 5, dann
+  15 Minuten. Das gilt für Live-Stempeln, `/api/clock/*` und den PIN-Nachtrag.
+  PIN-Login und Stundenübersicht ohne Mitarbeiter-ID teilen einen globalen
+  Zähler mit Schwelle 10. Eine erfolgreiche Anmeldung setzt den Zähler zurück,
+  nach einer Stunde ohne Fehlversuch beginnt er neu. Während der Sperre prüft
+  die API die PIN gar nicht erst und antwortet mit `429` und `Retry-After`.
+  Der Kiosk reiht Live-Stempel dann offline ein, und Nachträge des gesperrten
+  Mitarbeiters bleiben `buffered`, bis die Sperre abläuft. Nachträge über
+  Terminal-Token sind nicht betroffen. Ein API-Neustart hebt alle Sperren auf.
 
 ## Bekannte Grenzen und offene Punkte
 
@@ -360,5 +370,6 @@ separater Schritt (siehe [Update](#update)).
   Online-Anmeldung; sie bleiben bis dahin erhalten.
 - Nutzt ein Mitarbeiter während eines Ausfalls mehrere Terminals, kann die
   Reihenfolge beim Nachtrag nach Eingang statt nach Zeit gemischt werden.
-- Weitere offene Issues: PIN-Fehlversuch-Backoff (#8), Telegram-Hinweis bei
-  abgelehnten Stempeln (#36).
+- Wer eine Mitarbeiter-ID kennt, kann diesen Mitarbeiter mit falschen PINs
+  gezielt sperren. Seine Stempel gehen dabei nicht verloren, werden aber erst
+  nach Ablauf der Sperre gebucht.

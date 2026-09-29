@@ -29,6 +29,9 @@ namespace Stempeluhr.Api.Services;
 ///   and against the periodic background flush.
 /// - Permanent errors (unknown employee, wrong PIN, missing config) are
 ///   reported per event as "rejected" instead of failing the whole batch.
+/// - An employee locked after failed PINs (<see cref="PinAttemptGuard"/>)
+///   is neither rejected nor allowed to block others: their events wait
+///   ("buffered") until the lock expires.
 /// </summary>
 public sealed class OfflineClockService(
     IRuntimeSettingsStore settingsStore,
@@ -38,10 +41,12 @@ public sealed class OfflineClockService(
     KioskEventCoordinator kioskEvents,
     RejectedOfflineEventStore rejectedEvents,
     ILogger<OfflineClockService> logger,
-    OfflineRejectionNotifier? rejectionNotifier = null) : IOfflineClockService
+    OfflineRejectionNotifier? rejectionNotifier = null,
+    PinAttemptGuard? pinAttempts = null) : IOfflineClockService
 {
     private const string BufferedStatus = "buffered";
     private const string BufferedMessage = "Kimai nicht erreichbar - wird automatisch nachgetragen.";
+    private const string LockedMessage = "Zu viele falsche PIN-Eingaben - wird nach Ablauf der Sperre nachgetragen.";
 
     // Plain list instead of a queue: every mutation happens while holding
     // _syncLock, and an entry whose replay failed transiently must go back to
@@ -129,10 +134,25 @@ public sealed class OfflineClockService(
                 }
             }
 
+            // Employees whose PIN is locked (issue #8). Their events are
+            // answered "buffered" WITHOUT a server copy and without registering
+            // the ID: the kiosk keeps them and retries after the lock, and they
+            // never block the outbox for everybody else.
+            var lockedEmployees = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             for (var i = 0; i < orderedKioskEvents.Count; i++)
             {
                 var entry = orderedKioskEvents[i];
                 cancellationToken.ThrowIfCancellationRequested();
+
+                if (lockedEmployees.Contains(entry.EmployeeId))
+                {
+                    // Later events of a locked employee must not overtake the
+                    // held-back one, even if the lock expired meanwhile.
+                    buffered++;
+                    results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, LockedMessage));
+                    continue;
+                }
 
                 if (!eventIdStore.TryRegister(entry.EventId))
                 {
@@ -198,6 +218,13 @@ public sealed class OfflineClockService(
 
                     buffered += skipped;
                     break;
+                }
+                catch (PinLockedException)
+                {
+                    eventIdStore.Remove(entry.EventId);
+                    lockedEmployees.Add(entry.EmployeeId);
+                    buffered++;
+                    results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, LockedMessage));
                 }
                 catch (Exception ex)
                 {
@@ -339,19 +366,24 @@ public sealed class OfflineClockService(
                 ?? throw new KioskEmployeeUnavailableException();
         }
 
-        var byPin = employees.FindEmployee(settings, new ClockRequest(entry.EmployeeId, entry.Pin));
-        if (byPin is not null)
+        EmployeeSettings? Verify()
         {
-            return byPin;
+            var byPin = employees.FindEmployee(settings, new ClockRequest(entry.EmployeeId, entry.Pin));
+            if (byPin is not null)
+            {
+                return byPin;
+            }
+
+            var byCard = employees.FindEmployeeByNfcCardId(settings, entry.NfcCardId);
+            return byCard is not null && string.Equals(byCard.Id, entry.EmployeeId, StringComparison.OrdinalIgnoreCase)
+                ? byCard
+                : null;
         }
 
-        var byCard = employees.FindEmployeeByNfcCardId(settings, entry.NfcCardId);
-        if (byCard is null || !string.Equals(byCard.Id, entry.EmployeeId, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new KioskAuthenticationException("Mitarbeiter nicht gefunden oder PIN falsch.");
-        }
-
-        return byCard;
+        // Same failed-attempt lock as the live endpoints (issue #8): a locked
+        // employee throws PinLockedException before the PIN is checked.
+        var employee = pinAttempts is null ? Verify() : pinAttempts.Authenticate(settings, entry.EmployeeId, Verify);
+        return employee ?? throw new KioskAuthenticationException("Mitarbeiter nicht gefunden oder PIN falsch.");
     }
 
     /// <summary>
@@ -975,12 +1007,24 @@ public sealed class OfflineClockService(
         var drained = 0;
         SortChronologically(_kioskOutbox, entry => entry.PerformedAt);
 
-        while (_kioskOutbox.Count > 0)
+        // Events of an employee whose PIN is locked (issue #8) stay in place,
+        // in order, for a later round; everybody else's events go on. Without
+        // this, one locked account at the head would hold up the whole outbox.
+        var lockedEmployees = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var index = 0;
+
+        while (index < _kioskOutbox.Count)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var kioskEntry = _kioskOutbox[0];
-            _kioskOutbox.RemoveAt(0);
+            var kioskEntry = _kioskOutbox[index];
+            if (lockedEmployees.Contains(kioskEntry.EmployeeId))
+            {
+                index++;
+                continue;
+            }
+
+            _kioskOutbox.RemoveAt(index);
 
             if (!eventIdStore.TryRegister(kioskEntry.EventId))
             {
@@ -1001,9 +1045,9 @@ public sealed class OfflineClockService(
             catch (KimaiApiException ex) when (IsRetryable(ex))
             {
                 // Still down - free the event ID for a later retry and put it
-                // back at the front, then stop flushing this round.
+                // back where it was, then stop flushing this round.
                 eventIdStore.Remove(kioskEntry.EventId);
-                _kioskOutbox.Insert(0, kioskEntry);
+                _kioskOutbox.Insert(index, kioskEntry);
                 break;
             }
             catch (Exception ex) when (IsTransientError(ex))
@@ -1011,8 +1055,15 @@ public sealed class OfflineClockService(
                 // Kimai unreachable at the network level, or the live request of
                 // this event still running - put back and retry later.
                 eventIdStore.Remove(kioskEntry.EventId);
-                _kioskOutbox.Insert(0, kioskEntry);
+                _kioskOutbox.Insert(index, kioskEntry);
                 break;
+            }
+            catch (PinLockedException)
+            {
+                eventIdStore.Remove(kioskEntry.EventId);
+                _kioskOutbox.Insert(index, kioskEntry);
+                lockedEmployees.Add(kioskEntry.EmployeeId);
+                index++;
             }
             catch (Exception ex)
             {

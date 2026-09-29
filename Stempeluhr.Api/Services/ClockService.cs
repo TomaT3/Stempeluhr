@@ -8,7 +8,8 @@ public sealed class ClockService(
     IKimaiClient kimai,
     ITelegramNotifier? notifier = null,
     ILogger<ClockService>? logger = null,
-    KioskEventCoordinator? kioskEvents = null) : IClockService
+    KioskEventCoordinator? kioskEvents = null,
+    PinAttemptGuard? pinAttempts = null) : IClockService
 {
     /// <summary>Kiosk event IDs are 32 hex characters; anything longer is not one.</summary>
     private const int MaxEventIdLength = 64;
@@ -16,7 +17,7 @@ public sealed class ClockService(
     public async Task<KioskEmployeeSessionDto?> LoginWithPinAsync(string? pin, CancellationToken cancellationToken = default)
     {
         var settings = settingsStore.Load();
-        var employee = employees.FindEmployeeByPin(settings, pin);
+        var employee = FindEmployeeByPin(settings, pin);
         if (employee is null)
         {
             return null;
@@ -29,7 +30,7 @@ public sealed class ClockService(
     public async Task<HoursOverviewDto?> GetHoursOverviewAsync(string? pin, CancellationToken cancellationToken = default)
     {
         var settings = settingsStore.Load();
-        var employee = employees.FindEmployeeByPin(settings, pin);
+        var employee = FindEmployeeByPin(settings, pin);
         if (employee is null)
         {
             return null;
@@ -190,28 +191,41 @@ public sealed class ClockService(
     private EmployeeContext? FindEmployee(ClockRequest request)
     {
         var settings = settingsStore.Load();
-        var employee = employees.FindEmployee(settings, request);
+        var employee = Authenticate(settings, request.EmployeeId, () => employees.FindEmployee(settings, request));
         return employee is null ? null : new EmployeeContext(settings, employee);
     }
 
     private EmployeeContext? FindEmployeeForClockAction(KioskClockRequest request)
     {
         var settings = settingsStore.Load();
-        var pinEmployee = employees.FindEmployee(settings, new ClockRequest(request.EmployeeId, request.Pin));
-        if (pinEmployee is not null)
+        var employee = Authenticate(settings, request.EmployeeId, () =>
         {
-            return new EmployeeContext(settings, pinEmployee);
-        }
+            var pinEmployee = employees.FindEmployee(settings, new ClockRequest(request.EmployeeId, request.Pin));
+            if (pinEmployee is not null)
+            {
+                return pinEmployee;
+            }
 
-        var nfcEmployee = employees.FindEmployeeByNfcCardId(settings, request.NfcCardId);
-        if (nfcEmployee is null)
-        {
-            return null;
-        }
+            var nfcEmployee = employees.FindEmployeeByNfcCardId(settings, request.NfcCardId);
+            return nfcEmployee is not null
+                && string.Equals(nfcEmployee.Id, request.EmployeeId, StringComparison.OrdinalIgnoreCase)
+                ? nfcEmployee
+                : null;
+        });
+        return employee is null ? null : new EmployeeContext(settings, employee);
+    }
 
-        return string.Equals(nfcEmployee.Id, request.EmployeeId, StringComparison.OrdinalIgnoreCase)
-            ? new EmployeeContext(settings, nfcEmployee)
-            : null;
+    /// <exception cref="PinLockedException">The employee is locked (issue #8).</exception>
+    private EmployeeSettings? Authenticate(RuntimeSettings settings, string? employeeId, Func<EmployeeSettings?> verify)
+    {
+        return pinAttempts is null ? verify() : pinAttempts.Authenticate(settings, employeeId, verify);
+    }
+
+    /// <exception cref="PinLockedException">PIN login is locked (issue #8).</exception>
+    private EmployeeSettings? FindEmployeeByPin(RuntimeSettings settings, string? pin)
+    {
+        EmployeeSettings? Verify() => employees.FindEmployeeByPin(settings, pin);
+        return pinAttempts is null ? Verify() : pinAttempts.AuthenticatePinLogin(pin, Verify);
     }
 
     /// <summary>

@@ -25,6 +25,8 @@ builder.Services.AddSingleton<KioskEventCoordinator>();
 builder.Services.AddHostedService<OfflineOutboxBackgroundService>();
 // Separate throttles for the unauthenticated kiosk sync and identify endpoints.
 builder.Services.AddKioskRateLimiters();
+// Failed-PIN lock per employee (issue #8); shared by live and replay paths.
+builder.Services.AddSingleton<PinAttemptGuard>();
 builder.Services.AddScoped<IClockService, ClockService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 // Telegram-Notifier: Singleton + named HttpClient. Die Notify-Task läuft

@@ -30,7 +30,7 @@ public static class KioskEndpoints
         {
             var session = await clockService.LoginWithPinAsync(request.Pin, cancellationToken);
             return session is null ? Results.Unauthorized() : Results.Ok(session);
-        });
+        }).AddEndpointFilter(PinLockedException.Filter);
 
         app.MapPost("/api/kiosk/hours", async (
             KioskPinLoginRequest request,
@@ -39,7 +39,7 @@ public static class KioskEndpoints
         {
             var hours = await clockService.GetHoursOverviewAsync(request.Pin, cancellationToken);
             return hours is null ? Results.Unauthorized() : Results.Ok(hours);
-        });
+        }).AddEndpointFilter(PinLockedException.Filter);
 
         app.MapPost("/api/kiosk/clock", async (
             KioskClockRequest request,
@@ -54,7 +54,7 @@ public static class KioskEndpoints
                 ClockActionResult.BadRequest => Results.BadRequest(new { message = "Unbekannte Stempelaktion oder Taetigkeit." }),
                 _ => Results.Ok(status.Status)
             };
-        });
+        }).AddEndpointFilter(PinLockedException.Filter);
 
         app.MapPost("/api/kiosk/identify", async (
             HttpRequest httpRequest,
