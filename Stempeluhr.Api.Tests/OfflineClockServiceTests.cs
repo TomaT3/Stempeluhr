@@ -384,6 +384,138 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task LockedEmployeeEvents_StayBufferedWithoutBlockingOthers_AndReplayAfterTheLock()
+    {
+        var clock = new ManualClock(T08);
+        var guard = new PinAttemptGuard(clock: clock);
+        var (service, kimai, journal) = CreateServiceWithPinGuard(guard);
+        for (var i = 0; i < PinAttemptGuard.EmployeeThreshold; i++) guard.RecordFailure(PinAttemptGuard.EmployeeKey("max"));
+
+        var batch = new[]
+        {
+            Kiosk("max-start", "start", T08),
+            Kiosk("anna-start", "start", T10, "5678") with { EmployeeId = "anna" },
+            Kiosk("max-stop", "stop", T12),
+        };
+        var locked = await service.SyncKioskAsync(batch);
+
+        Assert.Equal(new[] { "buffered", "applied", "buffered" }, locked.Results.Select(r => r.Status));
+        Assert.Equal(2, locked.Buffered);
+        Assert.Equal(new[] { ("start", T10) }, kimai.Operations);
+        Assert.Empty(journal.List());
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var retry = await service.SyncKioskAsync(batch);
+
+        Assert.Equal(new[] { "applied", "duplicate", "applied" }, retry.Results.Select(r => r.Status));
+        Assert.Equal(("stop", T12), kimai.Operations.Last());
+    }
+
+    [Fact]
+    public async Task WrongPinReplays_CountTowardTheLock_ThenEventsAreBufferedInsteadOfRejected()
+    {
+        var guard = new PinAttemptGuard(clock: new ManualClock(T08));
+        var (service, kimai, _) = CreateServiceWithPinGuard(guard);
+
+        for (var i = 0; i < PinAttemptGuard.EmployeeThreshold; i++)
+        {
+            Assert.Equal("rejected", Assert.Single((await service.SyncKioskAsync([
+                Kiosk($"wrong-{i}", "start", T08, "0000")])).Results).Status);
+        }
+
+        var right = await service.SyncKioskAsync([Kiosk("right", "start", T10)]);
+
+        Assert.Equal("buffered", Assert.Single(right.Results).Status);
+        Assert.Empty(kimai.Operations);
+    }
+
+    [Fact]
+    public async Task OutboxEventsOfALockedEmployee_WaitWithoutHoldingUpOthers()
+    {
+        var clock = new ManualClock(T08);
+        var guard = new PinAttemptGuard(clock: clock);
+        var (service, kimai, _) = CreateServiceWithPinGuard(guard);
+        kimai.FailNextStatusCalls = 2;
+        var maxStart = Kiosk("max-start", "start", T08);
+        Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([maxStart])).Results).Status);
+        for (var i = 0; i < PinAttemptGuard.EmployeeThreshold; i++) guard.RecordFailure(PinAttemptGuard.EmployeeKey("max"));
+
+        // Only Max's own new event queues behind his backlog; Anna is applied
+        // live and learns it right away instead of only on a later retry.
+        var mixed = await service.SyncKioskAsync([
+            Kiosk("anna-start", "start", T10, "5678") with { EmployeeId = "anna" },
+            Kiosk("max-stop", "stop", T12),
+        ]);
+        Assert.Equal("applied", mixed.Results.Single(r => r.EventId == "anna-start").Status);
+        Assert.Equal("buffered", mixed.Results.Single(r => r.EventId == "max-stop").Status);
+        Assert.Equal(1, mixed.Accepted);
+        Assert.Equal(new[] { ("start", T10) }, kimai.Operations);
+        await service.FlushOutboxAsync();
+        Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([maxStart])).Results).Status);
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await service.FlushOutboxAsync();
+
+        Assert.Equal("duplicate", Assert.Single((await service.SyncKioskAsync([maxStart])).Results).Status);
+        // The event queued behind the backlog was applied by the outbox too.
+        Assert.Equal("duplicate", Assert.Single((await service.SyncKioskAsync([Kiosk("max-stop", "stop", T12)])).Results).Status);
+    }
+
+    [Fact]
+    public async Task OutageAfterALockedEvent_KeepsTheLockedEmployeesLaterEventsWithTheKiosk()
+    {
+        var clock = new ManualClock(T08);
+        var guard = new PinAttemptGuard(clock: clock);
+        var (service, kimai, _) = CreateServiceWithPinGuard(guard);
+        for (var i = 0; i < PinAttemptGuard.EmployeeThreshold; i++) guard.RecordFailure(PinAttemptGuard.EmployeeKey("max"));
+        kimai.FailNextStatusCalls = 2;
+        var batch = new[]
+        {
+            Kiosk("max-start", "start", T08),
+            Kiosk("anna-start", "start", T10, "5678") with { EmployeeId = "anna" },
+            Kiosk("max-stop", "stop", T12),
+        };
+
+        var locked = await service.SyncKioskAsync(batch);
+
+        Assert.All(locked.Results, r => Assert.Equal("buffered", r.Status));
+        // Max's stop must not wait in the outbox while his start stays with
+        // the kiosk: after the lock it would replay first, as a no-op.
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await service.FlushOutboxAsync();
+        Assert.DoesNotContain(kimai.Operations, op => op.Kind == "stop");
+
+        var retry = await service.SyncKioskAsync(batch);
+
+        Assert.Equal(new[] { "applied", "duplicate", "applied" }, retry.Results.Select(r => r.Status));
+        Assert.Equal(("stop", T12), kimai.Operations.Last());
+    }
+
+    [Fact]
+    public async Task KimaiOutage_StillQueuesTheWholeBatchBehindTheBacklog()
+    {
+        var guard = new PinAttemptGuard(clock: new ManualClock(T08));
+        var (service, kimai, _) = CreateServiceWithPinGuard(guard);
+        kimai.FailNextStatusCalls = 4;
+        Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([Kiosk("max-start", "start", T08)])).Results).Status);
+
+        var anna = await service.SyncKioskAsync([Kiosk("anna-start", "start", T10, "5678") with { EmployeeId = "anna" }]);
+
+        Assert.Equal("buffered", Assert.Single(anna.Results).Status);
+        Assert.Empty(kimai.Operations);
+    }
+
+    private static (OfflineClockService Service, FakeKimaiClient Kimai, RejectedOfflineEventStore Journal) CreateServiceWithPinGuard(
+        PinAttemptGuard guard)
+    {
+        var kimai = new FakeKimaiClient();
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-pin-lock-{Guid.NewGuid():N}.json"));
+        var service = new OfflineClockService(new InMemorySettingsStore(TestSettings()), new InMemoryEmployeeService(), kimai,
+            new InMemoryEventIdStore(), new KioskEventCoordinator(), journal, new RecordingLogger(), pinAttempts: guard);
+        return (service, kimai, journal);
+    }
+
+    [Fact]
     public async Task TerminalAuthenticationSurvivesOutboxAndReplaysInOrder()
     {
         var (service, kimai) = CreateService();

@@ -14,7 +14,7 @@ public static class ClockEndpoints
         {
             var status = await clockService.GetStatusAsync(request, cancellationToken);
             return status is null ? Results.Unauthorized() : Results.Ok(status);
-        });
+        }).AddEndpointFilter(PinLockedException.Filter);
 
         app.MapPost("/api/clock/start", async (
             ClockRequest request,
@@ -23,7 +23,7 @@ public static class ClockEndpoints
         {
             var status = await clockService.StartAsync(request, cancellationToken);
             return status is null ? Results.Unauthorized() : Results.Ok(status);
-        });
+        }).AddEndpointFilter(PinLockedException.Filter);
 
         app.MapPost("/api/clock/stop", async (
             ClockRequest request,
@@ -32,7 +32,7 @@ public static class ClockEndpoints
         {
             var status = await clockService.StopAsync(request, cancellationToken);
             return status is null ? Results.Unauthorized() : Results.Ok(status);
-        });
+        }).AddEndpointFilter(PinLockedException.Filter);
 
         return app;
     }
