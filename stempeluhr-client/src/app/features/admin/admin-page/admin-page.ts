@@ -2,6 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { DatePipe } from '@angular/common';
 import { Component, OnDestroy, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { forkJoin, of, switchMap } from 'rxjs';
 
 import { AdminEmployee, AdminEmployeeStatus, AdminEmployeeTask, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../../../core/models/admin.models';
 import { NfcClockEvent } from '../../../core/models/kiosk.models';
@@ -34,25 +35,46 @@ export class AdminPage implements OnDestroy {
   readonly adminMessage = signal('');
   readonly adminBusy = signal(false);
   readonly adminDirty = signal(false);
+  readonly initialLoading = signal(false);
 
   private nfcPollTimer: number | null = null;
 
   loadAdminSettings(): void {
+    const password = this.adminPassword();
+    if (this.nfcPollTimer !== null) {
+      window.clearInterval(this.nfcPollTimer);
+      this.nfcPollTimer = null;
+    }
     this.adminBusy.set(true);
-    this.adminApi.getSettings(this.adminPassword()).subscribe({
-      next: settings => {
+    this.initialLoading.set(true);
+    this.adminSettings.set(null);
+    this.kimaiProjects.set([]);
+    this.kimaiActivities.set([]);
+    this.adminMessage.set('');
+    this.adminApi.getSettings(password).pipe(
+      switchMap(settings => forkJoin({
+        settings: of(settings),
+        projects: this.adminApi.importKimaiProjects(password, settings.baseUrl),
+        activities: this.adminApi.importKimaiActivities(password, settings.baseUrl),
+      })),
+    ).subscribe({
+      next: ({ settings, projects, activities }) => {
+        this.kimaiProjects.set(projects);
+        this.kimaiActivities.set(activities);
         this.adminSettings.set(this.withEditableTokens(settings));
         this.adminMessage.set('');
         this.adminDirty.set(false);
         this.adminBusy.set(false);
+        this.initialLoading.set(false);
         this.loadAdminEmployeeStatuses();
-        this.loadKimaiActivities(false);
-        this.loadKimaiProjects(false);
         this.startNfcPolling();
       },
       error: (error: HttpErrorResponse) => {
-        this.adminMessage.set(this.adminLoginErrorMessage(error));
+        this.adminMessage.set(error.url?.includes('kimai-')
+          ? 'Kimai-Projekte oder Aktivitäten konnten nicht geladen werden. Bitte Verbindung und Token prüfen und erneut laden.'
+          : this.adminLoginErrorMessage(error));
         this.adminBusy.set(false);
+        this.initialLoading.set(false);
       },
     });
   }
@@ -423,7 +445,6 @@ export class AdminPage implements OnDestroy {
         }
       },
       error: () => {
-        this.kimaiActivities.set([]);
         if (showMessage) {
           this.adminMessage.set('Kimai-Aktivitaeten konnten nicht geladen werden');
           this.adminBusy.set(false);
@@ -451,7 +472,6 @@ export class AdminPage implements OnDestroy {
         }
       },
       error: () => {
-        this.kimaiProjects.set([]);
         if (showMessage) {
           this.adminMessage.set('Kimai-Projekte konnten nicht geladen werden');
           this.adminBusy.set(false);
