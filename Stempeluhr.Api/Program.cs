@@ -42,6 +42,7 @@ builder.Services.AddHttpClient(TelegramNotifier.ClientName, client =>
     PooledConnectionLifetime = TimeSpan.FromMinutes(2)
 });
 builder.Services.AddSingleton<ITelegramNotifier, TelegramNotifier>();
+builder.Services.AddSingleton<OfflineRejectionNotifier>();
 builder.Services.AddHttpClient<IKimaiClient, KimaiClient>(client =>
 {
     // Every Kimai call runs under the global sync lock: one hung connection

@@ -50,7 +50,7 @@ public sealed class ClockService(
         return HoursOverviewCalculator.Calculate(entries, settings.PauseActivityId, now, timeZone);
     }
 
-    private static TimeZoneInfo ResolveTimezone(string? kimaiTimezone)
+    internal static TimeZoneInfo ResolveTimezone(string? kimaiTimezone)
     {
         if (!string.IsNullOrWhiteSpace(kimaiTimezone))
         {

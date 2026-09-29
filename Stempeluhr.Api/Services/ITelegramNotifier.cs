@@ -17,4 +17,7 @@ public interface ITelegramNotifier
         DateTimeOffset stampUtc,
         TimeZoneInfo timeZone,
         string? taskLabel = null);
+
+    /// <summary>Returns true only when Telegram accepted the message.</summary>
+    Task<bool> SendMessageAsync(string text);
 }
