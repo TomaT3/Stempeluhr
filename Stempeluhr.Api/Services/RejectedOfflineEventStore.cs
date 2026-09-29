@@ -10,7 +10,9 @@ public sealed record RejectedOfflineEvent(
     DateTimeOffset PerformedAt,
     DateTimeOffset RejectedAt,
     string Message,
-    DateTimeOffset? ResolvedAt = null);
+    DateTimeOffset? ResolvedAt = null,
+    bool TelegramEligible = false,
+    DateTimeOffset? TelegramNotifiedAt = null);
 
 /// <summary>Persistent admin journal. Credentials and card IDs are never stored here.</summary>
 public sealed class RejectedOfflineEventStore(string filePath, ILogger<RejectedOfflineEventStore>? logger = null)
@@ -74,6 +76,21 @@ public sealed class RejectedOfflineEventStore(string filePath, ILogger<RejectedO
         }
     }
 
+    /// <summary>Persist delivery only after Telegram confirmed the batch.</summary>
+    public void MarkTelegramNotified(IReadOnlyCollection<string> eventIds, DateTimeOffset at)
+    {
+        lock (_gate)
+        {
+            var ids = eventIds.ToHashSet(StringComparer.Ordinal);
+            var updated = Load().Select(entry => ids.Contains(entry.EventId) && entry.TelegramNotifiedAt is null
+                ? entry with { TelegramNotifiedAt = at }
+                : entry).ToList();
+            updated = TrimResolved(updated);
+            Persist(updated);
+            _entries = updated;
+        }
+    }
+
     private List<RejectedOfflineEvent> Load()
     {
         if (_entries is not null)
@@ -125,6 +142,8 @@ public sealed class RejectedOfflineEventStore(string filePath, ILogger<RejectedO
             .Take(MaxResolvedEntries)
             .Select(entry => entry.EventId)
             .ToHashSet(StringComparer.Ordinal);
-        return entries.Where(entry => entry.ResolvedAt is null || keptResolvedIds.Contains(entry.EventId)).ToList();
+        return entries.Where(entry => entry.ResolvedAt is null
+            || (entry.TelegramEligible && entry.TelegramNotifiedAt is null)
+            || keptResolvedIds.Contains(entry.EventId)).ToList();
     }
 }

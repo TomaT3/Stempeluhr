@@ -1,126 +1,103 @@
+using Stempeluhr.Api.Models;
+
 namespace Stempeluhr.Api.Services;
 
-/// <summary>Process-wide Telegram throttle for newly journaled offline refusals.</summary>
+/// <summary>
+/// Sends journaled refusals in bounded batches. The journal is the durable
+/// queue; the periodic outbox worker also checks it after process restarts.
+/// </summary>
 public sealed class OfflineRejectionNotifier(
+    RejectedOfflineEventStore rejectedEvents,
     IRuntimeSettingsStore settingsStore,
+    IKimaiClient kimai,
     ITelegramNotifier telegram,
     ILogger<OfflineRejectionNotifier> logger,
-    TimeProvider? clock = null) : IDisposable
+    TimeProvider? clock = null)
 {
     private static readonly TimeSpan MinimumInterval = TimeSpan.FromMinutes(1);
     private const int DailyLimit = 20;
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
-    private readonly object _gate = new();
-    private RejectedOfflineEvent? _first;
-    private RejectedOfflineEvent? _last;
-    private int _pending;
-    private DateTimeOffset _nextSend;
-    private DateOnly _day;
-    private int _sentToday;
-    private ITimer? _timer;
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private DateTimeOffset _nextAttemptAt;
 
-    public void Report(IReadOnlyList<RejectedOfflineEvent> rejected)
+    /// <summary>Kick delivery after a new journal entry without delaying sync.</summary>
+    public void Report(IReadOnlyList<RejectedOfflineEvent> newlyRejected)
     {
-        if (rejected.Count == 0) return;
-        // Unknown identities and malformed requests cannot produce Telegram traffic.
-        // Check configuration before doing any formatting or other work.
-        if (!IsEnabled())
-        {
-            return;
-        }
+        if (newlyRejected.Count == 0) return;
+        _ = Task.Run(ProcessPendingAsync);
+    }
 
-        lock (_gate)
+    /// <summary>Also called periodically, so a restart cannot lose held warnings.</summary>
+    public async Task ProcessPendingAsync()
+    {
+        await _sendLock.WaitAsync();
+        try
         {
-            foreach (var entry in rejected.Where(entry => !string.IsNullOrWhiteSpace(entry.EmployeeName)))
+            var settings = settingsStore.Load();
+            if (!settings.TelegramEnabled) return;
+
+            var all = rejectedEvents.List();
+            var pending = all.Where(entry => entry.TelegramEligible && entry.TelegramNotifiedAt is null)
+                .OrderBy(entry => entry.PerformedAt).ToArray();
+            if (pending.Length == 0) return;
+
+            var now = _clock.GetUtcNow();
+            var sentToday = all.Where(entry => entry.TelegramNotifiedAt is { } at
+                    && at.UtcDateTime.Date == now.UtcDateTime.Date)
+                .Select(entry => entry.TelegramNotifiedAt!.Value)
+                .Distinct().Count();
+            if (sentToday >= DailyLimit || now < _nextAttemptAt) return;
+
+            var lastSent = all.Where(entry => entry.TelegramNotifiedAt is not null)
+                .Max(entry => entry.TelegramNotifiedAt);
+            if (lastSent is { } last && now - last < MinimumInterval) return;
+
+            var first = pending[0];
+            var latest = pending[^1];
+            var firstZone = await ResolveTimeZoneAsync(settings, first);
+            var lastZone = latest.EmployeeId.Equals(first.EmployeeId, StringComparison.OrdinalIgnoreCase)
+                ? firstZone : await ResolveTimeZoneAsync(settings, latest);
+            var text = TelegramMessageFactory.BuildOfflineRejectionSummary(
+                first, firstZone, latest, lastZone, pending.Length);
+
+            // A failed send remains pending. A successful send is recorded
+            // before the next batch can start, including across restarts.
+            if (await telegram.SendMessageAsync(text))
             {
-                _first ??= entry;
-                _last = entry;
-                _pending++;
+                rejectedEvents.MarkTelegramNotified(pending.Select(entry => entry.EventId).ToArray(),
+                    _clock.GetUtcNow());
             }
-            DispatchOrSchedule();
+            else
+            {
+                _nextAttemptAt = now + MinimumInterval;
+            }
         }
-    }
-
-    private void DispatchOrSchedule()
-    {
-        if (_pending == 0) return;
-        var now = _clock.GetUtcNow();
-        var day = DateOnly.FromDateTime(now.UtcDateTime);
-        if (_day != day)
-        {
-            _day = day;
-            _sentToday = 0;
-        }
-
-        var allowedAt = _sentToday >= DailyLimit
-            ? new DateTimeOffset(now.UtcDateTime.Date.AddDays(1), TimeSpan.Zero)
-            : _nextSend;
-        if (now < allowedAt)
-        {
-            _timer?.Dispose();
-            _timer = _clock.CreateTimer(_ => OnTimer(), null, allowedAt - now, Timeout.InfiniteTimeSpan);
-            return;
-        }
-
-        _timer?.Dispose();
-        _timer = null;
-        var text = Format(_first!, _last!, _pending);
-        _first = _last = null;
-        _pending = 0;
-        _sentToday++;
-        _nextSend = now + MinimumInterval;
-        _ = SendSafelyAsync(text);
-    }
-
-    private void OnTimer()
-    {
-        lock (_gate)
-        {
-            if (IsEnabled()) DispatchOrSchedule();
-            else { _first = _last = null; _pending = 0; _timer?.Dispose(); _timer = null; }
-        }
-    }
-
-    private bool IsEnabled()
-    {
-        try { return settingsStore.Load().TelegramEnabled; }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Could not check Telegram configuration for offline rejection");
-            return false;
+            logger.LogWarning(ex, "Offline rejection Telegram notification failed");
+            _nextAttemptAt = _clock.GetUtcNow() + MinimumInterval;
         }
-    }
-
-    public void Dispose()
-    {
-        lock (_gate) { _timer?.Dispose(); _timer = null; }
-    }
-
-    private async Task SendSafelyAsync(string text)
-    {
-        try { await telegram.SendMessageAsync(text); }
-        catch (Exception ex) { logger.LogWarning(ex, "Offline rejection Telegram notification failed"); }
-    }
-
-    private static string Format(RejectedOfflineEvent first, RejectedOfflineEvent last, int count)
-    {
-        static string Describe(RejectedOfflineEvent entry)
+        finally
         {
-            var action = entry.Action switch
-            {
-                "start" => "Einstempeln", "stop" => "Ausstempeln",
-                "pauseStart" => "Pausenbeginn", "pauseEnd" => "Pausenende",
-                "switch" => "Tätigkeitswechsel", _ => "Stempeln"
-            };
-            // The event timestamp can come from an unauthenticated client. UTC is
-            // explicit here so a container's local timezone cannot shift the time.
-            return $"{Short(entry.EmployeeName)} · {action} · {entry.PerformedAt.UtcDateTime:dd.MM. HH:mm} UTC\nGrund: {Short(entry.Message)}";
+            _sendLock.Release();
         }
-
-        return count == 1
-            ? $"⚠️ Offline-Stempel nicht übernommen\n{Describe(first)}\nBitte in Kimai nachtragen."
-            : $"⚠️ {count} Offline-Stempel nicht übernommen\nErster Fall: {Describe(first)}\nLetzter Fall: {Describe(last)}\nBitte in Kimai nachtragen.";
     }
 
-    private static string Short(string value) => value.Length <= 180 ? value : value[..180] + "…";
+    private async Task<TimeZoneInfo> ResolveTimeZoneAsync(RuntimeSettings settings, RejectedOfflineEvent entry)
+    {
+        var employee = settings.Employees.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, entry.EmployeeId, StringComparison.OrdinalIgnoreCase));
+        if (employee is null) return TimeZoneInfo.Utc;
+
+        try
+        {
+            var id = await kimai.GetCurrentUserTimezoneAsync(settings, employee, CancellationToken.None);
+            return ClockService.ResolveTimezone(id);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not load timezone for rejected offline event {EventId}", entry.EventId);
+            return TimeZoneInfo.Utc;
+        }
+    }
 }

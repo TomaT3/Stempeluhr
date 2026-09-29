@@ -8,18 +8,21 @@ namespace Stempeluhr.Api.Services;
 /// </summary>
 public sealed class OfflineOutboxBackgroundService(
     IOfflineClockService offlineClockService,
+    OfflineRejectionNotifier rejectionNotifier,
     ILogger<OfflineOutboxBackgroundService> logger) : BackgroundService
 {
     private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(15);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await rejectionNotifier.ProcessPendingAsync();
         using var timer = new PeriodicTimer(FlushInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             try
             {
                 await offlineClockService.FlushOutboxAsync(stoppingToken);
+                await rejectionNotifier.ProcessPendingAsync();
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

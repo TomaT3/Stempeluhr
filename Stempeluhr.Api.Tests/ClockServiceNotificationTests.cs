@@ -606,7 +606,7 @@ public sealed class ClockServiceNotificationTests
             return Task.CompletedTask;
         }
 
-        public Task SendMessageAsync(string text) => Task.CompletedTask;
+        public Task<bool> SendMessageAsync(string text) => Task.FromResult(true);
     }
 
     private sealed class RecordingLogger : ILogger<ClockService>

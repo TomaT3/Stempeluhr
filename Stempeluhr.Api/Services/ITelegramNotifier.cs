@@ -18,6 +18,6 @@ public interface ITelegramNotifier
         TimeZoneInfo timeZone,
         string? taskLabel = null);
 
-    /// <summary>Sends an already formatted offline rejection summary.</summary>
-    Task SendMessageAsync(string text);
+    /// <summary>Returns true only when Telegram accepted the message.</summary>
+    Task<bool> SendMessageAsync(string text);
 }

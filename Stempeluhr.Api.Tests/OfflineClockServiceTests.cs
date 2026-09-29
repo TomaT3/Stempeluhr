@@ -38,13 +38,13 @@ public sealed class OfflineClockServiceTests
     public async Task RejectedReplay_SendsOneSummaryPerBatch_AndThrottlesLaterBatches()
     {
         var (service, telegram, throttle) = CreateServiceWithTelegram();
-        using (throttle)
         {
             var batch = await service.SyncKioskAsync([
                 Kiosk("bad-1", "unknown", T08),
                 Kiosk("bad-2", "unknown", T10)
             ]);
             Assert.All(batch.Results, result => Assert.Equal("rejected", result.Status));
+            await throttle.ProcessPendingAsync();
             var text = Assert.Single(telegram.Messages);
             Assert.Contains("2 Offline-Stempel", text);
             Assert.Contains("Erster Fall", text);
@@ -53,6 +53,7 @@ public sealed class OfflineClockServiceTests
             Assert.DoesNotContain("1234", text);
 
             await service.SyncKioskAsync([Kiosk("bad-3", "unknown", T12)]);
+            await throttle.ProcessPendingAsync();
             Assert.Single(telegram.Messages);
             await service.SyncKioskAsync([Kiosk("bad-1", "unknown", T08)]);
             Assert.Single(telegram.Messages);
@@ -62,19 +63,21 @@ public sealed class OfflineClockServiceTests
     [Fact]
     public async Task DisabledTelegram_AndUnknownEmployee_DoNotSend()
     {
-        var (disabledService, disabledTelegram, disabledThrottle) = CreateServiceWithTelegram(enabled: false);
-        using (disabledThrottle)
+        var (disabledService, disabledTelegram, disabledThrottle, disabledKimai) =
+            CreateServiceWithTelegramAndKimai(enabled: false);
         {
             Assert.Equal("rejected", Assert.Single((await disabledService.SyncKioskAsync([
                 Kiosk("disabled", "unknown", T08)])).Results).Status);
+            await disabledThrottle.ProcessPendingAsync();
             Assert.Empty(disabledTelegram.Messages);
+            Assert.Equal(0, disabledKimai.TimezoneCalls);
         }
 
         var (service, telegram, throttle) = CreateServiceWithTelegram();
-        using (throttle)
         {
             Assert.Equal("rejected", Assert.Single((await service.SyncKioskAsync([
                 Kiosk("unknown-employee", "start", T08) with { EmployeeId = "missing" }])).Results).Status);
+            await throttle.ProcessPendingAsync();
             Assert.Empty(telegram.Messages);
         }
     }
@@ -83,7 +86,6 @@ public sealed class OfflineClockServiceTests
     public async Task RejectionDuringBackgroundFlush_SendsTelegram()
     {
         var (service, telegram, throttle, kimai) = CreateServiceWithTelegramAndKimai();
-        using (throttle)
         {
             kimai.FailNextStatusCalls = 2;
             var entry = Kiosk("late-rejection", "start", T08);
@@ -91,9 +93,110 @@ public sealed class OfflineClockServiceTests
             Assert.Empty(telegram.Messages);
             kimai.StartFailures.Enqueue(new KimaiApiException(System.Net.HttpStatusCode.BadRequest, "Kimai refused"));
             await service.FlushOutboxAsync();
+            await throttle.ProcessPendingAsync();
             Assert.Contains("Kimai refused", Assert.Single(telegram.Messages));
         }
     }
+
+    [Fact]
+    public async Task WrongPinCannotGenerateTelegramWarning_ButCaseInsensitiveEmployeeCan()
+    {
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-auth-{Guid.NewGuid():N}.json"));
+        var (service, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(existingJournal: journal);
+
+        Assert.Equal("rejected", Assert.Single((await service.SyncKioskAsync([
+            Kiosk("wrong-pin", "start", T08, "wrong")])).Results).Status);
+        await notifier.ProcessPendingAsync();
+        Assert.Empty(telegram.Messages);
+        Assert.False(journal.Find("wrong-pin")!.TelegramEligible);
+
+        Assert.Equal("rejected", Assert.Single((await service.SyncKioskAsync([
+            Kiosk("mixed-case", "unknown", T10) with { EmployeeId = "MAX" }])).Results).Status);
+        await notifier.ProcessPendingAsync();
+        Assert.Contains("Max Mustermann", Assert.Single(telegram.Messages));
+        Assert.True(journal.Find("mixed-case")!.TelegramEligible);
+    }
+
+    [Fact]
+    public async Task PendingWarningsSurviveRestart_AndLaterSendIsChronological()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"stempeluhr-restart-{Guid.NewGuid():N}.json");
+        var clock = new ManualClock(new DateTimeOffset(2026, 9, 29, 10, 0, 0, TimeSpan.Zero));
+        var journal = new RejectedOfflineEventStore(path);
+        var (_, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(existingJournal: journal, clock: clock);
+        journal.Record(NotificationEntry("first", T10));
+        await notifier.ProcessPendingAsync();
+        Assert.Single(telegram.Messages);
+
+        journal.Record(NotificationEntry("later", T12));
+        journal.Record(NotificationEntry("earlier", T08));
+        await notifier.ProcessPendingAsync();
+        Assert.Single(telegram.Messages);
+
+        // Reopen the journal and notifier as a restarted API would.
+        var reopened = new RejectedOfflineEventStore(path);
+        var (_, restartedTelegram, restartedNotifier, _) = CreateServiceWithTelegramAndKimai(
+            existingJournal: reopened, clock: clock);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await restartedNotifier.ProcessPendingAsync();
+        var summary = Assert.Single(restartedTelegram.Messages);
+        Assert.Contains("2 Offline-Stempel", summary);
+        Assert.Contains("Ausstempeln", summary);
+        Assert.True(summary.IndexOf("Erster Fall", StringComparison.Ordinal)
+            < summary.IndexOf("Letzter Fall", StringComparison.Ordinal));
+        Assert.Contains("24.08. 10:00 Europe/Berlin", summary); // 08:00 UTC
+        Assert.Contains("24.08. 14:00 Europe/Berlin", summary); // 12:00 UTC
+        Assert.All(reopened.List(), entry => Assert.NotNull(entry.TelegramNotifiedAt));
+        await restartedNotifier.ProcessPendingAsync();
+        Assert.Single(restartedTelegram.Messages);
+    }
+
+    [Fact]
+    public async Task FailedSendRemainsPending_AndDailyBudgetResetsAtUtcMidnight()
+    {
+        var clock = new ManualClock(new DateTimeOffset(2026, 9, 29, 23, 59, 0, TimeSpan.Zero));
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-budget-{Guid.NewGuid():N}.json"));
+        var (_, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(existingJournal: journal, clock: clock);
+        for (var i = 0; i < 20; i++)
+        {
+            journal.Record(NotificationEntry($"sent-{i}", T08) with
+            {
+                TelegramNotifiedAt = new DateTimeOffset(2026, 9, 29, 10, i, 0, TimeSpan.Zero)
+            });
+        }
+        journal.Record(NotificationEntry("waiting", T10));
+        await notifier.ProcessPendingAsync();
+        Assert.Empty(telegram.Messages);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        telegram.SendSucceeds = false;
+        await notifier.ProcessPendingAsync();
+        Assert.Single(telegram.Messages);
+        Assert.Null(journal.Find("waiting")!.TelegramNotifiedAt);
+        telegram.SendSucceeds = true;
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await notifier.ProcessPendingAsync();
+        Assert.Equal(2, telegram.Messages.Count);
+        Assert.NotNull(journal.Find("waiting")!.TelegramNotifiedAt);
+    }
+
+    [Fact]
+    public async Task AlreadyJournaledRefusalIsReported_WhenLaterBatchEntryThrows()
+    {
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-abort-{Guid.NewGuid():N}.json"));
+        var (service, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(
+            existingJournal: journal, eventIds: new FailOnSecondEventIdStore());
+        await Assert.ThrowsAsync<IOException>(() => service.SyncKioskAsync([
+            Kiosk("first-refusal", "unknown", T08),
+            Kiosk("later-fails", "start", T10)
+        ]));
+        await notifier.ProcessPendingAsync();
+        Assert.Contains("Max Mustermann", Assert.Single(telegram.Messages));
+        Assert.NotNull(journal.Find("first-refusal")!.TelegramNotifiedAt);
+    }
+
+    private static RejectedOfflineEvent NotificationEntry(string id, DateTimeOffset performedAt) =>
+        new(id, "max", "Max Mustermann", "STOP", performedAt, performedAt,
+            "Kimai refused", TelegramEligible: true);
 
     [Fact]
     public async Task RemovedTerminalEmployeesDoNotContainOrReorderOtherEvents()
@@ -1504,7 +1607,9 @@ public sealed class OfflineClockServiceTests
     }
 
     private static (OfflineClockService Service, RecordingTelegramNotifier Telegram, OfflineRejectionNotifier Throttle, FakeKimaiClient Kimai)
-        CreateServiceWithTelegramAndKimai(bool enabled = true)
+        CreateServiceWithTelegramAndKimai(bool enabled = true,
+            RejectedOfflineEventStore? existingJournal = null, TimeProvider? clock = null,
+            IOfflineEventIdStore? eventIds = null)
     {
         var baseline = TestSettings();
         var settings = new RuntimeSettings
@@ -1519,11 +1624,14 @@ public sealed class OfflineClockServiceTests
         };
         var store = new InMemorySettingsStore(settings);
         var telegram = new RecordingTelegramNotifier();
-        var throttle = new OfflineRejectionNotifier(store, telegram, NullLogger<OfflineRejectionNotifier>.Instance);
         var kimai = new FakeKimaiClient();
+        var journal = existingJournal ?? new RejectedOfflineEventStore(
+            Path.Combine(Path.GetTempPath(), $"stempeluhr-notify-{Guid.NewGuid():N}.json"));
+        var throttle = new OfflineRejectionNotifier(journal, store, kimai, telegram,
+            NullLogger<OfflineRejectionNotifier>.Instance, clock);
         var service = new OfflineClockService(store, new InMemoryEmployeeService(), kimai,
-            new InMemoryEventIdStore(), new KioskEventCoordinator(),
-            new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-notify-{Guid.NewGuid():N}.json")),
+            eventIds ?? new InMemoryEventIdStore(), new KioskEventCoordinator(),
+            journal,
             new RecordingLogger(), throttle);
         return (service, telegram, throttle, kimai);
     }
@@ -1531,9 +1639,21 @@ public sealed class OfflineClockServiceTests
     private sealed class RecordingTelegramNotifier : ITelegramNotifier
     {
         public List<string> Messages { get; } = [];
-        public Task SendMessageAsync(string text) { Messages.Add(text); return Task.CompletedTask; }
+        public bool SendSucceeds { get; set; } = true;
+        public Task<bool> SendMessageAsync(string text)
+        {
+            Messages.Add(text);
+            return Task.FromResult(SendSucceeds);
+        }
         public Task SendStampNotificationAsync(string employeeName, string action, DateTimeOffset stampUtc,
             TimeZoneInfo timeZone, string? taskLabel = null) => Task.CompletedTask;
+    }
+
+    private sealed class ManualClock(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan duration) => _now += duration;
     }
 
     private static (OfflineClockService Service, FakeKimaiClient Kimai, RecordingLogger Logger) CreateServiceWithLogger()
@@ -1667,13 +1787,21 @@ public sealed class OfflineClockServiceTests
         public void Remove(string eventId) => _ids.Remove(eventId);
     }
 
+    private sealed class FailOnSecondEventIdStore : IOfflineEventIdStore
+    {
+        private int _registrations;
+        public bool TryRegister(string eventId) => ++_registrations == 1
+            ? true : throw new IOException("Event ID store unavailable");
+        public void Remove(string eventId) { }
+    }
+
     private sealed class InMemoryEmployeeService : IEmployeeService
     {
         public IReadOnlyCollection<EmployeeDto> GetEnabledEmployees(RuntimeSettings settings) => [];
 
         public EmployeeSettings? FindEmployee(RuntimeSettings settings, ClockRequest request) =>
             settings.Employees.FirstOrDefault(employee =>
-                employee.Id == request.EmployeeId &&
+                string.Equals(employee.Id, request.EmployeeId, StringComparison.OrdinalIgnoreCase) &&
                 (string.IsNullOrWhiteSpace(employee.Pin) || employee.Pin == request.Pin));
 
         public EmployeeSettings? FindEmployeeByPin(RuntimeSettings settings, string? pin) => null;
@@ -1898,11 +2026,16 @@ public sealed class OfflineClockServiceTests
             return Task.FromResult(recent);
         }
 
+        public int TimezoneCalls { get; private set; }
+
         public Task<string?> GetCurrentUserTimezoneAsync(
             RuntimeSettings settings,
             EmployeeSettings employee,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<string?>("Europe/Berlin");
+            CancellationToken cancellationToken = default)
+        {
+            TimezoneCalls++;
+            return Task.FromResult<string?>("Europe/Berlin");
+        }
 
         /// <summary>
         /// Holds the next live start until the test completes it: null lets

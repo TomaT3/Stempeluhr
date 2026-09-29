@@ -10,6 +10,28 @@ public static class TelegramMessageFactory
     /// <summary>Haupttätigkeit ohne eigene Bezeichnung.</summary>
     public const string DefaultTaskName = "Standard-Tätigkeit";
 
+    public static string BuildOfflineRejectionSummary(
+        RejectedOfflineEvent first, TimeZoneInfo firstZone,
+        RejectedOfflineEvent last, TimeZoneInfo lastZone, int count)
+    {
+        static string Short(string value) => value.Length <= 180 ? value : value[..180] + "…";
+        static string Describe(RejectedOfflineEvent entry, TimeZoneInfo zone)
+        {
+            var action = (entry.Action ?? string.Empty).ToLowerInvariant() switch
+            {
+                "start" => "Einstempeln", "stop" => "Ausstempeln",
+                "pausestart" => "Pausenbeginn", "pauseend" => "Pausenende",
+                "switch" => "Tätigkeitswechsel", _ => "Stempeln"
+            };
+            var local = TimeZoneInfo.ConvertTime(entry.PerformedAt, zone);
+            return $"{Short(entry.EmployeeName)} · {action} · {local:dd.MM. HH:mm} {zone.Id}\nGrund: {Short(entry.Message)}";
+        }
+
+        return count == 1
+            ? $"⚠️ Offline-Stempel nicht übernommen\n{Describe(first, firstZone)}\nBitte in Kimai nachtragen."
+            : $"⚠️ {count} Offline-Stempel nicht übernommen\nErster Fall: {Describe(first, firstZone)}\nLetzter Fall: {Describe(last, lastZone)}\nBitte in Kimai nachtragen.";
+    }
+
     /// <summary>
     /// Aktionen entsprechen den Clock-Aktionen aus <c>KioskClockRequest.Action</c>.
     /// <paramref name="taskLabel"/> gilt für "start" (Tätigkeit, null = ohne

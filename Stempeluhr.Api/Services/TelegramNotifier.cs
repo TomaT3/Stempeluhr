@@ -28,12 +28,6 @@ public sealed class TelegramNotifier(
     {
         try
         {
-            var settings = settingsStore.Load();
-            if (!settings.TelegramEnabled)
-            {
-                return;
-            }
-
             var text = TelegramMessageFactory.Build(employeeName, action, stampUtc, timeZone, taskLabel);
             await SendMessageAsync(text);
         }
@@ -43,14 +37,14 @@ public sealed class TelegramNotifier(
         }
     }
 
-    public async Task SendMessageAsync(string text)
+    public async Task<bool> SendMessageAsync(string text)
     {
         try
         {
             var settings = settingsStore.Load();
             if (!settings.TelegramEnabled)
             {
-                return;
+                return false;
             }
 
             // using: Client nach dem Send zurückgeben; die gepoolten Handler
@@ -70,13 +64,17 @@ public sealed class TelegramNotifier(
                     "Telegram sendMessage failed ({StatusCode}): {Body}",
                     (int)response.StatusCode,
                     body);
+                return false;
             }
+            return true;
         }
         catch (Exception ex)
         {
             // Best effort: nie werfen, damit der Stempelvorgang nicht an
-            // Telegram hängt. Kein Retry -> kein Doppelversand.
+            // Telegram hängt. Der Offline-Warner kann false später erneut
+            // versuchen; Live-Stempel bleiben ohne Retry.
             logger?.LogWarning(ex, "Telegram notification could not be sent");
+            return false;
         }
     }
 }
