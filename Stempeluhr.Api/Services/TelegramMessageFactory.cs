@@ -10,6 +10,24 @@ public static class TelegramMessageFactory
     /// <summary>Haupttätigkeit ohne eigene Bezeichnung.</summary>
     public const string DefaultTaskName = "Standard-Tätigkeit";
 
+    /// <summary>
+    /// Eine Tabelle für alle Nachrichten: Emoji und Live-Text (abhängig von der
+    /// Tätigkeit) sowie das Substantiv für Offline-Warnungen.
+    /// </summary>
+    private static readonly Dictionary<string, (string Emoji, Func<string?, string> Label, string Noun)> Actions =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["start"] = ("🟢", task => string.IsNullOrWhiteSpace(task)
+                ? "eingestempelt"
+                : $"eingestempelt auf {task}", "Einstempeln"),
+            ["stop"] = ("🔴", _ => "ausgestempelt", "Ausstempeln"),
+            ["pausestart"] = ("🟡", _ => "Pause", "Pausenbeginn"),
+            ["pauseend"] = ("🟢", _ => "Pause beendet", "Pausenende"),
+            ["switch"] = ("🔄", task => string.IsNullOrWhiteSpace(task)
+                ? $"zurück zur {DefaultTaskName}"
+                : $"wechselt zu {task}", "Tätigkeitswechsel"),
+        };
+
     public static string BuildOfflineRejectionSummary(
         RejectedOfflineEvent first, TimeZoneInfo firstZone,
         RejectedOfflineEvent last, TimeZoneInfo lastZone, int count)
@@ -17,12 +35,9 @@ public static class TelegramMessageFactory
         static string Short(string value) => value.Length <= 180 ? value : value[..180] + "…";
         static string Describe(RejectedOfflineEvent entry, TimeZoneInfo zone)
         {
-            var action = (entry.Action ?? string.Empty).ToLowerInvariant() switch
-            {
-                "start" => "Einstempeln", "stop" => "Ausstempeln",
-                "pausestart" => "Pausenbeginn", "pauseend" => "Pausenende",
-                "switch" => "Tätigkeitswechsel", _ => "Stempeln"
-            };
+            // Unbekannte Aktionen sind hier möglich (genau das kann der
+            // Ablehnungsgrund sein) und dürfen die Warnung nicht verhindern.
+            var action = Actions.TryGetValue(entry.Action ?? string.Empty, out var known) ? known.Noun : "Stempeln";
             var local = TimeZoneInfo.ConvertTime(entry.PerformedAt, zone);
             return $"{Short(entry.EmployeeName)} · {action} · {local:dd.MM. HH:mm} {zone.Id}\nGrund: {Short(entry.Message)}";
         }
@@ -44,21 +59,12 @@ public static class TelegramMessageFactory
         TimeZoneInfo timeZone,
         string? taskLabel = null)
     {
-        var (emoji, label) = action.ToLowerInvariant() switch
+        if (!Actions.TryGetValue(action, out var known))
         {
-            "start" => ("🟢", string.IsNullOrWhiteSpace(taskLabel)
-                ? "eingestempelt"
-                : $"eingestempelt auf {taskLabel}"),
-            "stop" => ("🔴", "ausgestempelt"),
-            "pausestart" => ("🟡", "Pause"),
-            "pauseend" => ("🟢", "Pause beendet"),
-            "switch" => ("🔄", string.IsNullOrWhiteSpace(taskLabel)
-                ? $"zurück zur {DefaultTaskName}"
-                : $"wechselt zu {taskLabel}"),
-            _ => throw new ArgumentException($"Unbekannte Stempelaktion: {action}", nameof(action))
-        };
+            throw new ArgumentException($"Unbekannte Stempelaktion: {action}", nameof(action));
+        }
 
         var localTime = TimeZoneInfo.ConvertTime(stampUtc, timeZone).ToString("HH:mm");
-        return $"{emoji} {employeeName} · {label} um {localTime}";
+        return $"{known.Emoji} {employeeName} · {known.Label(taskLabel)} um {localTime}";
     }
 }

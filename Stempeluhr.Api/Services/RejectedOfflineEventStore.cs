@@ -30,6 +30,31 @@ public sealed class RejectedOfflineEventStore(string filePath, ILogger<RejectedO
         }
     }
 
+    /// <summary>Unsorted copy for callers that filter the whole journal anyway.</summary>
+    public IReadOnlyList<RejectedOfflineEvent> Snapshot()
+    {
+        lock (_gate)
+        {
+            return Load().ToArray();
+        }
+    }
+
+    /// <summary>Cheap check for the periodic notifier before it loads settings.</summary>
+    public bool HasPendingTelegram()
+    {
+        lock (_gate)
+        {
+            return Load().Any(AwaitsTelegram);
+        }
+    }
+
+    /// <summary>
+    /// An entry an admin already resolved must never ask for a manual Kimai
+    /// entry again - that could lead to a duplicate timesheet.
+    /// </summary>
+    public static bool AwaitsTelegram(RejectedOfflineEvent entry) =>
+        entry.TelegramEligible && entry.TelegramNotifiedAt is null && entry.ResolvedAt is null;
+
     public RejectedOfflineEvent? Find(string eventId)
     {
         lock (_gate)
@@ -142,8 +167,9 @@ public sealed class RejectedOfflineEventStore(string filePath, ILogger<RejectedO
             .Take(MaxResolvedEntries)
             .Select(entry => entry.EventId)
             .ToHashSet(StringComparer.Ordinal);
+        // Resolved entries no longer await Telegram (see AwaitsTelegram), so
+        // they are trimmed regardless of their delivery state.
         return entries.Where(entry => entry.ResolvedAt is null
-            || (entry.TelegramEligible && entry.TelegramNotifiedAt is null)
             || keptResolvedIds.Contains(entry.EventId)).ToList();
     }
 }

@@ -59,20 +59,24 @@ public sealed class OfflineClockService(
 
     private readonly SemaphoreSlim _syncLock = new(1, 1);
 
+    // Guarded by _syncLock. Set when a warnable refusal was journaled; the
+    // Telegram kick then fires once when the lock is released, so a batch or
+    // flush round becomes one summary - even when the round aborts.
+    private bool _announceRejections;
+
     public async Task<OfflineSyncResultDto> SyncKioskAsync(IReadOnlyList<OfflineKioskClockEventDto> events, CancellationToken cancellationToken = default)
     {
         var accepted = 0;
         var duplicates = 0;
         var buffered = 0;
         var results = new List<OfflineSyncEventResultDto>();
-        var newRejections = new List<RejectedOfflineEvent>();
 
         void RejectRegistered(OfflineKioskClockEventDto entry, string message, bool notificationEligible = true)
         {
             results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", message));
             // Journal each refusal before another event can abort the batch.
             // Without a journal entry, a lost response must remain retryable.
-            if (!TryRecordRejected(entry, message, newRejections, notificationEligible))
+            if (!TryRecordRejected(entry, message, notificationEligible))
             {
                 eventIdStore.Remove(entry.EventId);
             }
@@ -86,7 +90,7 @@ public sealed class OfflineClockService(
             results.Add(new OfflineSyncEventResultDto(invalid.EventId ?? string.Empty, "rejected", message));
             if (!string.IsNullOrWhiteSpace(invalid.EventId))
             {
-                TryRecordRejected(invalid, message, newRejections, notificationEligible: false);
+                TryRecordRejected(invalid, message, notificationEligible: false);
             }
         }
 
@@ -98,14 +102,12 @@ public sealed class OfflineClockService(
         // Serialize the whole operation against parallel syncs and the
         // background flush (List<T> is not thread-safe, and the ordering
         // guarantee depends on serialization).
-        var lockAcquired = false;
+        await _syncLock.WaitAsync(cancellationToken);
         try
         {
-            await _syncLock.WaitAsync(cancellationToken);
-            lockAcquired = true;
             // Never let a fresh batch jump over events that are still waiting
             // in the outbox.
-            var queuedBehindBacklog = await BufferBatchBehindBacklogAsync(orderedKioskEvents, results, newRejections, cancellationToken);
+            var queuedBehindBacklog = await BufferBatchBehindBacklogAsync(orderedKioskEvents, results, cancellationToken);
             if (queuedBehindBacklog > 0)
             {
                 buffered += queuedBehindBacklog;
@@ -200,16 +202,15 @@ public sealed class OfflineClockService(
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Offline kiosk event {EventId} permanently rejected", entry.EventId);
-                    RejectRegistered(entry, ex.Message);
+                    RejectRegistered(entry, ex.Message, IsNotificationEligible(ex));
                 }
             }
 
-            await FlushOutboxCoreAsync(cancellationToken, newRejections);
+            await FlushOutboxCoreAsync(cancellationToken);
         }
         finally
         {
-            if (lockAcquired) _syncLock.Release();
-            rejectionNotifier?.Report(newRejections);
+            ReleaseSyncLock();
         }
 
         return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
@@ -219,20 +220,26 @@ public sealed class OfflineClockService(
     /// The journal is secondary to the sync response. If its disk is full or
     /// read-only, return the refusal anyway so the kiosk retains its local
     /// record instead of blocking the whole batch behind a permanent 5xx.
+    /// A newly journaled refusal of a known employee marks the round for a
+    /// Telegram warning (see <see cref="ReleaseSyncLock"/>); eligible calls
+    /// happen while holding <see cref="_syncLock"/>.
     /// </summary>
-    private bool TryRecordRejected(OfflineKioskClockEventDto entry, string message,
-        List<RejectedOfflineEvent> newRejections, bool notificationEligible = true)
+    private bool TryRecordRejected(OfflineKioskClockEventDto entry, string message, bool notificationEligible = true)
     {
         try
         {
-            var employeeName = settingsStore.Load().Employees
+            var settings = settingsStore.Load();
+            var employeeName = settings.Employees
                 .FirstOrDefault(employee => string.Equals(employee.Id, entry.EmployeeId,
                     StringComparison.OrdinalIgnoreCase))?.DisplayName ?? string.Empty;
+            // Only while Telegram is on: otherwise the entry would wait for a
+            // push forever and surface as a stale summary once it is enabled.
             var record = new RejectedOfflineEvent(
                 entry.EventId, entry.EmployeeId, employeeName, entry.Action,
                 entry.PerformedAt, DateTimeOffset.UtcNow, message,
-                TelegramEligible: notificationEligible && !string.IsNullOrWhiteSpace(employeeName));
-            if (rejectedEvents.Record(record) && record.TelegramEligible) newRejections.Add(record);
+                TelegramEligible: notificationEligible && settings.TelegramEnabled
+                    && !string.IsNullOrWhiteSpace(employeeName));
+            if (rejectedEvents.Record(record) && record.TelegramEligible) _announceRejections = true;
             return true;
         }
         catch (Exception ex)
@@ -257,10 +264,9 @@ public sealed class OfflineClockService(
     private async Task<int> BufferBatchBehindBacklogAsync(
         IReadOnlyList<OfflineKioskClockEventDto> orderedEvents,
         List<OfflineSyncEventResultDto> results,
-        List<RejectedOfflineEvent> newRejections,
         CancellationToken cancellationToken)
     {
-        await FlushOutboxCoreAsync(cancellationToken, newRejections);
+        await FlushOutboxCoreAsync(cancellationToken);
         if (_kioskOutbox.Count == 0)
         {
             return 0;
@@ -276,7 +282,7 @@ public sealed class OfflineClockService(
             results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, BufferedMessage));
         }
 
-        await FlushOutboxCoreAsync(cancellationToken, newRejections);
+        await FlushOutboxCoreAsync(cancellationToken);
         return orderedEvents.Count;
     }
 
@@ -330,7 +336,7 @@ public sealed class OfflineClockService(
         {
             return settings.Employees.FirstOrDefault(e => e.CanClock
                 && string.Equals(e.Id, entry.EmployeeId, StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException("Mitarbeiter nicht gefunden oder deaktiviert.");
+                ?? throw new KioskEmployeeUnavailableException();
         }
 
         var byPin = employees.FindEmployee(settings, new ClockRequest(entry.EmployeeId, entry.Pin));
@@ -357,6 +363,19 @@ public sealed class OfflineClockService(
     /// per event - every result reveals whether its credentials matched.
     /// </summary>
     private sealed class KioskAuthenticationException(string message) : InvalidOperationException(message);
+
+    /// <summary>
+    /// An authenticated terminal named a disabled or removed employee. Not an
+    /// authentication failure (the rest of the batch stays valid), but like
+    /// one it must not raise a Telegram warning: the PIN path rejects the
+    /// same employee as unauthenticated.
+    /// </summary>
+    private sealed class KioskEmployeeUnavailableException()
+        : InvalidOperationException("Mitarbeiter nicht gefunden oder deaktiviert.");
+
+    /// <summary>Only refusals of an authenticated, active employee warn via Telegram.</summary>
+    private static bool IsNotificationEligible(Exception ex) =>
+        ex is not (KioskAuthenticationException or KioskEmployeeUnavailableException);
 
     /// <summary>
     /// The live request of the same event is still running. Transient like a
@@ -925,19 +944,23 @@ public sealed class OfflineClockService(
     /// </summary>
     public async Task FlushOutboxAsync(CancellationToken cancellationToken = default)
     {
-        var newRejections = new List<RejectedOfflineEvent>();
-        var lockAcquired = false;
+        await _syncLock.WaitAsync(cancellationToken);
         try
         {
-            await _syncLock.WaitAsync(cancellationToken);
-            lockAcquired = true;
-            await FlushOutboxCoreAsync(cancellationToken, newRejections);
+            await FlushOutboxCoreAsync(cancellationToken);
         }
         finally
         {
-            if (lockAcquired) _syncLock.Release();
-            rejectionNotifier?.Report(newRejections);
+            ReleaseSyncLock();
         }
+    }
+
+    private void ReleaseSyncLock()
+    {
+        var announce = _announceRejections;
+        _announceRejections = false;
+        _syncLock.Release();
+        if (announce) rejectionNotifier?.Report();
     }
 
     /// <summary>
@@ -947,7 +970,7 @@ public sealed class OfflineClockService(
     /// at the front and ends the round, so the next flush resumes in the same
     /// order. Callers must hold <see cref="_syncLock"/>.
     /// </summary>
-    private async Task FlushOutboxCoreAsync(CancellationToken cancellationToken, List<RejectedOfflineEvent> newRejections)
+    private async Task FlushOutboxCoreAsync(CancellationToken cancellationToken)
     {
         var drained = 0;
         SortChronologically(_kioskOutbox, entry => entry.PerformedAt);
@@ -998,8 +1021,7 @@ public sealed class OfflineClockService(
                 // If persistence fails, free the ID so that retry can receive
                 // a fresh verdict instead of a silent "duplicate".
                 logger.LogError(ex, "Outbox: dropping kiosk event {EventId} after permanent error", kioskEntry.EventId);
-                if (!TryRecordRejected(kioskEntry, ex.Message, newRejections,
-                    notificationEligible: ex is not KioskAuthenticationException))
+                if (!TryRecordRejected(kioskEntry, ex.Message, IsNotificationEligible(ex)))
                 {
                     eventIdStore.Remove(kioskEntry.EventId);
                 }

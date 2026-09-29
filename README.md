@@ -212,8 +212,10 @@ werden zusammengefasst. Höchstens eine Warnung pro Minute und 20 pro UTC-Tag
 gehen an Telegram; weitere Fälle werden im nächsten erlaubten Zeitfenster
 gebündelt. Ausstehende Meldungen bleiben bei einem Neustart im Journal und
 werden danach erneut versucht. Fehlgeschlagene Authentifizierung, unbekannte
-Mitarbeiter und wiederholte Event-IDs erzeugen keinen Push. Alle Ablehnungen
-bleiben unabhängig davon im Admin-Journal sichtbar.
+oder deaktivierte Mitarbeiter und wiederholte Event-IDs erzeugen keinen Push,
+ebenso Ablehnungen, die bei ausgeschaltetem Telegram entstanden sind. Im
+Journal als erledigt markierte Fälle werden nicht mehr gemeldet. Alle
+Ablehnungen bleiben unabhängig davon im Admin-Journal sichtbar.
 
 1. Bei @BotFather `/newbot` ausführen, Token kopieren.
 2. Private Gruppe anlegen, Bot hinzufügen und zum Admin machen.

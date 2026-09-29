@@ -63,14 +63,18 @@ public sealed class OfflineClockServiceTests
     [Fact]
     public async Task DisabledTelegram_AndUnknownEmployee_DoNotSend()
     {
+        var disabledJournal = new RejectedOfflineEventStore(
+            Path.Combine(Path.GetTempPath(), $"stempeluhr-disabled-{Guid.NewGuid():N}.json"));
         var (disabledService, disabledTelegram, disabledThrottle, disabledKimai) =
-            CreateServiceWithTelegramAndKimai(enabled: false);
+            CreateServiceWithTelegramAndKimai(enabled: false, existingJournal: disabledJournal);
         {
             Assert.Equal("rejected", Assert.Single((await disabledService.SyncKioskAsync([
                 Kiosk("disabled", "unknown", T08)])).Results).Status);
             await disabledThrottle.ProcessPendingAsync();
             Assert.Empty(disabledTelegram.Messages);
             Assert.Equal(0, disabledKimai.TimezoneCalls);
+            // Otherwise it would wait forever and surface once Telegram is enabled.
+            Assert.False(disabledJournal.Find("disabled")!.TelegramEligible);
         }
 
         var (service, telegram, throttle) = CreateServiceWithTelegram();
@@ -192,6 +196,118 @@ public sealed class OfflineClockServiceTests
         await notifier.ProcessPendingAsync();
         Assert.Contains("Max Mustermann", Assert.Single(telegram.Messages));
         Assert.NotNull(journal.Find("first-refusal")!.TelegramNotifiedAt);
+    }
+
+    [Fact]
+    public async Task ResolvedRefusalIsNeverAnnounced()
+    {
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-resolved-{Guid.NewGuid():N}.json"));
+        var (_, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(existingJournal: journal);
+        journal.Record(NotificationEntry("already-entered", T08));
+        journal.Resolve("already-entered");
+
+        await notifier.ProcessPendingAsync();
+
+        Assert.Empty(telegram.Messages);
+    }
+
+    [Fact]
+    public async Task DeliveryThatCannotBeJournaled_IsNotResent_AndIsRecordedLater()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"stempeluhr-readonly-{Guid.NewGuid():N}.json");
+        var clock = new ManualClock(new DateTimeOffset(2026, 9, 29, 10, 0, 0, TimeSpan.Zero));
+        var journal = new RejectedOfflineEventStore(path);
+        var (_, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(existingJournal: journal, clock: clock);
+        journal.Record(NotificationEntry("sent-once", T08));
+
+        // A directory in place of the temp file makes every Persist fail.
+        Directory.CreateDirectory(path + ".tmp");
+        await notifier.ProcessPendingAsync();
+        Assert.Single(telegram.Messages);
+        Assert.Null(journal.Find("sent-once")!.TelegramNotifiedAt);
+
+        for (var round = 0; round < 3; round++)
+        {
+            clock.Advance(TimeSpan.FromMinutes(2));
+            await notifier.ProcessPendingAsync();
+        }
+        Assert.Single(telegram.Messages);
+
+        Directory.Delete(path + ".tmp");
+        clock.Advance(TimeSpan.FromMinutes(2));
+        await notifier.ProcessPendingAsync();
+        Assert.Single(telegram.Messages);
+        Assert.NotNull(journal.Find("sent-once")!.TelegramNotifiedAt);
+    }
+
+    [Fact]
+    public async Task SendTimeFromTheFuture_DoesNotBlockWarnings()
+    {
+        var clock = new ManualClock(new DateTimeOffset(2026, 9, 29, 10, 0, 0, TimeSpan.Zero));
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-future-{Guid.NewGuid():N}.json"));
+        var (_, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(existingJournal: journal, clock: clock);
+        journal.Record(NotificationEntry("sent-while-clock-was-fast", T08) with
+        {
+            TelegramNotifiedAt = new DateTimeOffset(2026, 9, 29, 13, 0, 0, TimeSpan.Zero)
+        });
+        journal.Record(NotificationEntry("waiting", T10));
+
+        await notifier.ProcessPendingAsync();
+
+        Assert.Single(telegram.Messages);
+    }
+
+    [Fact]
+    public async Task FailedSendRetryPause_SurvivesWallClockStepBack()
+    {
+        var clock = new ManualClock(new DateTimeOffset(2026, 9, 29, 10, 0, 0, TimeSpan.Zero));
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-stepback-{Guid.NewGuid():N}.json"));
+        var (_, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(existingJournal: journal, clock: clock);
+        journal.Record(NotificationEntry("waiting", T10));
+        telegram.SendSucceeds = false;
+        await notifier.ProcessPendingAsync();
+        Assert.Single(telegram.Messages);
+
+        telegram.SendSucceeds = true;
+        clock.Set(new DateTimeOffset(2026, 9, 29, 7, 0, 0, TimeSpan.Zero));
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await notifier.ProcessPendingAsync();
+
+        Assert.Equal(2, telegram.Messages.Count);
+        Assert.NotNull(journal.Find("waiting")!.TelegramNotifiedAt);
+    }
+
+    [Fact]
+    public async Task KimaiTimezoneErrorResponse_FallsBackToUtc()
+    {
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-utc-{Guid.NewGuid():N}.json"));
+        var (_, telegram, notifier, kimai) = CreateServiceWithTelegramAndKimai(existingJournal: journal);
+        kimai.TimezoneId = null;
+        journal.Record(NotificationEntry("no-zone", T08));
+
+        await notifier.ProcessPendingAsync();
+
+        Assert.Contains("24.08. 08:00 UTC", Assert.Single(telegram.Messages));
+    }
+
+    [Fact]
+    public async Task DisabledEmployeeOnAuthenticatedTerminal_DoesNotWarn()
+    {
+        var journal = new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-inactive-{Guid.NewGuid():N}.json"));
+        var (service, telegram, notifier, _) = CreateServiceWithTelegramAndKimai(existingJournal: journal,
+            extraEmployees: [new EmployeeSettings
+            {
+                Id = "former", DisplayName = "Frieda Früher", ApiToken = "token-former", IsEnabled = false
+            }]);
+
+        var result = await service.SyncKioskAsync([
+            Kiosk("former-start", "start", T08, "") with { EmployeeId = "former", AuthenticatedTerminalId = "pi-1" }
+        ]);
+        await notifier.ProcessPendingAsync();
+
+        Assert.Equal("rejected", Assert.Single(result.Results).Status);
+        Assert.False(journal.Find("former-start")!.TelegramEligible);
+        Assert.Empty(telegram.Messages);
     }
 
     private static RejectedOfflineEvent NotificationEntry(string id, DateTimeOffset performedAt) =>
@@ -1609,7 +1725,7 @@ public sealed class OfflineClockServiceTests
     private static (OfflineClockService Service, RecordingTelegramNotifier Telegram, OfflineRejectionNotifier Throttle, FakeKimaiClient Kimai)
         CreateServiceWithTelegramAndKimai(bool enabled = true,
             RejectedOfflineEventStore? existingJournal = null, TimeProvider? clock = null,
-            IOfflineEventIdStore? eventIds = null)
+            IOfflineEventIdStore? eventIds = null, IEnumerable<EmployeeSettings>? extraEmployees = null)
     {
         var baseline = TestSettings();
         var settings = new RuntimeSettings
@@ -1618,7 +1734,7 @@ public sealed class OfflineClockServiceTests
             DefaultProjectId = baseline.DefaultProjectId,
             DefaultActivityId = baseline.DefaultActivityId,
             PauseActivityId = baseline.PauseActivityId,
-            Employees = baseline.Employees,
+            Employees = [.. baseline.Employees, .. extraEmployees ?? []],
             TelegramBotToken = enabled ? "test-token" : null,
             TelegramChatId = enabled ? "test-chat" : null
         };
@@ -1652,8 +1768,19 @@ public sealed class OfflineClockServiceTests
     private sealed class ManualClock(DateTimeOffset now) : TimeProvider
     {
         private DateTimeOffset _now = now;
+        private long _elapsedTicks;
         public override DateTimeOffset GetUtcNow() => _now;
-        public void Advance(TimeSpan duration) => _now += duration;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => _elapsedTicks;
+
+        public void Advance(TimeSpan duration)
+        {
+            _now += duration;
+            _elapsedTicks += duration.Ticks;
+        }
+
+        /// <summary>Wall clock only, like an NTP correction; monotonic time is unaffected.</summary>
+        public void Set(DateTimeOffset wallClock) => _now = wallClock;
     }
 
     private static (OfflineClockService Service, FakeKimaiClient Kimai, RecordingLogger Logger) CreateServiceWithLogger()
@@ -2028,13 +2155,16 @@ public sealed class OfflineClockServiceTests
 
         public int TimezoneCalls { get; private set; }
 
+        /// <summary>null mimics a Kimai error response (IKimaiClient contract).</summary>
+        public string? TimezoneId { get; set; } = "Europe/Berlin";
+
         public Task<string?> GetCurrentUserTimezoneAsync(
             RuntimeSettings settings,
             EmployeeSettings employee,
             CancellationToken cancellationToken = default)
         {
             TimezoneCalls++;
-            return Task.FromResult<string?>("Europe/Berlin");
+            return Task.FromResult(TimezoneId);
         }
 
         /// <summary>

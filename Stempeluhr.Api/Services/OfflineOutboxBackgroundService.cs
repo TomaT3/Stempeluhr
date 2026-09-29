@@ -15,14 +15,16 @@ public sealed class OfflineOutboxBackgroundService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await rejectionNotifier.ProcessPendingAsync();
+        // Kicked, not awaited: slow Kimai timezone lookups or Telegram must not
+        // delay the outbox replay. Kicked every tick, even after a failed
+        // flush, so warnings held by the throttle are never stranded.
+        rejectionNotifier.Report();
         using var timer = new PeriodicTimer(FlushInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             try
             {
                 await offlineClockService.FlushOutboxAsync(stoppingToken);
-                await rejectionNotifier.ProcessPendingAsync();
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -32,6 +34,8 @@ public sealed class OfflineOutboxBackgroundService(
             {
                 logger.LogError(ex, "Offline outbox flush failed");
             }
+
+            rejectionNotifier.Report();
         }
     }
 }
