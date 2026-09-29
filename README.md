@@ -197,12 +197,20 @@ einer Tätigkeit), bleibt der Wechsel zu jeder Tätigkeit möglich.
 
 ### Telegram-Benachrichtigung (optional)
 
-Bei jedem echten Live-Stempel (nicht bei No-ops und nicht beim Offline-
-Nachtrag) schickt die API eine Nachricht wie
+Bei jedem echten Live-Stempel (nicht bei No-ops oder erfolgreich übernommenen
+Offline-Nachträgen) schickt die API eine Nachricht wie
 `🟢 Anna Mustermann · eingestempelt um 08:12` in eine Telegram-Gruppe
 (Tätigkeitswechsel: `🔄 Anna Mustermann · wechselt zu Kunde X um 10:15`;
 mit weiteren Tätigkeiten nennt auch das Einstempeln die Tätigkeit:
 `🟢 Anna Mustermann · eingestempelt auf Kunde X um 08:12`).
+Endgültig abgelehnte Offline-Nachträge bekannter Mitarbeiter melden sich
+zusätzlich als Warnung mit Aktion, Zeitpunkt (UTC), Grund und Bitte zum
+manuellen Nachtrag in Kimai. Mehrere Ablehnungen einer Verarbeitungsrunde
+werden zusammengefasst. Pro laufendem API-Prozess gehen höchstens eine
+Warnung pro Minute und 20 pro UTC-Tag
+gehen an Telegram; weitere Fälle werden im nächsten erlaubten Zeitfenster
+gebündelt. Unbekannte Mitarbeiter und wiederholte Event-IDs erzeugen keinen
+Push. Alle Ablehnungen bleiben unabhängig davon im Admin-Journal sichtbar.
 
 1. Bei @BotFather `/newbot` ausführen, Token kopieren.
 2. Private Gruppe anlegen, Bot hinzufügen und zum Admin machen.

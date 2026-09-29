@@ -17,4 +17,7 @@ public interface ITelegramNotifier
         DateTimeOffset stampUtc,
         TimeZoneInfo timeZone,
         string? taskLabel = null);
+
+    /// <summary>Sends an already formatted offline rejection summary.</summary>
+    Task SendMessageAsync(string text);
 }

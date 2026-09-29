@@ -35,6 +35,23 @@ public sealed class TelegramNotifier(
             }
 
             var text = TelegramMessageFactory.Build(employeeName, action, stampUtc, timeZone, taskLabel);
+            await SendMessageAsync(text);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Telegram notification could not be sent");
+        }
+    }
+
+    public async Task SendMessageAsync(string text)
+    {
+        try
+        {
+            var settings = settingsStore.Load();
+            if (!settings.TelegramEnabled)
+            {
+                return;
+            }
 
             // using: Client nach dem Send zurückgeben; die gepoolten Handler
             // gehören der Factory und überleben den Dispose.

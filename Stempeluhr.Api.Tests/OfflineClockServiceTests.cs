@@ -35,6 +35,67 @@ public sealed class OfflineClockServiceTests
     private static readonly DateTimeOffset T1230 = Parse("2026-08-24T12:30:00Z");
 
     [Fact]
+    public async Task RejectedReplay_SendsOneSummaryPerBatch_AndThrottlesLaterBatches()
+    {
+        var (service, telegram, throttle) = CreateServiceWithTelegram();
+        using (throttle)
+        {
+            var batch = await service.SyncKioskAsync([
+                Kiosk("bad-1", "unknown", T08),
+                Kiosk("bad-2", "unknown", T10)
+            ]);
+            Assert.All(batch.Results, result => Assert.Equal("rejected", result.Status));
+            var text = Assert.Single(telegram.Messages);
+            Assert.Contains("2 Offline-Stempel", text);
+            Assert.Contains("Erster Fall", text);
+            Assert.Contains("Letzter Fall", text);
+            Assert.Contains("Max Mustermann", text);
+            Assert.DoesNotContain("1234", text);
+
+            await service.SyncKioskAsync([Kiosk("bad-3", "unknown", T12)]);
+            Assert.Single(telegram.Messages);
+            await service.SyncKioskAsync([Kiosk("bad-1", "unknown", T08)]);
+            Assert.Single(telegram.Messages);
+        }
+    }
+
+    [Fact]
+    public async Task DisabledTelegram_AndUnknownEmployee_DoNotSend()
+    {
+        var (disabledService, disabledTelegram, disabledThrottle) = CreateServiceWithTelegram(enabled: false);
+        using (disabledThrottle)
+        {
+            Assert.Equal("rejected", Assert.Single((await disabledService.SyncKioskAsync([
+                Kiosk("disabled", "unknown", T08)])).Results).Status);
+            Assert.Empty(disabledTelegram.Messages);
+        }
+
+        var (service, telegram, throttle) = CreateServiceWithTelegram();
+        using (throttle)
+        {
+            Assert.Equal("rejected", Assert.Single((await service.SyncKioskAsync([
+                Kiosk("unknown-employee", "start", T08) with { EmployeeId = "missing" }])).Results).Status);
+            Assert.Empty(telegram.Messages);
+        }
+    }
+
+    [Fact]
+    public async Task RejectionDuringBackgroundFlush_SendsTelegram()
+    {
+        var (service, telegram, throttle, kimai) = CreateServiceWithTelegramAndKimai();
+        using (throttle)
+        {
+            kimai.FailNextStatusCalls = 2;
+            var entry = Kiosk("late-rejection", "start", T08);
+            Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([entry])).Results).Status);
+            Assert.Empty(telegram.Messages);
+            kimai.StartFailures.Enqueue(new KimaiApiException(System.Net.HttpStatusCode.BadRequest, "Kimai refused"));
+            await service.FlushOutboxAsync();
+            Assert.Contains("Kimai refused", Assert.Single(telegram.Messages));
+        }
+    }
+
+    [Fact]
     public async Task RemovedTerminalEmployeesDoNotContainOrReorderOtherEvents()
     {
         var (service, kimai) = CreateService();
@@ -1433,6 +1494,46 @@ public sealed class OfflineClockServiceTests
     {
         var (service, kimai, _) = CreateServiceWithLogger();
         return (service, kimai);
+    }
+
+    private static (OfflineClockService Service, RecordingTelegramNotifier Telegram, OfflineRejectionNotifier Throttle)
+        CreateServiceWithTelegram(bool enabled = true)
+    {
+        var (service, telegram, throttle, _) = CreateServiceWithTelegramAndKimai(enabled);
+        return (service, telegram, throttle);
+    }
+
+    private static (OfflineClockService Service, RecordingTelegramNotifier Telegram, OfflineRejectionNotifier Throttle, FakeKimaiClient Kimai)
+        CreateServiceWithTelegramAndKimai(bool enabled = true)
+    {
+        var baseline = TestSettings();
+        var settings = new RuntimeSettings
+        {
+            BaseUrl = baseline.BaseUrl,
+            DefaultProjectId = baseline.DefaultProjectId,
+            DefaultActivityId = baseline.DefaultActivityId,
+            PauseActivityId = baseline.PauseActivityId,
+            Employees = baseline.Employees,
+            TelegramBotToken = enabled ? "test-token" : null,
+            TelegramChatId = enabled ? "test-chat" : null
+        };
+        var store = new InMemorySettingsStore(settings);
+        var telegram = new RecordingTelegramNotifier();
+        var throttle = new OfflineRejectionNotifier(store, telegram, NullLogger<OfflineRejectionNotifier>.Instance);
+        var kimai = new FakeKimaiClient();
+        var service = new OfflineClockService(store, new InMemoryEmployeeService(), kimai,
+            new InMemoryEventIdStore(), new KioskEventCoordinator(),
+            new RejectedOfflineEventStore(Path.Combine(Path.GetTempPath(), $"stempeluhr-notify-{Guid.NewGuid():N}.json")),
+            new RecordingLogger(), throttle);
+        return (service, telegram, throttle, kimai);
+    }
+
+    private sealed class RecordingTelegramNotifier : ITelegramNotifier
+    {
+        public List<string> Messages { get; } = [];
+        public Task SendMessageAsync(string text) { Messages.Add(text); return Task.CompletedTask; }
+        public Task SendStampNotificationAsync(string employeeName, string action, DateTimeOffset stampUtc,
+            TimeZoneInfo timeZone, string? taskLabel = null) => Task.CompletedTask;
     }
 
     private static (OfflineClockService Service, FakeKimaiClient Kimai, RecordingLogger Logger) CreateServiceWithLogger()

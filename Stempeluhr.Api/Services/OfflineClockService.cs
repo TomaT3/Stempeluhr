@@ -37,7 +37,8 @@ public sealed class OfflineClockService(
     IOfflineEventIdStore eventIdStore,
     KioskEventCoordinator kioskEvents,
     RejectedOfflineEventStore rejectedEvents,
-    ILogger<OfflineClockService> logger) : IOfflineClockService
+    ILogger<OfflineClockService> logger,
+    OfflineRejectionNotifier? rejectionNotifier = null) : IOfflineClockService
 {
     private const string BufferedStatus = "buffered";
     private const string BufferedMessage = "Kimai nicht erreichbar - wird automatisch nachgetragen.";
@@ -64,13 +65,14 @@ public sealed class OfflineClockService(
         var duplicates = 0;
         var buffered = 0;
         var results = new List<OfflineSyncEventResultDto>();
+        var newRejections = new List<RejectedOfflineEvent>();
 
         void RejectRegistered(OfflineKioskClockEventDto entry, string message)
         {
             results.Add(new OfflineSyncEventResultDto(entry.EventId, "rejected", message));
             // Journal each refusal before another event can abort the batch.
             // Without a journal entry, a lost response must remain retryable.
-            if (!TryRecordRejected(entry, message))
+            if (!TryRecordRejected(entry, message, newRejections))
             {
                 eventIdStore.Remove(entry.EventId);
             }
@@ -84,7 +86,7 @@ public sealed class OfflineClockService(
             results.Add(new OfflineSyncEventResultDto(invalid.EventId ?? string.Empty, "rejected", message));
             if (!string.IsNullOrWhiteSpace(invalid.EventId))
             {
-                TryRecordRejected(invalid, message);
+                TryRecordRejected(invalid, message, newRejections);
             }
         }
 
@@ -101,10 +103,11 @@ public sealed class OfflineClockService(
         {
             // Never let a fresh batch jump over events that are still waiting
             // in the outbox.
-            var queuedBehindBacklog = await BufferBatchBehindBacklogAsync(orderedKioskEvents, results, cancellationToken);
+            var queuedBehindBacklog = await BufferBatchBehindBacklogAsync(orderedKioskEvents, results, newRejections, cancellationToken);
             if (queuedBehindBacklog > 0)
             {
                 buffered += queuedBehindBacklog;
+                rejectionNotifier?.Report(newRejections);
                 return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
             }
 
@@ -200,13 +203,14 @@ public sealed class OfflineClockService(
                 }
             }
 
-            await FlushOutboxCoreAsync(cancellationToken);
+            await FlushOutboxCoreAsync(cancellationToken, newRejections);
         }
         finally
         {
             _syncLock.Release();
         }
 
+        rejectionNotifier?.Report(newRejections);
         return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
     }
 
@@ -215,15 +219,16 @@ public sealed class OfflineClockService(
     /// read-only, return the refusal anyway so the kiosk retains its local
     /// record instead of blocking the whole batch behind a permanent 5xx.
     /// </summary>
-    private bool TryRecordRejected(OfflineKioskClockEventDto entry, string message)
+    private bool TryRecordRejected(OfflineKioskClockEventDto entry, string message, List<RejectedOfflineEvent> newRejections)
     {
         try
         {
             var employeeName = settingsStore.Load().Employees
                 .FirstOrDefault(employee => employee.Id == entry.EmployeeId)?.DisplayName ?? string.Empty;
-            rejectedEvents.Record(new RejectedOfflineEvent(
+            var record = new RejectedOfflineEvent(
                 entry.EventId, entry.EmployeeId, employeeName, entry.Action,
-                entry.PerformedAt, DateTimeOffset.UtcNow, message));
+                entry.PerformedAt, DateTimeOffset.UtcNow, message);
+            if (rejectedEvents.Record(record)) newRejections.Add(record);
             return true;
         }
         catch (Exception ex)
@@ -248,9 +253,10 @@ public sealed class OfflineClockService(
     private async Task<int> BufferBatchBehindBacklogAsync(
         IReadOnlyList<OfflineKioskClockEventDto> orderedEvents,
         List<OfflineSyncEventResultDto> results,
+        List<RejectedOfflineEvent> newRejections,
         CancellationToken cancellationToken)
     {
-        await FlushOutboxCoreAsync(cancellationToken);
+        await FlushOutboxCoreAsync(cancellationToken, newRejections);
         if (_kioskOutbox.Count == 0)
         {
             return 0;
@@ -266,7 +272,7 @@ public sealed class OfflineClockService(
             results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, BufferedMessage));
         }
 
-        await FlushOutboxCoreAsync(cancellationToken);
+        await FlushOutboxCoreAsync(cancellationToken, newRejections);
         return orderedEvents.Count;
     }
 
@@ -915,15 +921,17 @@ public sealed class OfflineClockService(
     /// </summary>
     public async Task FlushOutboxAsync(CancellationToken cancellationToken = default)
     {
+        var newRejections = new List<RejectedOfflineEvent>();
         await _syncLock.WaitAsync(cancellationToken);
         try
         {
-            await FlushOutboxCoreAsync(cancellationToken);
+            await FlushOutboxCoreAsync(cancellationToken, newRejections);
         }
         finally
         {
             _syncLock.Release();
         }
+        rejectionNotifier?.Report(newRejections);
     }
 
     /// <summary>
@@ -933,7 +941,7 @@ public sealed class OfflineClockService(
     /// at the front and ends the round, so the next flush resumes in the same
     /// order. Callers must hold <see cref="_syncLock"/>.
     /// </summary>
-    private async Task FlushOutboxCoreAsync(CancellationToken cancellationToken)
+    private async Task FlushOutboxCoreAsync(CancellationToken cancellationToken, List<RejectedOfflineEvent> newRejections)
     {
         var drained = 0;
         SortChronologically(_kioskOutbox, entry => entry.PerformedAt);
@@ -984,7 +992,7 @@ public sealed class OfflineClockService(
                 // If persistence fails, free the ID so that retry can receive
                 // a fresh verdict instead of a silent "duplicate".
                 logger.LogError(ex, "Outbox: dropping kiosk event {EventId} after permanent error", kioskEntry.EventId);
-                if (!TryRecordRejected(kioskEntry, ex.Message))
+                if (!TryRecordRejected(kioskEntry, ex.Message, newRejections))
                 {
                     eventIdStore.Remove(kioskEntry.EventId);
                 }

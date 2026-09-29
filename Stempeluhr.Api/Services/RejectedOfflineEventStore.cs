@@ -36,18 +36,19 @@ public sealed class RejectedOfflineEventStore(string filePath, ILogger<RejectedO
         }
     }
 
-    public void Record(RejectedOfflineEvent entry)
+    public bool Record(RejectedOfflineEvent entry)
     {
         lock (_gate)
         {
             var entries = Load();
             if (entries.Any(existing => existing.EventId == entry.EventId))
             {
-                return;
+                return false;
             }
             var updated = TrimResolved(new List<RejectedOfflineEvent>(entries) { entry });
             Persist(updated);
             _entries = updated;
+            return true;
         }
     }
 

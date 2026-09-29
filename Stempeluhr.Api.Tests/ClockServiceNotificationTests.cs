@@ -605,6 +605,8 @@ public sealed class ClockServiceNotificationTests
             TaskLabels.Add(taskLabel);
             return Task.CompletedTask;
         }
+
+        public Task SendMessageAsync(string text) => Task.CompletedTask;
     }
 
     private sealed class RecordingLogger : ILogger<ClockService>
