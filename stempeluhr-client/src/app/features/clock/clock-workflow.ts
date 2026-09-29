@@ -824,7 +824,11 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (employee) {
       const sessionCardId = normalized ?? cardId;
       this.applyOfflineIdentity(employee, sessionCardId, null);
-      this.resumeCardBacklog(employee, sessionCardId);
+      // Wem die Karte gehört, weiß hier nur der Cache. Stempel mit fehlender
+      // PIN bekommen die Karten-ID erst, wenn der Server den Mitarbeiter
+      // bestätigt hat - eine umgehängte Karte ließe sonst deren Nachtrag
+      // scheitern (Issue #75).
+      this.resumeCardBacklog(employee, null);
       this.audioFeedback.playBeeps(1);
       // Seit der Local-Poll IMMER läuft, trifft der Cache-Pfad auch online
       // zu - dort ist die API erreichbar, also Status UND Mitarbeiter still
@@ -857,6 +861,9 @@ export abstract class ClockWorkflow implements OnDestroy {
             }
             if (event.employee) {
               this.selectedEmployee.set(event.employee);
+              if (this.hasPendingForEmployee(employee.id)) {
+                this.offlineQueue.authorizeEmployeeCard(employee.id, sessionCardId);
+              }
             }
             if (event.status && !this.replayStatusPending()) {
               this.applyObservedStatus(employee.id, event.status);
@@ -914,10 +921,18 @@ export abstract class ClockWorkflow implements OnDestroy {
     });
   }
 
-  private resumeCardBacklog(employee: Employee, cardId: string): void {
+  /**
+   * `cardId` nur, wenn der Server die Karte diesem Mitarbeiter zugeordnet
+   * hat; ohne sie läuft nur der übrige Nachtrag an (Issue #75).
+   */
+  private resumeCardBacklog(employee: Employee, cardId: string | null): void {
     if (this.replayStatusPending()) {
       this.message.set('Ausstehende Stempel werden nachgetragen.');
-      this.offlineQueue.authorizeEmployeeCard(employee.id, cardId);
+      if (cardId) {
+        this.offlineQueue.authorizeEmployeeCard(employee.id, cardId);
+      } else {
+        this.offlineQueue.syncNow().subscribe();
+      }
     } else {
       this.message.set(`${employee.displayName} - bitte Aktion waehlen.`);
     }
