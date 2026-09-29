@@ -814,11 +814,35 @@ describe('TerminalPage', () => {
 
       it('keeps the stamps waiting for the PIN when identify fails', () => {
         pendingQueue.set([{ kind: 'kiosk', event: { employeeId: 'max' } }]);
-        scanCachedCard();
+        const fixture = scanCachedCard();
+        const component = fixture.componentInstance;
 
         identify$.error({ status: 429 });
 
         expect(TestBed.inject(OfflineQueueService).authorizeEmployeeCard).not.toHaveBeenCalled();
+        // Nothing replays without the card - never claim otherwise.
+        expect(component.actionsBlocked()).toBe(true);
+        expect(component.message()).toBe('Karte nicht bestätigt – bitte erneut anmelden.');
+      });
+
+      it('says so when the server no longer knows the cached card', () => {
+        pendingQueue.set([{ kind: 'kiosk', event: { employeeId: 'max' } }]);
+        const fixture = scanCachedCard();
+
+        identify$.next(identifyEvent({ success: false, employee: null, status: null, message: 'Unbekannte Karte' }));
+
+        expect(TestBed.inject(OfflineQueueService).authorizeEmployeeCard).not.toHaveBeenCalled();
+        expect(fixture.componentInstance.message()).toBe('Karte nicht bestätigt – bitte erneut anmelden.');
+      });
+
+      it('keeps quiet about a failed identify when no stamps wait for the card', () => {
+        const fixture = scanCachedCard();
+        const before = fixture.componentInstance.message();
+
+        identify$.error({ status: 429 });
+
+        expect(fixture.componentInstance.message()).toBe(before);
+        expect(fixture.componentInstance.actionsBlocked()).toBe(false);
       });
 
       it('offers the tasks the server knows now, not the ones cached with the card', () => {

@@ -835,8 +835,10 @@ export abstract class ClockWorkflow implements OnDestroy {
       // nachladen: der Cache kennt nur den letzten Stand, auch der Tätigkeiten
       // (die Einstempel-Auswahl böte sonst gelöschte an). Fehler (429, Netz)
       // ignorieren: der Employee ist bereits freigeschaltet, der Status kommt
-      // mit der ersten Aktion. Nach einem Identitätswechsel oder einer Aktion
-      // aktualisiert die Antwort nur noch den Karten-Cache (identifyRefresh).
+      // mit der ersten Aktion. Nur wenn Stempel auf die Karte warten, bleibt
+      // die Sitzung ohne Bestätigung gesperrt - dann sagt die Meldung das.
+      // Nach einem Identitätswechsel oder einer Aktion aktualisiert die
+      // Antwort nur noch den Karten-Cache (identifyRefresh).
       if (!this.isOffline()) {
         const generation = this.sessionGeneration;
         this.identifyRefresh?.unsubscribe();
@@ -844,10 +846,12 @@ export abstract class ClockWorkflow implements OnDestroy {
           next: event => {
             this.identifyRefresh = null;
             if (!event.success) {
+              this.reportUnconfirmedCard(employee, generation);
               return;
             }
+            const confirmedCardId = event.cardId ?? sessionCardId;
             if (event.employee) {
-              rememberEmployeeCard(event.cardId ?? sessionCardId, event.employee);
+              rememberEmployeeCard(confirmedCardId, event.employee);
             }
             if (generation !== this.sessionGeneration) {
               return;
@@ -856,14 +860,16 @@ export abstract class ClockWorkflow implements OnDestroy {
               // Karte inzwischen umgehängt: ein Identitätswechsel wie jeder
               // andere - nie Name, Status oder Auswahl des alten stehen lassen.
               this.applyOfflineIdentity(event.employee, sessionCardId, null, event.status);
-              this.resumeCardBacklog(event.employee, sessionCardId);
+              this.resumeCardBacklog(event.employee, confirmedCardId);
               return;
             }
             if (event.employee) {
               this.selectedEmployee.set(event.employee);
               if (this.hasPendingForEmployee(employee.id)) {
-                this.offlineQueue.authorizeEmployeeCard(employee.id, sessionCardId);
+                this.offlineQueue.authorizeEmployeeCard(employee.id, confirmedCardId);
               }
+            } else {
+              this.reportUnconfirmedCard(employee, generation);
             }
             if (event.status && !this.replayStatusPending()) {
               this.applyObservedStatus(employee.id, event.status);
@@ -871,6 +877,7 @@ export abstract class ClockWorkflow implements OnDestroy {
           },
           error: () => {
             this.identifyRefresh = null;
+            this.reportUnconfirmedCard(employee, generation);
           },
         });
       }
@@ -919,6 +926,21 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.audioFeedback.playBeeps(2);
       },
     });
+  }
+
+  /**
+   * Der Server hat die Karte aus dem Cache nicht bestätigt (Fehler, 429 oder
+   * unbekannt). Warten Stempel des Mitarbeiters auf die Karte, bleibt die
+   * Sitzung gesperrt und nichts wird nachgetragen - „werden nachgetragen"
+   * wäre dann falsch (Review zu #75). Die Stempel warten weiter auf eine
+   * PIN-Anmeldung oder einen neuen Scan.
+   */
+  private reportUnconfirmedCard(employee: Employee, generation: number): void {
+    if (generation !== this.sessionGeneration || this.selectedEmployee()?.id !== employee.id
+      || !this.hasPendingForEmployee(employee.id)) {
+      return;
+    }
+    this.message.set('Karte nicht bestätigt – bitte erneut anmelden.');
   }
 
   /**
