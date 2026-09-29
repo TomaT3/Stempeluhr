@@ -96,6 +96,57 @@ describe('AdminPage', () => {
     http.verify();
   });
 
+  it('keeps unsaved edits when reloading settings fails', async () => {
+    localStorage.removeItem('stempeluhr.admin.nfcTerminalId');
+    await TestBed.configureTestingModule({
+      imports: [AdminPage],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
+    }).compileComponents();
+
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(AdminPage);
+    const component = fixture.componentInstance;
+    component.adminPassword.set('test-password');
+    component.loadAdminSettings();
+
+    const settings: AdminSettings = {
+      baseUrl: 'https://kimai.example.test',
+      hasAdminPassword: true,
+      hasAdminApiToken: true,
+      defaultProjectId: 42,
+      defaultActivityId: null,
+      pauseActivityId: null,
+      employees: [],
+    };
+    http.expectOne('/api/admin/settings').flush(settings);
+    http.expectOne('/api/admin/kimai-projects').flush([
+      { id: 42, name: 'Büro', parentTitle: null, customerId: null, visible: true },
+      { id: 43, name: 'Werkstatt', parentTitle: null, customerId: null, visible: true },
+    ]);
+    http.expectOne('/api/admin/kimai-activities').flush([]);
+    http.expectOne('/api/admin/employee-statuses').flush([]);
+    http.expectOne('/api/health').flush({});
+    http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
+
+    component.updateDefaultProjectId('43');
+    expect(component.adminDirty()).toBe(true);
+
+    component.adminPassword.set('wrong-password');
+    component.loadAdminSettings();
+    http.expectOne('/api/admin/settings').flush('Unauthorized', { status: 401, statusText: 'Unauthorized' });
+    fixture.detectChanges();
+
+    expect(component.adminSettings()?.defaultProjectId).toBe(43);
+    expect(component.kimaiProjects().map(project => project.id)).toEqual([42, 43]);
+    expect(component.adminDirty()).toBe(true);
+    expect(component.adminMessage()).toContain('Admin-Passwort');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.admin-editor')).not.toBeNull();
+    // NFC-Polling läuft nach dem Fehlschlag wieder.
+    http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
+    fixture.destroy();
+    http.verify();
+  });
+
   it('scrolls section navigation in place instead of following base-relative anchors', async () => {
     await TestBed.configureTestingModule({
       imports: [AdminPage],

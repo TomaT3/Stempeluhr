@@ -41,6 +41,15 @@ export class AdminPage implements OnDestroy {
 
   loadAdminSettings(): void {
     const password = this.adminPassword();
+    // Schlägt das Neuladen fehl (falsches Passwort, Netzwerk), wird der
+    // bisherige Stand samt ungespeicherter Eingaben wiederhergestellt.
+    const previous = {
+      settings: this.adminSettings(),
+      projects: this.kimaiProjects(),
+      activities: this.kimaiActivities(),
+      dirty: this.adminDirty(),
+      polling: this.nfcPollTimer !== null,
+    };
     if (this.nfcPollTimer !== null) {
       window.clearInterval(this.nfcPollTimer);
       this.nfcPollTimer = null;
@@ -75,9 +84,16 @@ export class AdminPage implements OnDestroy {
         this.startNfcPolling();
       },
       error: (error: HttpErrorResponse) => {
+        this.adminSettings.set(previous.settings);
+        this.kimaiProjects.set(previous.projects);
+        this.kimaiActivities.set(previous.activities);
+        this.adminDirty.set(previous.dirty);
         this.adminMessage.set(this.adminLoginErrorMessage(error));
         this.adminBusy.set(false);
         this.initialLoading.set(false);
+        if (previous.polling) {
+          this.startNfcPolling();
+        }
       },
     });
   }
