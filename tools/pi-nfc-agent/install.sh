@@ -13,6 +13,7 @@
 # Optionen:
 #   --server URL          Basis-URL der Stempeluhr (ohne /terminal)
 #   --terminal-id ID      Terminal-Kennung (= terminalId der Kiosk-URL)
+#   --terminal-token-file PFAD  geschützte Datei mit registriertem Terminal-Token
 #   --reader NAME         Filter auf den PC/SC-Reader-Namen (Default: ACR122)
 #   --kiosk-user USER     Chromium-Autostart für diesen Benutzer anlegen
 #   --skip-apt            keine Pakete installieren (Tests)
@@ -31,6 +32,7 @@ TERMINAL_ID=""
 READER="ACR122"
 KIOSK_USER=""
 SKIP_APT=0
+TERMINAL_TOKEN_FILE=""
 
 usage() { sed -n '2,22p' "$0" 2>/dev/null || true; exit 1; }
 log() { echo "==> $*"; }
@@ -40,6 +42,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --server) SERVER="${2:-}"; shift 2 ;;
     --terminal-id) TERMINAL_ID="${2:-}"; shift 2 ;;
+    --terminal-token-file) TERMINAL_TOKEN_FILE="${2:-}"; shift 2 ;;
     --reader) READER="${2:-}"; shift 2 ;;
     --kiosk-user) KIOSK_USER="${2:-}"; shift 2 ;;
     --skip-apt) SKIP_APT=1; shift ;;
@@ -110,6 +113,22 @@ PY
 fi
 chown root:"$SERVICE_USER" "$CONFIG"
 chmod 640 "$CONFIG"
+if [ -n "$TERMINAL_TOKEN_FILE" ]; then
+  python3 - "$CONFIG" "$TERMINAL_TOKEN_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+config = json.loads(path.read_text())
+token = Path(sys.argv[2]).read_text().strip()
+if len(token) < 32 or any(c.isspace() for c in token):
+    raise SystemExit("Terminal-Token muss mindestens 32 Zeichen ohne Leerzeichen haben")
+config["terminal_token"] = token
+path.write_text(json.dumps(config, indent=2) + "\n")
+PY
+fi
+if [ -z "$(config_value terminal_token)" ]; then
+  log "HINWEIS: Terminal-Token fehlt; Nachtrag bleibt im Legacy-Modus; für PIN-freie Queue --terminal-token-file setzen (siehe Pi-Anleitung)."
+fi
 
 log "Agent von $SERVER installieren"
 mkdir -p "$AGENT_DIR"

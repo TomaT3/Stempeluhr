@@ -44,10 +44,59 @@ autologin-user-timeout=0
 
 ## 3. Agent und Kiosk einrichten
 
+Pro Pi wird ein eigenes zufälliges Token benötigt. Auf einem vertrauenswürdigen
+Rechner erzeugen (Datei nur für den Eigentümer lesbar):
+
+```bash
+umask 077
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > terminal.token
+```
+
+Den Inhalt in die bestehende Serverdatei `data/settings.json` eintragen,
+alle anderen Einstellungen beibehalten:
+
+```json
+"terminalTokens": {
+  "stempeluhr-pi-02": "<Inhalt der Datei terminal.token>"
+}
+```
+
+Die Datei über den vorhandenen sicheren Wartungszugang als
+`/root/stempeluhr-terminal.token` auf den Pi übertragen (`chmod 600`).
+Die Terminal-ID muss in Server-Konfiguration, Agent und Kiosk-URL übereinstimmen.
+Das Token nicht in URLs, Browser oder Shell-Befehlsargumente kopieren.
+Anschließend installieren:
+
 ```bash
 curl -fsSL https://<host>/pi/install.sh | sudo bash -s -- \
-  --server https://<host> --terminal-id <id> --kiosk-user kiosk
+  --server https://<host> --terminal-id <id> --kiosk-user kiosk \
+  --terminal-token-file /root/stempeluhr-terminal.token
 ```
+
+Nach der Installation die Übertragungsdateien löschen. Das Token bleibt in
+`/etc/stempeluhr-nfc-agent/config.json` (`root:stempeluhr`, `640`). Bestehende
+Konfigurationen bleiben erhalten; `--terminal-token-file` ergänzt oder ersetzt
+nur das Token. Ohne diese Option funktionieren alte Konfigurationen weiter,
+der Nachtrag verwendet bis zum ersten erfolgreichen authentifizierten
+Katalogabruf weiter PIN/Karte. Bestehende Queue-Zugangsdaten bleiben bis dahin
+erhalten. Nach bestätigter Umstellung entfernt der Browser sie dauerhaft;
+Token-Entzug bewirkt dann keinen Rückfall auf PIN-Auth.
+
+**Prüfung:** Kiosk einmal online öffnen. Im Browser-Netzwerkprotokoll muss
+`http://127.0.0.1:8737/terminal/catalog` mit 200 antworten. Danach Netzwerk
+trennen, einen hier noch nie angemeldeten Mitarbeiter per PIN und Karte
+anmelden und einen Stempel vormerken. Browser neu starten und Verbindung
+wiederherstellen: Der Stempel muss übertragen werden, die gespeicherte Queue
+enthält keine PIN. Ein neu installiertes/gelöschtes Browser-Profil benötigt
+zuerst diesen Online-Abruf sowie die App im Service Worker.
+
+**Rotation/Entzug:** Token unter `terminalTokens.<id>` auf dem Server ersetzen
+oder den Eintrag entfernen; die API liest dies ohne Neustart. Bei Rotation das
+neue Token mit `--terminal-token-file` auf den Pi übernehmen und
+`sudo systemctl restart stempeluhr-nfc-agent` ausführen. Ein 401 lässt die Queue
+unverändert; sie wird mit gültigem Token später nachgetragen. Bereits vom Server
+angenommene Outbox-Ereignisse bleiben gültig. Admin-Speichern erhält die Tokens,
+Admin-Antworten enthalten nur Terminal-IDs.
 
 Der Installer erledigt folgende Schritte und lässt sich gefahrlos erneut
 ausführen:

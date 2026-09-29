@@ -1,7 +1,7 @@
 import { Directive, OnDestroy, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { SwUpdate } from '@angular/service-worker';
-import { Subscription, finalize, timeout } from 'rxjs';
+import { Observable, Subscription, finalize, map, timeout } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
 import { ClockAction, ClockStatus, Employee, EmployeeTask, HoursOverview, isOnDefaultTask } from '../../core/models/kiosk.models';
@@ -87,6 +87,15 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** True while the backend cannot be reached; drives the offline banner. */
   readonly isOffline = signal(false);
+  private readonly replayStatusPending = signal(false);
+  private replayStatusRequest: Subscription | null = null;
+  readonly actionsBlocked = computed(() => this.isBusy() || this.replayStatusPending()
+    || (!this.isOffline() && this.hasPendingForEmployee(this.selectedEmployee()?.id)));
+
+  private hasPendingForEmployee(employeeId: string | undefined): boolean {
+    return !!employeeId && this.offlineQueue.pendingCount().some(entry =>
+      entry.event?.employeeId?.toLowerCase() === employeeId.toLowerCase());
+  }
 
   /** Wartende Stempel - der Offline-Banner zeigt sie als Zähler (Issue #6). */
   readonly pendingStamps = computed(() => this.offlineQueue.pendingCount().length);
@@ -105,6 +114,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
 
     const waiting = pending === 1 ? '1 Stempel wartet' : `${pending} Stempel warten`;
+    if (this.offlineQueue.needsPin()) return `${waiting} auf Übertragung – PIN erneut eingeben`;
     return this.isOffline() ? `Offline – ${waiting} auf Übertragung` : `${waiting} auf Übertragung`;
   });
 
@@ -215,6 +225,8 @@ export abstract class ClockWorkflow implements OnDestroy {
    */
   private pendingResetOnRecovery = false;
   private readonly terminalId = this.readTerminalId();
+  private catalogTimer: number | null = null;
+  private catalogRequest: Subscription | null = null;
   /** Auto-Reload: Timer-Handle für den verzögerten Reload bei Server-Update. */
   private versionReloadTimer: number | null = null;
   private versionRetryTimer: number | null = null;
@@ -231,6 +243,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     // down) emits nothing, so the terminal stays unlocked while a PIN login
     // is still impossible.
     const recoveredSubscription = this.offlineQueue.recovered.subscribe(() => {
+      const wasOffline = this.isOffline();
       this.isOffline.set(false);
       // Race guard against an in-flight ONLINE action: while a queue flush
       // runs (up to its chunk deadline), the employee can act again because
@@ -249,6 +262,9 @@ export abstract class ClockWorkflow implements OnDestroy {
       if (this.pendingResetOnRecovery) {
         this.pendingResetOnRecovery = false;
         this.back();
+      } else if ((this.replayStatusPending() || wasOffline)
+        && this.selectedEmployee() && !this.hasPendingForEmployee(this.selectedEmployee()?.id)) {
+        this.refreshStatusAfterReplay();
       }
     });
     this.recoveryUnsubscribe = () => recoveredSubscription.unsubscribe();
@@ -278,6 +294,14 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
 
+    const refreshCatalog = () => {
+      this.catalogRequest?.unsubscribe();
+      this.catalogRequest = this.localNfcScan.refreshCatalog().subscribe(catalog => {
+        if (catalog !== null) this.offlineQueue.enableTerminalAuth(this.terminalId!);
+      });
+    };
+    refreshCatalog();
+    this.catalogTimer = window.setInterval(refreshCatalog, 60_000);
     this.pollConnectivity();
     this.connectivityPollTimer = window.setInterval(() => this.pollConnectivity(), 1000);
     // Der Agent publiziert Karten NUR an den LocalScanServer - der Local-Poll
@@ -427,6 +451,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
 
     const pin = this.pin();
+    const pendingAtLogin = new Set(this.offlineQueue.pendingCount().map(entry => entry.event?.employeeId));
     this.isBusy.set(true);
     this.message.set('');
     // Neuer Login: nie kurz die Stunden des Vorgängers stehen lassen
@@ -436,7 +461,10 @@ export abstract class ClockWorkflow implements OnDestroy {
       next: session => {
         this.selectedEmployee.set(session.employee);
         this.resetSessionChoices();
-        this.clockState.setStatus(session.status);
+        this.replayStatusPending.set(pendingAtLogin.has(session.employee.id)
+          || this.hasPendingForEmployee(session.employee.id));
+        if (this.replayStatusPending()) this.clockState.clear();
+        else this.clockState.setStatus(session.status);
         this.clockState.setEmployeeMode(true);
         this.isUnlocked.set(true);
         this.nfcCardId = null;
@@ -444,9 +472,13 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.isBusy.set(false);
         // PIN und Status für den nächsten Ausfall merken: der Kiosk kann sich
         // dann offline anmelden und den plausiblen Stempel-Button anbieten.
-        rememberObservedStatus(session.employee.id, session.status);
+        if (!this.replayStatusPending()) rememberObservedStatus(session.employee.id, session.status);
         void rememberEmployeePin(pin, session.employee);
-        this.loadHoursOverview(pin);
+        this.offlineQueue.authorizeEmployee(session.employee.id, pin);
+        if (this.replayStatusPending()) {
+          this.message.set('Ausstehende Stempel werden nachgetragen.');
+          if (!this.hasPendingForEmployee(session.employee.id)) this.refreshStatusAfterReplay();
+        } else this.loadHoursOverview(pin);
       },
       error: (err) => {
         const status = err?.status ?? 0;
@@ -476,8 +508,8 @@ export abstract class ClockWorkflow implements OnDestroy {
   /**
    * Second half of an offline PIN login: the backend could not check the PIN,
    * so resolve it against the verifier cache built from earlier ONLINE logins.
-   * The offline path only UNLOCKS - the PIN itself travels with every queued
-   * stamp and is validated server-side during replay.
+   * The offline path only UNLOCKS. Terminal replay uses agent authentication;
+   * ordinary browser replay requires the employee PIN in memory.
    */
   private async confirmPinOffline(pin: string): Promise<void> {
     const employee = await resolveEmployeeByPin(pin);
@@ -560,6 +592,9 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   back(): void {
+    this.replayStatusPending.set(false);
+    this.replayStatusRequest?.unsubscribe();
+    this.replayStatusRequest = null;
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
       this.resetTimer = null;
@@ -584,6 +619,8 @@ export abstract class ClockWorkflow implements OnDestroy {
    * aktualisieren (identifyRefresh).
    */
   private resetSessionChoices(): void {
+    this.replayStatusRequest?.unsubscribe();
+    this.replayStatusRequest = null;
     this.taskPickerOpen.set(false);
     this.startChoiceOpen.set(false);
     // Die Auswahl direkt nach einem Login bucht ohne Verzögerung.
@@ -647,6 +684,9 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.replayStatusRequest?.unsubscribe();
+    if (this.catalogTimer !== null) window.clearInterval(this.catalogTimer);
+    this.catalogRequest?.unsubscribe();
     if (this.healthPollTimer !== null) {
       window.clearInterval(this.healthPollTimer);
     }
@@ -784,7 +824,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (employee) {
       const sessionCardId = normalized ?? cardId;
       this.applyOfflineIdentity(employee, sessionCardId, null);
-      this.message.set(`${employee.displayName} - bitte Aktion waehlen.`);
+      this.resumeCardBacklog(employee, sessionCardId);
       this.audioFeedback.playBeeps(1);
       // Seit der Local-Poll IMMER läuft, trifft der Cache-Pfad auch online
       // zu - dort ist die API erreichbar, also Status UND Mitarbeiter still
@@ -812,13 +852,13 @@ export abstract class ClockWorkflow implements OnDestroy {
               // Karte inzwischen umgehängt: ein Identitätswechsel wie jeder
               // andere - nie Name, Status oder Auswahl des alten stehen lassen.
               this.applyOfflineIdentity(event.employee, sessionCardId, null, event.status);
-              this.message.set(`${event.employee.displayName} - bitte Aktion waehlen.`);
+              this.resumeCardBacklog(event.employee, sessionCardId);
               return;
             }
             if (event.employee) {
               this.selectedEmployee.set(event.employee);
             }
-            if (event.status) {
+            if (event.status && !this.replayStatusPending()) {
               this.applyObservedStatus(employee.id, event.status);
             }
           },
@@ -857,7 +897,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         }
         if (event.success && event.employee) {
           this.applyOfflineIdentity(event.employee, event.cardId ?? identifyCardId, null, event.status);
-          this.message.set(`${event.employee.displayName} - bitte Aktion waehlen.`);
+          this.resumeCardBacklog(event.employee, event.cardId ?? identifyCardId);
           this.audioFeedback.playBeeps(1);
         } else {
           this.message.set(event.message || 'Unbekannte Karte');
@@ -872,6 +912,15 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.audioFeedback.playBeeps(2);
       },
     });
+  }
+
+  private resumeCardBacklog(employee: Employee, cardId: string): void {
+    if (this.replayStatusPending()) {
+      this.message.set('Ausstehende Stempel werden nachgetragen.');
+      this.offlineQueue.authorizeEmployeeCard(employee.id, cardId);
+    } else {
+      this.message.set(`${employee.displayName} - bitte Aktion waehlen.`);
+    }
   }
 
   /**
@@ -891,8 +940,11 @@ export abstract class ClockWorkflow implements OnDestroy {
   ): void {
     this.selectedEmployee.set(employee);
     this.resetSessionChoices();
+    this.replayStatusPending.set(!this.isOffline() && this.hasPendingForEmployee(employee.id));
     this.clockState.setEmployeeMode(true);
-    if (status) {
+    if (this.replayStatusPending()) {
+      this.clockState.clear();
+    } else if (status) {
       this.applyObservedStatus(employee.id, status);
     } else {
       // The remembered status is shown while the server's own answer is still
@@ -920,6 +972,41 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.hoursOverview.set(null);
   }
 
+  /** Reload only after this employee's backlog has drained; stale login/status
+   * responses must never enable a live stamp that can overtake that backlog. */
+  private refreshStatusAfterReplay(): void {
+    const employeeId = this.selectedEmployee()?.id;
+    if (!employeeId || this.hasPendingForEmployee(employeeId)
+      || (this.replayStatusRequest && !this.replayStatusRequest.closed)) return;
+    this.replayStatusPending.set(true);
+    this.identifyRefresh?.unsubscribe();
+    const generation = ++this.sessionGeneration;
+    const pin = this.pin();
+    const request: Observable<{ employee: Employee | null; status: ClockStatus | null }> = pin ? this.kioskApi.pinLogin(pin).pipe(map(session => ({
+      employee: session.employee, status: session.status,
+    }))) : this.kioskApi.identify(this.nfcCardId!, this.terminalId ?? 'default');
+    this.replayStatusRequest = request.subscribe({
+      next: result => {
+        if (generation !== this.sessionGeneration || this.selectedEmployee()?.id !== employeeId) return;
+        if (result.employee?.id !== employeeId || !result.status) {
+          this.back();
+          return;
+        }
+        if (this.hasPendingForEmployee(employeeId)) return;
+        this.selectedEmployee.set(result.employee);
+        this.applyObservedStatus(employeeId, result.status);
+        this.replayStatusPending.set(false);
+        this.message.set('');
+        this.loadHoursOverview(pin);
+      },
+      error: () => {
+        if (generation !== this.sessionGeneration) return;
+        // Stay blocked until another sync or a new login obtains fresh status.
+        this.message.set('Status nicht erreichbar – bitte erneut anmelden.');
+      },
+    });
+  }
+
   /** Applies a status the SERVER reported and remembers it for the next outage. */
   private applyObservedStatus(employeeId: string, status: ClockStatus): void {
     this.clockState.setStatus(status);
@@ -933,6 +1020,7 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   private sendClockAction(action: ClockAction, taskId: string | null = null): void {
+    if (this.actionsBlocked()) return;
     // Zweiter Tipp kurz nach dem Öffnen einer Auswahl: nicht buchen, die
     // Auswahl bleibt offen. Gilt für jede Aktion - kommt währenddessen der
     // Status an, ersetzen die Stempelknöpfe die Auswahl unter dem Finger.
@@ -1010,6 +1098,7 @@ export abstract class ClockWorkflow implements OnDestroy {
    */
   private queueOffline(stamp: PendingStamp): void {
     this.offlineQueue.enqueueKiosk({
+      ...(this.terminalId ? { terminalId: this.terminalId } : {}),
       eventId: stamp.eventId,
       employeeId: stamp.employeeId,
       pin: stamp.pin,

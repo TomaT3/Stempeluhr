@@ -2,6 +2,14 @@ namespace Stempeluhr.Api.Models;
 
 public sealed class RuntimeSettings
 {
+    /// <summary>Terminal ID to secret token. Managed in settings.json; never returned to clients.</summary>
+    private readonly Dictionary<string, string> terminalTokens = [];
+    public Dictionary<string, string> TerminalTokens
+    {
+        get => terminalTokens;
+        init => terminalTokens = value ?? [];
+    }
+
     public string BaseUrl { get; init; } = string.Empty;
     public string? AdminPassword { get; init; }
     public string? AdminApiToken { get; init; }

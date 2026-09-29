@@ -47,7 +47,12 @@ public sealed record OfflineKioskClockEventDto(
     string Action,
     DateTimeOffset PerformedAt,
     string? NfcCardId = null,
-    string? TaskId = null);
+    string? TaskId = null)
+{
+    // Assigned only after HTTP terminal authentication, never from client JSON.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? AuthenticatedTerminalId { get; init; }
+}
 
 public sealed record OfflineKioskSyncRequest(IReadOnlyList<OfflineKioskClockEventDto>? Events);
 

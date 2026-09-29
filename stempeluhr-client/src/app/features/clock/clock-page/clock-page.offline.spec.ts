@@ -106,12 +106,15 @@ describe('ClockPage offline behaviour', () => {
           provide: LocalNfcScanService,
           useValue: {
             poll: vi.fn(() => of(localScanValue)),
-            ack: localAck,
+            refreshCatalog: vi.fn(() => of(null)), ack: localAck,
           },
         },
         {
           provide: OfflineQueueService,
           useValue: {
+            authorizeEmployee: vi.fn(),
+            authorizeEmployeeCard: vi.fn(),
+            needsPin: signal(false),
             enqueueKiosk,
             syncNow,
             recovered: recovered$.asObservable(),

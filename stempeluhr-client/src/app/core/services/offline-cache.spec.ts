@@ -1,6 +1,7 @@
 import { ClockStatus, Employee } from '../models/kiosk.models';
 import {
   confirmSyncedStatus,
+  replaceEmployeeCatalog,
   forgetEmployeePin,
   formatShortTime,
   lastKnownStatus,
@@ -282,5 +283,33 @@ describe('offline-cache', () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe('terminal employee catalog', () => {
+  afterEach(() => window.localStorage.clear());
+
+  it('keeps a full catalog larger than the legacy 50-entry cache after an online login', async () => {
+    const entries = Array.from({ length: 80 }, (_, i) => ({
+      employee: { id: `employee-${i}`, displayName: `Employee ${i}`, initials: 'E', color: '#000', requiresPin: true, imageUrl: null },
+      salt: 'salt', verifier: 'old-verifier', cardId: null,
+    }));
+    replaceEmployeeCatalog(entries);
+    await rememberEmployeePin('2468', entries[79].employee);
+    expect(JSON.parse(window.localStorage.getItem('stempeluhr.employee-pin-cache.v1')!)).toHaveLength(80);
+  });
+
+  it('identifies previously unseen employees offline and replaces stale identities', async () => {
+    const employee = { id: 'new', displayName: 'New', initials: 'N', color: '#000', requiresPin: true, imageUrl: null };
+    const salt = 'server-salt';
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:2468`));
+    const verifier = [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('');
+    replaceEmployeeCatalog([{ employee, salt, verifier, cardId: '04AB' }]);
+    expect((await resolveEmployeeByPin('2468'))?.id).toBe('new');
+    expect(resolveEmployeeByCard('04:ab')?.id).toBe('new');
+    expect(await resolveEmployeeByPin('0000')).toBeNull();
+    replaceEmployeeCatalog([]);
+    expect(await resolveEmployeeByPin('2468')).toBeNull();
+    expect(resolveEmployeeByCard('04AB')).toBeNull();
   });
 });

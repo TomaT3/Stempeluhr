@@ -45,7 +45,7 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
     status,
   };
 
-  const kioskSyncEndpoint = '/api/kiosk/clock/sync';
+  const kioskSyncEndpoint = 'http://127.0.0.1:8737/terminal/sync';
 
   /** Lets the async flush continuation run so the next step happens. */
   async function drainMicrotasks(): Promise<void> {
@@ -94,7 +94,7 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
         {
           provide: LocalNfcScanService,
-          useValue: { poll: vi.fn(() => of(null)), ack: vi.fn(() => of(null)) },
+          useValue: { poll: vi.fn(() => of(null)), refreshCatalog: vi.fn(() => of([])), ack: vi.fn(() => of(null)) },
         },
         {
           provide: ActivatedRoute,
@@ -111,6 +111,45 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
     httpMock.verify();
     vi.useRealTimers();
     window.localStorage.clear();
+  });
+
+  it.each([false, true])('blocks live stamps until fresh status and ignores abandoned sessions (leave=%s)', async leave => {
+    window.localStorage.setItem('stempeluhr.offline-queue.v1', JSON.stringify([
+      { kind: 'kiosk', event: { eventId: 'morning-start', employeeId: 'max', needsPin: true, action: 'start', performedAt: '2026-09-28T08:00:00Z' } },
+      { kind: 'kiosk', event: { eventId: 'morning-stop', employeeId: 'max', needsPin: true, action: 'stop', performedAt: '2026-09-28T12:00:00Z' } },
+    ]));
+    const refreshed = new Subject<KioskEmployeeSession>();
+    const api = TestBed.inject(KioskApi);
+    vi.mocked(api.pinLogin).mockReturnValueOnce(of(session)).mockReturnValueOnce(refreshed);
+    const fixture = TestBed.createComponent(ClockPage);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    component.pin.set('1234');
+    component.confirmPin();
+    fixture.detectChanges();
+    expect(component.actionsBlocked()).toBe(true);
+    component.start();
+    expect(clockSubjects).toHaveLength(0);
+    await drainMicrotasks();
+    const sync = httpMock.expectOne('/api/kiosk/clock/sync');
+    respondSync(sync, [{ eventId: 'morning-start', status: 'applied' }, { eventId: 'morning-stop', status: 'applied' }], 'applied');
+    await drainMicrotasks();
+    expect(api.pinLogin).toHaveBeenCalledTimes(2);
+    expect(component.actionsBlocked()).toBe(true);
+    component.start();
+    expect(clockSubjects).toHaveLength(0);
+    if (leave) component.back();
+    refreshed.next(session);
+    refreshed.complete();
+    expect(component.actionsBlocked()).toBe(false);
+    if (leave) {
+      expect(component.selectedEmployee()).toBeNull();
+      expect(component.clockState.status()).toBeNull();
+    } else {
+      component.start();
+      expect(clockSubjects).toHaveLength(1);
+    }
+    fixture.destroy();
   });
 
   it('keeps the terminal unlocked while everything is buffered and releases it only after real processing', async () => {

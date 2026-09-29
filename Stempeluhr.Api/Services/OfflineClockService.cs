@@ -311,11 +311,18 @@ public sealed class OfflineClockService(
     /// ("PIN falsch") and silently drop the stamp. The card is only accepted
     /// when it maps to the SAME employee id, so one card can never stamp for
     /// someone else. Same trust model as the live path: whoever presents card
-    /// or PIN counts as that employee (terminal-token auth remains the agreed
-    /// follow-up).
+    /// or PIN counts as that employee. Authenticated terminals instead attest
+    /// the employee identity; the server still rejects disabled/removed employees.
     /// </summary>
     private EmployeeSettings ResolveKioskEmployee(RuntimeSettings settings, OfflineKioskClockEventDto entry)
     {
+        if (entry.AuthenticatedTerminalId is not null)
+        {
+            return settings.Employees.FirstOrDefault(e => e.CanClock
+                && string.Equals(e.Id, entry.EmployeeId, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException("Mitarbeiter nicht gefunden oder deaktiviert.");
+        }
+
         var byPin = employees.FindEmployee(settings, new ClockRequest(entry.EmployeeId, entry.Pin));
         if (byPin is not null)
         {

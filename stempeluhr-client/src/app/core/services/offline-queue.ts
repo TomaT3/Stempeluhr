@@ -3,6 +3,7 @@ import { inject, Injectable, computed, signal } from '@angular/core';
 import { defer, finalize, firstValueFrom, Observable, of, Subject, timeout } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { confirmSyncedStatus } from './offline-cache';
+import { LOCAL_NFC_SCAN_PORT } from './local-nfc-scan.service';
 
 import {
   OfflineKioskClockEvent,
@@ -11,6 +12,7 @@ import {
   RejectedOfflineStamp,
 } from '../models/offline.models';
 
+const TERMINAL_AUTH_STORAGE_KEY = 'stempeluhr.terminal-auth.v1';
 const QUEUE_STORAGE_KEY = 'stempeluhr.offline-queue.v1';
 /**
  * Stamps the server REFUSED during replay (wrong PIN, unknown employee,
@@ -66,6 +68,8 @@ interface StoredOfflineEvent {
 @Injectable({ providedIn: 'root' })
 export class OfflineQueueService {
   private readonly http = inject(HttpClient);
+  private readonly agentPort = inject(LOCAL_NFC_SCAN_PORT);
+  private readonly authenticatedTerminals = this.readAuthenticatedTerminals();
   private readonly queued = signal<StoredOfflineEvent[]>(this.readStorage());
   readonly pendingCount = this.queued.asReadonly();
 
@@ -90,6 +94,7 @@ export class OfflineQueueService {
   private syncTimer: number | null = null;
   /** True while a flush run is in flight; overlapping syncNow() calls skip. */
   private syncing = false;
+  private resyncRequested = false;
 
   constructor() {
     // Flush a queue left over from a previous browser session (e.g. after a
@@ -100,8 +105,65 @@ export class OfflineQueueService {
     }
   }
 
+  /** Called only after a successful authenticated catalog request. */
+  enableTerminalAuth(terminalId: string): void {
+    const id = terminalId.trim();
+    if (!id || this.authenticatedTerminals.has(id)) return;
+    this.authenticatedTerminals.add(id);
+    try {
+      window.localStorage.setItem(TERMINAL_AUTH_STORAGE_KEY, JSON.stringify([...this.authenticatedTerminals]));
+    } catch { /* In-memory capability still works for this session. */ }
+    this.queued.update(entries => entries.map(entry => entry.event.legacyTerminalId === id
+      ? { ...entry, event: this.withTerminalAuth(entry.event, id) } : entry));
+    this.writeStorage(this.queued());
+    this.syncNow().subscribe();
+  }
+
+  authorizeEmployee(employeeId: string, pin: string): void {
+    this.queued.update(entries => entries.map(entry => entry.event.employeeId === employeeId
+      && !entry.event.terminalId ? { ...entry, event: { ...entry.event, pin } } : entry));
+    this.syncNow().subscribe();
+  }
+
+  authorizeEmployeeCard(employeeId: string, cardId: string): void {
+    this.queued.update(entries => entries.map(entry =>
+      entry.event.employeeId.toLowerCase() === employeeId.toLowerCase()
+      && this.isMissingPin(entry.event)
+        ? { ...entry, event: { ...entry.event, nfcCardId: cardId } } : entry));
+    this.syncNow().subscribe();
+  }
+
+  readonly needsPin = computed(() => this.queued().some(({ event }) => this.isMissingPin(event)));
+
   enqueueKiosk(event: OfflineKioskClockEvent): void {
+    const id = event.terminalId?.trim();
+    event = { ...event, needsPin: !!event.pin };
+    if (id && this.authenticatedTerminals.has(id)) {
+      event = this.withTerminalAuth(event, id);
+    } else if (id) {
+      event.legacyTerminalId = id;
+      delete event.terminalId;
+    }
     this.enqueue({ kind: 'kiosk', event });
+  }
+
+  private withTerminalAuth(event: OfflineKioskClockEvent, id: string): OfflineKioskClockEvent {
+    const { pin, nfcCardId, legacyTerminalId, ...rest } = event;
+    return { ...rest, terminalId: id, needsPin: false };
+  }
+
+  private isMissingPin(event: OfflineKioskClockEvent): boolean {
+    return !event.terminalId && !!event.needsPin && !event.pin && !event.nfcCardId;
+  }
+
+  /** A missing credential defers only this employee and their later events. */
+  private readyEvents(entries: StoredOfflineEvent[]): OfflineKioskClockEvent[] {
+    const blocked = new Set<string>();
+    return entries.map(entry => entry.event).filter(event => {
+      const employee = event.employeeId.toLowerCase();
+      if (this.isMissingPin(event)) blocked.add(employee);
+      return !blocked.has(employee);
+    });
   }
 
   /**
@@ -116,6 +178,7 @@ export class OfflineQueueService {
   syncNow(): Observable<OfflineSyncResult[]> {
     return defer(() => {
       const snapshot = this.queued();
+      if (this.syncing && snapshot.length > 0) this.resyncRequested = true;
       if (snapshot.length === 0 || this.syncing) {
         // Empty queue: nothing to do. Overlapping call (constructor, retry
         // timer and connectivity poll can overlap): skip - the in-flight run drains
@@ -128,16 +191,24 @@ export class OfflineQueueService {
       this.syncing = true;
       // flushQueue is async because the chunks must be sent SEQUENTIALLY:
       // each response decides whether the next chunk may go out at all.
-      return this.flushQueue(snapshot);
-    }).pipe(
-      finalize(() => {
-        this.syncing = false;
-      }),
-      catchError(() => {
-        this.scheduleRetry();
-        return of([] as OfflineSyncResult[]);
-      }),
-    );
+      return defer(() => this.flushQueue(snapshot)).pipe(
+        // Only the run that acquired the guard may release it.
+        finalize(() => {
+          this.syncing = false;
+          if (this.resyncRequested) {
+            this.resyncRequested = false;
+            // Credentials/capability can arrive during a run whose snapshot
+            // could not replay that employee yet. Do not lose that wakeup.
+            if (this.readyEvents(this.queued()).length > 0)
+              void Promise.resolve().then(() => this.syncNow().subscribe());
+          }
+        }),
+        catchError(() => {
+          this.scheduleRetry();
+          return of([] as OfflineSyncResult[]);
+        }),
+      );
+    });
   }
 
   /**
@@ -150,7 +221,7 @@ export class OfflineQueueService {
    * outbox backlog instead of making progress.
    */
   private async flushQueue(snapshot: StoredOfflineEvent[]): Promise<OfflineSyncResult[]> {
-    const events = snapshot.map(entry => entry.event);
+    const events = this.readyEvents(snapshot);
     const results: OfflineSyncResult[] = [];
     const mentionedIds = new Set<string>();
     const bufferedIds = new Set<string>();
@@ -165,12 +236,19 @@ export class OfflineQueueService {
     // chunks already processed events - PIN logins are still impossible.
     let replayAborted = false;
 
-    for (let offset = 0; offset < events.length; offset += MAX_SYNC_BATCH_SIZE) {
-      const chunk = events.slice(offset, offset + MAX_SYNC_BATCH_SIZE);
+    for (let offset = 0; offset < events.length;) {
+      const terminalId = events[offset].terminalId;
+      const chunk: OfflineKioskClockEvent[] = [];
+      for (const event of events.slice(offset, offset + MAX_SYNC_BATCH_SIZE)) {
+        if (event.terminalId !== terminalId) break;
+        chunk.push(event);
+      }
+      offset += chunk.length;
       let result: OfflineSyncResult;
       try {
         result = await firstValueFrom(
-          this.http.post<OfflineSyncResult>(SYNC_ENDPOINT, { events: chunk })
+          this.http.post<OfflineSyncResult>(terminalId
+            ? `http://127.0.0.1:${this.agentPort}/terminal/sync` : SYNC_ENDPOINT, { events: chunk })
             .pipe(timeout(syncRequestTimeoutMs(chunk.length))),
         );
       } catch {
@@ -183,7 +261,7 @@ export class OfflineQueueService {
       results.push(result);
 
       const chunkById = new Map(chunk.map(event => [event.eventId, event]));
-      let chunkFullyBuffered = (result.results?.length ?? 0) > 0;
+      let chunkHasPending = false;
       for (const detail of result.results ?? []) {
         if (!detail.eventId) {
           continue;
@@ -192,8 +270,8 @@ export class OfflineQueueService {
         mentionedIds.add(detail.eventId);
         if (detail.status === 'buffered') {
           bufferedIds.add(detail.eventId);
+          chunkHasPending = true;
         } else {
-          chunkFullyBuffered = false;
           anyProcessed = true;
         }
 
@@ -209,9 +287,9 @@ export class OfflineQueueService {
         }
       }
 
-      // The API buffered the whole chunk ("Kimai nicht erreichbar"): sending
-      // more would only pile the rest onto the same outbox backlog.
-      if (chunkFullyBuffered) {
+      // Even partial buffering (including legacy PIN containment) must not
+      // let a later chunk overtake earlier events. Missing results also stay queued.
+      if (chunkHasPending || chunk.some(event => !mentionedIds.has(event.eventId))) {
         break;
       }
     }
@@ -234,7 +312,7 @@ export class OfflineQueueService {
     // queue is the only copy left - they get the slow safety-net cadence.
     // Events the server has not even seen yet (interrupted run above) still
     // need the normal cadence.
-    if (this.queued().length > 0) {
+    if (this.readyEvents(this.queued()).length > 0) {
       const allBuffered = this.queued().every(entry => bufferedIds.has(entry.event.eventId));
       this.scheduleRetry(allBuffered ? SYNC_RETRY_BUFFERED_MS : SYNC_RETRY_MS);
     }
@@ -303,24 +381,42 @@ export class OfflineQueueService {
     }, delayMs);
   }
 
+  private readAuthenticatedTerminals(): Set<string> {
+    try {
+      const ids = JSON.parse(window.localStorage.getItem(TERMINAL_AUTH_STORAGE_KEY) ?? '[]');
+      return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : []);
+    } catch { return new Set(); }
+  }
+
   private readStorage(): StoredOfflineEvent[] {
     try {
       const raw = window.localStorage.getItem(QUEUE_STORAGE_KEY);
       const parsed = raw ? (JSON.parse(raw) as StoredOfflineEvent[]) : [];
-      return Array.isArray(parsed) ? parsed.filter(entry => entry?.kind === 'kiosk') : [];
+      const terminalId = new URLSearchParams(window.location.search).get('terminalId')?.trim();
+      const entries = Array.isArray(parsed) ? parsed.filter(entry => entry?.kind === 'kiosk').map(entry => {
+        let event: OfflineKioskClockEvent = { ...entry.event, needsPin: entry.event.needsPin || !!entry.event.pin };
+        const id = event.terminalId?.trim() || event.legacyTerminalId || terminalId;
+        if (id && (event.terminalId || this.authenticatedTerminals.has(id))) {
+          event = this.withTerminalAuth(event, id);
+        } else if (id) {
+          event.legacyTerminalId = id;
+        }
+        return { ...entry, event };
+      }) : [];
+      this.writeStorage(entries); // Strip PINs only for proven terminal auth or plain /clock.
+      return entries;
     } catch {
       return [];
     }
   }
 
   private writeStorage(entries: StoredOfflineEvent[]): void {
-    // Accepted trade-off (documented in the README): kiosk events are
-    // persisted with their PIN so an offline stamp survives a kiosk restart.
-    // localStorage is readable by anyone with access to the kiosk device or
-    // via a successful XSS - treated as trusted hardware here. A terminal /
-    // reader token would remove this and is tracked as a follow-up.
     try {
-      window.localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(entries));
+      window.localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(entries.map(entry => {
+        if (entry.event.legacyTerminalId) return entry;
+        const { pin, ...event } = entry.event;
+        return { ...entry, event };
+      })));
     } catch {
       // Storage full/blocked: keep the in-memory queue so nothing is lost
       // during this browser session.

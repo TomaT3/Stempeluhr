@@ -1,28 +1,12 @@
 import { ClockStatus, Employee } from '../models/kiosk.models';
 
 /**
- * Local knowledge the kiosk needs while the backend is unreachable.
- *
- * Three independent caches live in localStorage:
- *
- * 1. CARD CACHE - card id -> employee. Filled from ONLINE identifications and
- *    used to unlock an employee from a LOCAL agent scan while offline. Known
- *    limitation: entries are only overwritten by NEW online events, so a card
- *    revoked on the server may still unlock its former employee offline. The
- *    offline path only IDENTIFIES (no stamping) and every queued event is
- *    re-validated server-side during replay.
- * 2. PIN CACHE - salted verifier of a PIN that logged in ONLINE successfully
- *    -> employee. Lets the kiosk keep accepting PIN logins while offline.
- *    The verifier is a SHA-256 over a random per-device salt plus the PIN; a
- *    4-digit PIN space is brute-forceable by anyone holding the device, so the
- *    ONLY purpose is to avoid storing PINs in cleartext (the offline queue
- *    stores the PIN of a queued stamp anyway - tracked as issue #7). The
- *    server re-validates every replayed event, so a stale verifier can unlock
- *    the UI but never books time.
- * 3. STATUS CACHE - employee id -> last known ClockStatus plus how it was
- *    obtained ('observed' while ONLINE, 'projected' from a locally queued
- *    offline action). Offline the kiosk can therefore offer the plausible
- *    action instead of claiming "Nicht eingestempelt".
+ * Local identities and last known/projected status. Terminal catalogs replace
+ * the card and salted SHA-256(salt:pin) caches as a complete snapshot; ordinary
+ * /clock browsers learn identities on successful online login. Short PINs are
+ * brute-forceable offline even with salt: protect the kiosk and browser profile.
+ * Terminal replay trusts the terminal identity and rechecks active employees;
+ * legacy replay still validates the supplied employee PIN/card.
  */
 const CARD_CACHE_KEY = 'stempeluhr.employee-card-cache.v1';
 const PIN_CACHE_KEY = 'stempeluhr.employee-pin-cache.v1';
@@ -216,9 +200,10 @@ export async function rememberEmployeePin(pin: string, employee: Employee): Prom
 
   // The employee may also have an entry for a PREVIOUS pin - that one can
   // only be stale too (the server just accepted this one), so it goes as well.
-  const entries = readPinCache().filter(entry => entry.employee.id !== employee.id);
+  const cached = readPinCache();
+  const entries = cached.filter(entry => entry.employee.id !== employee.id);
   entries.push({ salt, verifier, employee });
-  writeJson(PIN_CACHE_KEY, entries.slice(-MAX_PIN_ENTRIES));
+  writeJson(PIN_CACHE_KEY, entries.slice(-Math.max(MAX_PIN_ENTRIES, cached.length)));
 }
 
 /**
@@ -341,4 +326,31 @@ export function withOfflineLabel(
 /** Builds the offline status the kiosk displays from a cache entry. */
 export function toOfflineStatus(entry: OfflineStatusEntry): ClockStatus {
   return withOfflineLabel(entry.status, entry.origin, entry.observedAt);
+}
+
+/** Server-generated verifiers use the same SHA-256(salt:pin) format. */
+export interface CatalogEntry {
+  employee: Employee;
+  cardId: string | null;
+  salt: string;
+  verifier: string | null;
+}
+
+/** Replace the complete identity snapshot, removing revoked cards and stale PINs. */
+export function replaceEmployeeCatalog(entries: CatalogEntry[]): void {
+  if (!Array.isArray(entries) || !entries.every(entry => isEmployee(entry?.employee)
+    && typeof entry.salt === 'string' && (entry.verifier === null || typeof entry.verifier === 'string')
+    && (entry.cardId === null || typeof entry.cardId === 'string'))) return;
+  const cards: Record<string, Employee> = {};
+  const ambiguous = new Set<string>();
+  for (const entry of entries) {
+    const card = normalizeCardId(entry.cardId);
+    if (!card) continue;
+    if (cards[card]) ambiguous.add(card);
+    cards[card] = entry.employee;
+  }
+  for (const card of ambiguous) delete cards[card];
+  writeJson(CARD_CACHE_KEY, cards);
+  writeJson(PIN_CACHE_KEY, entries.filter(entry => entry.verifier !== null)
+    .map(({ employee, salt, verifier }) => ({ employee, salt, verifier })));
 }

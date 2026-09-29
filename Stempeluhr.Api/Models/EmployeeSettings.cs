@@ -2,6 +2,9 @@ namespace Stempeluhr.Api.Models;
 
 public sealed class EmployeeSettings
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool CanClock => IsEnabled && !string.IsNullOrWhiteSpace(ApiToken);
+
     public string Id { get; init; } = Guid.NewGuid().ToString("N");
     public int? KimaiUserId { get; init; }
     public string DisplayName { get; init; } = string.Empty;

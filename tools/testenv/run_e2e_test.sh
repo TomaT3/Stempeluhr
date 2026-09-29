@@ -84,6 +84,7 @@ cat > "$WORK/settings.json" <<EOF
   "defaultProjectId": 1,
   "defaultActivityId": 1,
   "pauseActivityId": 2,
+  "terminalTokens": { "test-terminal": "integration-terminal-token" },
   "employees": [
     { "id": "test-max",  "displayName": "Max Mustermann", "pin": "1234", "nfcCardId": "04A2B3C4",
       "apiToken": "test-token", "projectId": 1, "activityId": 1,
@@ -437,6 +438,11 @@ if start_sim "$WORK/agent-config.json"; then
   assert_status '"consumed": true' "$R" "Verworfener Scan ist abgelaufen (spätes Ack wirkungslos)"
 fi
 stop_sim
+
+# Terminal auth integration uses the real endpoint and settings reload.
+python3 "$ROOT/tools/testenv/test_terminal_auth.py" "$API_URL" "$WORK/settings.json" \
+  && ok "Terminal-Auth, Katalog, PIN-freier Replay und Entzug" \
+  || bad "Terminal-Auth-Integration fehlgeschlagen"
 
 # ---------------------------------------------------------------- Fazit
 say "Ergebnis: $PASS bestanden, $FAIL fehlgeschlagen"

@@ -7,7 +7,7 @@ public sealed class EmployeeService : IEmployeeService
     public IReadOnlyCollection<EmployeeDto> GetEnabledEmployees(RuntimeSettings settings)
     {
         return settings.Employees
-            .Where(employee => employee.IsEnabled && !string.IsNullOrWhiteSpace(employee.ApiToken))
+            .Where(employee => employee.CanClock)
             .Select(ToEmployeeDto)
             .ToArray();
     }
@@ -40,8 +40,7 @@ public sealed class EmployeeService : IEmployeeService
 
         var matches = settings.Employees
             .Where(employee =>
-                employee.IsEnabled &&
-                !string.IsNullOrWhiteSpace(employee.ApiToken) &&
+                employee.CanClock &&
                 string.Equals(employee.Pin, pin.Trim(), StringComparison.Ordinal))
             .Take(2)
             .ToArray();
@@ -59,8 +58,7 @@ public sealed class EmployeeService : IEmployeeService
 
         var matches = settings.Employees
             .Where(employee =>
-                employee.IsEnabled &&
-                !string.IsNullOrWhiteSpace(employee.ApiToken) &&
+                employee.CanClock &&
                 string.Equals(NfcCardIdNormalizer.Normalize(employee.NfcCardId), normalizedCardId, StringComparison.Ordinal))
             .Take(2)
             .ToArray();

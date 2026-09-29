@@ -107,11 +107,11 @@
 
       @if (clockState.isWorking()) {
         <div class="stamp-actions">
-          <button class="stamp-button pause" type="button" (click)="startPause()" [disabled]="isBusy()">
+          <button class="stamp-button pause" type="button" (click)="startPause()" [disabled]="actionsBlocked()">
             <span class="stamp-icon pause"></span>
             <span class="stamp-label">Pause</span>
           </button>
-          <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+          <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="actionsBlocked()">
             <span class="stamp-icon square"></span>
             <span class="stamp-label">Ausstempeln</span>
           </button>
@@ -124,7 +124,7 @@
                 class="task-button"
                 type="button"
                 [class.active]="onDefaultTask()"
-                [disabled]="isBusy() || onDefaultTask()"
+                [disabled]="actionsBlocked() || onDefaultTask()"
                 (click)="switchTask(null)">
                 {{ defaultTaskLabel() }}
               </button>
@@ -133,7 +133,7 @@
                   class="task-button"
                   type="button"
                   [class.active]="clockStatus.activeTaskId === task.id"
-                  [disabled]="isBusy() || clockStatus.activeTaskId === task.id"
+                  [disabled]="actionsBlocked() || clockStatus.activeTaskId === task.id"
                   (click)="switchTask(task.id)">
                   {{ task.label }}
                 </button>
@@ -141,24 +141,24 @@
               <button class="task-button cancel" type="button" (click)="closeTaskPicker()">Abbrechen</button>
             </div>
           } @else {
-            <button class="task-switch-button" type="button" (click)="openTaskPicker()" [disabled]="isBusy()">
+            <button class="task-switch-button" type="button" (click)="openTaskPicker()" [disabled]="actionsBlocked()">
               <span aria-hidden="true">⇄</span> Tätigkeit wechseln
             </button>
           }
         }
       } @else if (clockState.isPaused()) {
         <div class="stamp-actions">
-          <button class="stamp-button start" type="button" (click)="endPause()" [disabled]="isBusy()">
+          <button class="stamp-button start" type="button" (click)="endPause()" [disabled]="actionsBlocked()">
             <span class="stamp-icon play"></span>
             <span class="stamp-label">Pause beenden</span>
           </button>
-          <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+          <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="actionsBlocked()">
             <span class="stamp-icon square"></span>
             <span class="stamp-label">Ausstempeln</span>
           </button>
         </div>
       } @else if (!startChoiceVisible()) {
-        <button class="stamp-button start" type="button" (click)="start()" [disabled]="isBusy()">
+        <button class="stamp-button start" type="button" (click)="start()" [disabled]="actionsBlocked()">
           <span class="stamp-icon play"></span>
           <span class="stamp-label">Einstempeln</span>
         </button>
@@ -186,11 +186,11 @@
         <ng-container [ngTemplateOutlet]="startChoice" />
       } @else {
         <div class="stamp-actions">
-          <button class="stamp-button start" type="button" (click)="requestStart()" [disabled]="isBusy()">
+          <button class="stamp-button start" type="button" (click)="requestStart()" [disabled]="actionsBlocked()">
             <span class="stamp-icon play"></span>
             <span class="stamp-label">Einstempeln</span>
           </button>
-          <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="isBusy()">
+          <button class="stamp-button stop" type="button" (click)="stop()" [disabled]="actionsBlocked()">
             <span class="stamp-icon square"></span>
             <span class="stamp-label">Ausstempeln</span>
           </button>
@@ -210,12 +210,12 @@
 <ng-template #startChoice>
   <div class="task-picker start-choice" role="group" aria-labelledby="start-choice-title">
     <p class="start-choice-title" id="start-choice-title">Einstempeln auf</p>
-    <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="start(null)">
+    <button class="task-button start-task" type="button" [disabled]="actionsBlocked()" (click)="start(null)">
       <span class="stamp-icon play" aria-hidden="true"></span>
       <span>{{ defaultTaskLabel() }}</span>
     </button>
     @for (task of employeeTasks(); track task.id) {
-      <button class="task-button start-task" type="button" [disabled]="isBusy()" (click)="start(task.id)">
+      <button class="task-button start-task" type="button" [disabled]="actionsBlocked()" (click)="start(task.id)">
         <span class="stamp-icon play" aria-hidden="true"></span>
         <span>{{ task.label }}</span>
       </button>

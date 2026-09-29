@@ -50,6 +50,137 @@ describe('OfflineQueueService sync batching', () => {
     window.localStorage.clear();
   });
 
+  it('defers only employees with missing credentials, preserving their own order', async () => {
+    const events = [
+      { ...kioskEvent('a1'), employeeId: 'a', pin: undefined, needsPin: true },
+      { ...kioskEvent('a2'), employeeId: 'a', pin: undefined, nfcCardId: '04AA' },
+      { ...kioskEvent('b1'), employeeId: 'b', pin: undefined, needsPin: true },
+      { ...kioskEvent('c1'), employeeId: 'c', pin: undefined, nfcCardId: '04CC' },
+    ];
+    window.localStorage.setItem('stempeluhr.offline-queue.v1', JSON.stringify(events.map(event => ({ kind: 'kiosk', event }))));
+    const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+    const cards = httpMock.expectOne(kioskEndpoint);
+    expect(cards.request.body.events.map((e: OfflineKioskClockEvent) => e.eventId)).toEqual(['c1']);
+    cards.flush(resultFor(cards.request.body.events, 'applied'));
+    await drainMicrotasks();
+    restarted.authorizeEmployee('b', '4321');
+    const b = httpMock.expectOne(kioskEndpoint);
+    expect(b.request.body.events.map((e: OfflineKioskClockEvent) => e.eventId)).toEqual(['b1']);
+    b.flush(resultFor(b.request.body.events, 'applied'));
+    await drainMicrotasks();
+    expect(restarted.pendingCount().map(e => e.event.eventId)).toEqual(['a1', 'a2']);
+    await vi.advanceTimersByTimeAsync(30_000);
+    httpMock.expectNone(kioskEndpoint);
+    restarted.authorizeEmployee('a', '1234');
+    const a = httpMock.expectOne(kioskEndpoint);
+    expect(a.request.body.events.map((e: OfflineKioskClockEvent) => e.eventId)).toEqual(['a1', 'a2']);
+    a.flush(resultFor(a.request.body.events, 'applied'));
+    await drainMicrotasks();
+  });
+
+  it('replays a PIN-less backlog with the card used to identify the same employee', async () => {
+    window.localStorage.setItem('stempeluhr.offline-queue.v1', JSON.stringify([
+      { kind: 'kiosk', event: { ...kioskEvent('card-start'), pin: undefined, needsPin: true } },
+      { kind: 'kiosk', event: { ...kioskEvent('card-stop'), pin: undefined, needsPin: true, action: 'stop' } },
+    ]));
+    const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+    httpMock.expectNone(kioskEndpoint);
+
+    restarted.authorizeEmployeeCard('MAX', '04ABCD');
+    await drainMicrotasks();
+    const replay = httpMock.expectOne(kioskEndpoint);
+    expect(replay.request.body.events.map((event: OfflineKioskClockEvent) => event.eventId))
+      .toEqual(['card-start', 'card-stop']);
+    expect(replay.request.body.events.every((event: OfflineKioskClockEvent) =>
+      event.nfcCardId === '04ABCD' && !event.pin)).toBe(true);
+    replay.flush(resultFor(replay.request.body.events, 'applied'));
+    await drainMicrotasks();
+    expect(restarted.pendingCount()).toHaveLength(0);
+  });
+
+  it('retains the legacy terminal path until authenticated capability is proven', async () => {
+    const previousUrl = window.location.href;
+    window.history.replaceState(null, '', '/terminal?terminalId=%20pi-1%20');
+    try {
+      window.localStorage.setItem('stempeluhr.offline-queue.v1', JSON.stringify([
+        { kind: 'kiosk', event: { ...kioskEvent('legacy-pin'), nfcCardId: '04AB' } },
+      ]));
+      const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+      const legacy = httpMock.expectOne(kioskEndpoint);
+      expect(legacy.request.body.events[0]).toMatchObject({ pin: '1234', nfcCardId: '04AB', legacyTerminalId: 'pi-1' });
+      expect(window.localStorage.getItem('stempeluhr.offline-queue.v1')).toContain('1234');
+      legacy.flush({}, { status: 503, statusText: 'offline' });
+      await drainMicrotasks();
+      restarted.enqueueKiosk({ ...kioskEvent('new-legacy'), terminalId: 'pi-1' });
+      expect(restarted.pendingCount().at(-1)?.event).toMatchObject({ legacyTerminalId: 'pi-1', pin: '1234' });
+      restarted.enableTerminalAuth('pi-1');
+      const upgraded = httpMock.expectOne('http://127.0.0.1:8737/terminal/sync');
+      expect(upgraded.request.body.events[0].eventId).toBe('legacy-pin');
+      expect(upgraded.request.body.events[0].pin).toBeUndefined();
+      expect(window.localStorage.getItem('stempeluhr.offline-queue.v1')).not.toContain('1234');
+      upgraded.flush({}, { status: 401, statusText: 'revoked' });
+      await drainMicrotasks();
+      restarted.syncNow().subscribe();
+      // Once upgraded, token revocation must NEVER downgrade to PIN authentication.
+      httpMock.expectNone(kioskEndpoint);
+      httpMock.expectOne('http://127.0.0.1:8737/terminal/sync').flush({}, { status: 401, statusText: 'revoked' });
+      await drainMicrotasks();
+    } finally { window.history.replaceState(null, '', previousUrl); }
+  });
+
+  it('does not send a later batch when even part of the first batch remains buffered', async () => {
+    for (let i = 0; i < 150; i++) service.enqueueKiosk(kioskEvent(`partial-${i}`));
+    service.syncNow().subscribe();
+    const first = httpMock.expectOne(kioskEndpoint);
+    const result = resultFor(first.request.body.events, 'buffered');
+    result.results[0].status = 'rejected';
+    first.flush(result);
+    await drainMicrotasks();
+    httpMock.expectNone(kioskEndpoint);
+    expect(service.pendingCount()).toHaveLength(149);
+  });
+
+  it('persists terminal events without credentials and replays after a restart', async () => {
+    service.enableTerminalAuth('pi-1');
+    service.enqueueKiosk({ ...kioskEvent('terminal-restart'), terminalId: 'pi-1', nfcCardId: '04AB' });
+    const stored = window.localStorage.getItem('stempeluhr.offline-queue.v1')!;
+    expect(stored).not.toContain('1234');
+    expect(stored).not.toContain('04AB');
+    const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+    const request = httpMock.expectOne('http://127.0.0.1:8737/terminal/sync');
+    expect(request.request.body.events[0].pin).toBeUndefined();
+    request.flush(resultFor(request.request.body.events, 'applied'));
+    await drainMicrotasks();
+    expect(restarted.pendingCount()).toHaveLength(0);
+  });
+
+  it('removes legacy PINs from storage immediately without losing event IDs', async () => {
+    window.localStorage.setItem('stempeluhr.offline-queue.v1', JSON.stringify([
+      { kind: 'kiosk', event: { ...kioskEvent('legacy'), terminalId: 'pi-1' } },
+    ]));
+    const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+    expect(window.localStorage.getItem('stempeluhr.offline-queue.v1')).not.toContain('1234');
+    const request = httpMock.expectOne('http://127.0.0.1:8737/terminal/sync');
+    expect(request.request.body.events[0].eventId).toBe('legacy');
+    request.flush({}, { status: 401, statusText: 'revoked' });
+    await drainMicrotasks();
+    expect(restarted.pendingCount()).toHaveLength(1);
+  });
+
+  it('keeps non-terminal events across restart until a fresh login supplies the PIN', async () => {
+    service.enqueueKiosk(kioskEvent('browser-restart'));
+    expect(window.localStorage.getItem('stempeluhr.offline-queue.v1')).not.toContain('1234');
+    const restarted = TestBed.runInInjectionContext(() => new OfflineQueueService());
+    await drainMicrotasks();
+    httpMock.expectNone(kioskEndpoint);
+    expect(restarted.needsPin()).toBe(true);
+    restarted.authorizeEmployee('max', '1234');
+    const request = httpMock.expectOne(kioskEndpoint);
+    request.flush(resultFor(request.request.body.events, 'applied'));
+    await drainMicrotasks();
+    expect(restarted.pendingCount()).toHaveLength(0);
+  });
+
   it('confirms a projection only after the last queued action has a server state', async () => {
     const first = kioskEvent('first');
     const later = { ...kioskEvent('later'), action: 'stop' as const, performedAt: '2026-08-24T09:00:00Z' };

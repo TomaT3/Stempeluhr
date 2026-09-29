@@ -64,16 +64,28 @@ Weitere Regeln:
   (rückdatiert auf den Zeitstempel). Schon erledigte Aktionen werden zu No-ops
   („Lief bereits“, „Pause lief bereits“, …) – ein Stempel, der live übernommen
   wurde und trotzdem in der Queue landete, bucht also nicht doppelt.
-- Offline anmelden können sich nur Mitarbeiter, die **an diesem Terminal**
-  schon einmal online per PIN angemeldet waren (gesalzener Prüfwert) bzw.
-  deren Karte hier schon einmal online erkannt wurde. Ein neues Terminal kennt
-  offline also zunächst niemanden.
+- Authentifizierte Terminals laden beim Öffnen und jede Minute einen vollständigen
+  Mitarbeiter-Katalog über den lokalen Agenten. Nach dem ersten erfolgreichen
+  Abruf können sich alle aktiven, mit Kimai-Token eingerichteten Mitarbeiter
+  offline per PIN und Karte anmelden – auch ohne frühere Anmeldung an diesem Pi.
+  Der Katalog überlebt einen Browser-Neustart; ein vollständig gelöschtes
+  Browser-Profil muss App und Katalog zunächst wieder online laden.
+- Nach dem ersten erfolgreichen authentifizierten Katalogabruf speichert das
+  Terminal keine PINs mehr in der Queue. Nachträge laufen dann über den lokalen
+  Agenten mit Terminal-Token. Bis dahin bleiben alte Pis beim bisherigen
+  PIN-/Karten-Nachtrag und behalten dessen gespeicherte Zugangsdaten.
+  Auf `/clock` ohne Terminal-Agent bleibt eine PIN
+  nur im Arbeitsspeicher: Nach einem Browser-Neustart warten PIN-basierte
+  Nachträge auf eine erneute Online-Anmeldung des jeweiligen Mitarbeiters.
+  Das hält die Nachträge anderer Mitarbeiter nicht auf; die Reihenfolge pro
+  Mitarbeiter bleibt erhalten. Live-Stempel warten auf dessen Nachträge und
+  anschließend auf einen frisch geladenen Status.
 - Den Status zeigt die UI offline als „zuletzt gesehen“, „offline vorgemerkt“
   oder „unbekannt“ an; bei unbekanntem Status sind beide Richtungen wählbar.
 - Der Hinweis „n Stempel warten auf Übertragung“ bleibt stehen, solange die
   Queue nicht leer ist – auch wenn die API wieder antwortet, Kimai aber nicht.
-- Stempel, die der Server beim Nachtrag endgültig ablehnt (z. B. PIN
-  inzwischen geändert), zeigt das Terminal im Ruhezustand an, bis jemand sie in
+- Stempel, die der Server beim Nachtrag endgültig ablehnt (z. B. Mitarbeiter
+  inzwischen deaktiviert), zeigt das Terminal im Ruhezustand an, bis jemand sie in
   Kimai nachgetragen und „Alle erledigt“ gedrückt hat.
   Abgelehnte Nachträge werden zusätzlich ohne PIN und Karten-ID in
   `data/rejected-offline-events.json` erfasst. Im Adminbereich unter
@@ -207,11 +219,13 @@ Sendefehler beeinflussen das Stempeln nie.
 
 ### Terminal (Raspberry Pi)
 
-Ein neues Terminal wird mit einem Befehl eingerichtet:
+Zuerst ein eigenes Terminal-Token in `data/settings.json` registrieren und
+als geschützte Datei auf den Pi übertragen (siehe Pi-Anleitung). Danach:
 
 ```bash
 curl -fsSL https://stempeluhr.example.com/pi/install.sh | sudo bash -s -- \
-  --server https://stempeluhr.example.com --terminal-id stempeluhr-pi-02 --kiosk-user kiosk
+  --server https://stempeluhr.example.com --terminal-id stempeluhr-pi-02 --kiosk-user kiosk \
+  --terminal-token-file /root/stempeluhr-terminal.token
 ```
 
 Der Installer richtet Kartenleser-Zugriff, NFC-Agent, Auto-Update und den
@@ -295,20 +309,42 @@ separater Schritt (siehe [Update](#update)).
 
 - `data/settings.json`, lokale `appsettings.*`-Dateien und alle Tokens nie
   committen; Produktion nur über HTTPS.
-- Offline-Queue und Identifikations-Caches liegen im `localStorage` des Kiosks
-  und können PINs bzw. Karten-IDs enthalten. Kiosk-Hardware und Browser-Profil
-  physisch schützen und für nichts anderes verwenden.
-- Der Kiosk authentifiziert sich nicht selbst; Nachträge sind nur durch PIN
-  bzw. Karte des Mitarbeiters und ein Rate-Limit pro IP geschützt.
+- Authentifizierte Terminals speichern keine PINs in der Offline-Queue. Erst
+  ein erfolgreicher Katalogabruf bestätigt die Unterstützung des Agenten und
+  migriert bestehende Terminal-Queues ohne Änderung von Event-IDs/Zeitstempeln.
+  Bis dahin bleibt für alte Pis der Legacy-Modus mit gespeicherten PINs aktiv.
+  Nach bestätigter Umstellung gibt es bei Token-Entzug keinen Legacy-Fallback.
+- Terminal-Tokens stehen ausschließlich in `settings.json` auf dem Server und
+  `config.json` beim Agenten (`root:stempeluhr`, Modus `640`). Der Browser erhält
+  sie nie. `/api/kiosk/catalog` und Terminal-Nachträge benötigen Bearer-Token
+  und passende `X-Terminal-Id`; ein ungültiges Token wird nicht durch PIN-Auth
+  ersetzt. Entfernen/Ersetzen unter `terminalTokens` wirkt ohne API-Neustart.
+- Der Agent erlaubt seine privilegierten `/terminal/*`-Routen nur der
+  konfigurierten Kiosk-Origin, auch Anfragen ohne Origin werden abgewiesen.
+  Er leitet ausschließlich Katalog und Nachträge weiter, keine beliebigen URLs
+  und keine HTTP-Redirects. Live-Stempeln per PIN/Karte bleibt unverändert.
+- Karten-IDs und gesalzene PIN-Prüfwerte liegen im Browser. Kurze PINs bleiben
+  trotz SHA-256 offline durchprobierbar. Hardware und Browser-Profil schützen.
+  Ein kompromittiertes Terminal oder XSS auf der erlaubten Kiosk-Origin kann
+  Nachträge für aktive Mitarbeiter auslösen; das Terminal ist eine Vertrauensgrenze.
+- Ein Terminal bestätigt beim Nachtrag die Identität. Geänderte PINs/Karten
+  werden mit dem nächsten Katalog ersetzt; während eines Ausfalls kann ein
+  alter Katalog weiterhin identifizieren. Die API prüft beim Nachtrag erneut,
+  ob der Mitarbeiter aktiv ist. Ein Token-Entzug blockiert neue Sync-Anfragen;
+  schon angenommene Server-Outbox-Einträge werden weiterhin abgearbeitet.
 - `/pi/` liefert öffentlichen Repo-Code aus; die Integrität sichern HTTPS und
   die SHA-256 in `agent.json`.
 
 ## Bekannte Grenzen und offene Punkte
 
-- Offline-Identifikation nur für Mitarbeiter, die an diesem Terminal schon
-  online gesehen wurden. Abhilfe wäre ein vom Server gelieferter
-  Mitarbeiter-Katalog für authentifizierte Terminals – zusammen mit einer
-  Terminal-Authentifizierung statt PIN in der Queue (#7).
+- Für PIN-freie Terminal-Nachträge müssen bestehende Pis einmalig ein
+  registriertes Terminal-Token erhalten. Alte Agent-Konfigurationen und alte
+  Agent-Versionen bleiben bis zum ersten erfolgreichen Katalogabruf beim
+  Legacy-Nachtrag; dessen PINs liegen weiterhin im Browserprofil. Nach der
+  Umstellung bleiben bei Token-Entzug wartende Stempel bis zur Behebung erhalten.
+- Ohne Terminal-Agent kennt `/clock` offline nur zuvor lokal angemeldete
+  Mitarbeiter. PIN-basierte Queues benötigen nach einem Neustart eine erneute
+  Online-Anmeldung; sie bleiben bis dahin erhalten.
 - Nutzt ein Mitarbeiter während eines Ausfalls mehrere Terminals, kann die
   Reihenfolge beim Nachtrag nach Eingang statt nach Zeit gemischt werden.
 - Weitere offene Issues: PIN-Fehlversuch-Backoff (#8), Telegram-Hinweis bei
