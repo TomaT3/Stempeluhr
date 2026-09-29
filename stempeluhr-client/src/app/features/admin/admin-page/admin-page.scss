@@ -7,6 +7,10 @@ p {
   margin: 0;
 }
 
+h1 {
+  margin: 0;
+}
+
 button {
   font: inherit;
 }
@@ -14,6 +18,81 @@ button {
 .admin {
   display: grid;
   gap: 16px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.admin-page-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 4px 2px;
+}
+
+.admin-page-head h1 {
+  color: #152033;
+  font-size: clamp(1.7rem, 3vw, 2.25rem);
+  line-height: 1.15;
+}
+
+.admin-page-head p:not(.eyebrow) {
+  margin-top: 6px;
+  color: #657083;
+}
+
+.eyebrow {
+  margin-bottom: 6px;
+  color: #204ecf;
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.admin-quicklinks,
+.admin-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-nav {
+  position: sticky;
+  top: 8px;
+  z-index: 6;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 6px 18px rgba(24, 39, 75, 0.08);
+}
+
+.admin-nav button {
+  padding: 9px 12px;
+  border-radius: 8px;
+  color: #30415f;
+  font-size: 0.9rem;
+  font-weight: 800;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.admin-nav button:hover,
+.admin-nav button:focus-visible {
+  background: #edf3ff;
+  color: #204ecf;
+}
+
+.loading-note {
+  padding: 18px;
+  border: 1px solid #b6c9ef;
+  border-radius: var(--radius);
+  background: #f1f6ff;
+  color: #30415f;
+  font-weight: 750;
 }
 
 .admin-login,
@@ -79,6 +158,15 @@ button {
   gap: 16px;
 }
 
+.admin-editor {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .admin-section {
   display: grid;
   gap: 16px;
@@ -91,6 +179,42 @@ button {
   font-weight: 850;
   line-height: 1.2;
   text-align: left;
+}
+
+.admin-section {
+  scroll-margin-top: 90px;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-head p {
+  margin-top: 3px;
+  color: #657083;
+  font-size: 0.9rem;
+}
+
+.section-number,
+.count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 7px;
+  border-radius: 9px;
+  background: #eaf1ff;
+  color: #204ecf;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.count {
+  min-width: 26px;
+  height: 26px;
+  vertical-align: middle;
 }
 
 .form-grid {
@@ -231,15 +355,89 @@ input[type="color"] {
 }
 
 .employee-admin-card {
-  display: grid;
-  gap: 14px;
-  padding: 14px;
+  padding: 0;
+  overflow: hidden;
 }
 
 .employee-admin-head {
   display: grid;
   grid-template-columns: auto minmax(140px, 1fr) auto auto;
-  justify-content: initial;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.employee-admin-head::-webkit-details-marker {
+  display: none;
+}
+
+.employee-admin-head:focus-visible {
+  outline: 3px solid #8caeff;
+  outline-offset: -3px;
+}
+
+.employee-name {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: #152033;
+  font-weight: 850;
+}
+
+.employee-name small {
+  color: #657083;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.employee-expand {
+  color: #204ecf;
+  font-size: 0.84rem;
+  font-weight: 850;
+}
+
+.employee-expand::after {
+  content: '⌄';
+  display: inline-block;
+  margin-left: 6px;
+  transition: transform 150ms ease;
+}
+
+.employee-admin-card[open] .employee-expand::after {
+  transform: rotate(180deg);
+}
+
+.employee-admin-body {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.employee-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.employee-subsection {
+  display: grid;
+  gap: 12px;
+}
+
+.employee-subsection + .employee-subsection {
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.employee-subsection h3 {
+  margin: 0;
+  color: #253956;
+  font-size: 1rem;
 }
 
 .toggle {
@@ -268,11 +466,13 @@ input[type="color"] {
 }
 
 .message {
-  min-height: 32px;
+  padding: 12px 16px;
+  border: 1px solid #edc6bd;
+  border-radius: var(--radius);
+  background: #fff7f5;
   color: #8a3a2f;
-  font-size: clamp(1rem, 2.2vw, 1.35rem);
+  font-size: 1rem;
   font-weight: 800;
-  text-align: center;
 }
 
 .nfc-message {
@@ -282,15 +482,12 @@ input[type="color"] {
 }
 
 @media (min-width: 980px) {
-  .admin-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .employee-admin-list {
+  .admin-editor {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
   }
 
-  .employee-admin-list h2 {
+  #employees {
     grid-column: 1 / -1;
   }
 }
@@ -300,9 +497,9 @@ input[type="color"] {
     grid-template-columns: auto minmax(120px, 1fr) auto;
   }
 
-  .employee-admin-head .danger {
-    grid-column: 1 / -1;
-    justify-self: start;
+  .employee-expand {
+    grid-column: 2 / -1;
+    justify-self: end;
   }
 }
 
@@ -328,11 +525,13 @@ input[type="color"] {
     align-items: center;
   }
 
-  .employee-admin-head app-status-badge,
-  .employee-admin-head .toggle,
-  .employee-admin-head .danger {
-    grid-column: 1 / -1;
-    justify-self: stretch;
+  .employee-admin-head app-status-badge {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .employee-expand {
+    grid-column: 2;
   }
 
   .admin-savebar {

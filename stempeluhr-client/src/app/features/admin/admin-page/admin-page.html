@@ -1,4 +1,11 @@
 <section class="admin">
+  <header class="admin-page-head">
+    <div>
+      <p class="eyebrow">Verwaltung</p>
+      <h1>Administration</h1>
+      <p>Kimai verbinden, Buchungen einrichten und Mitarbeiter verwalten.</p>
+    </div>
+  </header>
   <div class="admin-login">
     <label>
       Admin-Passwort
@@ -6,15 +13,35 @@
         type="password"
         [value]="adminPassword()"
         (input)="adminPassword.set($any($event.target).value)"
+        [disabled]="adminBusy()"
         autocomplete="current-password">
     </label>
-    <button type="button" (click)="loadAdminSettings()" [disabled]="adminBusy()">Laden</button>
+    <button type="button" (click)="loadAdminSettings()" [disabled]="adminBusy()">{{ adminBusy() && initialLoading() ? 'Lade Daten…' : 'Einstellungen laden' }}</button>
   </div>
 
+  @if (adminMessage()) {
+    <p class="message" role="status">{{ adminMessage() }}</p>
+  }
+
+  @if (initialLoading()) {
+    <p class="loading-note" role="status">Einstellungen, Projekte und Aktivitäten werden geladen. Die Verwaltung ist gleich bereit.</p>
+  }
+
   @if (adminSettings(); as settings) {
+    <div class="admin-quicklinks">
+      <a class="admin-link-button" routerLink="/admin/status">Mitarbeiterstatus</a>
+      <a class="admin-link-button" routerLink="/admin/offline-rejections">Offline-Stempel</a>
+    </div>
+    <nav class="admin-nav" aria-label="Adminbereiche">
+      <button type="button" (click)="scrollToSection('kimai')">Kimai &amp; Zugang</button>
+      <button type="button" (click)="scrollToSection('booking')">Buchungsvorgaben</button>
+      <button type="button" (click)="scrollToSection('nfc')">NFC-Kartenleser</button>
+      <button type="button" (click)="scrollToSection('employees')">Mitarbeiter</button>
+    </nav>
     <div class="admin-layout">
-      <section class="admin-section">
-        <h2>Kimai</h2>
+      <fieldset class="admin-editor" [disabled]="adminBusy()" [attr.inert]="adminBusy() ? '' : null">
+      <section class="admin-section" id="kimai">
+        <div class="section-head"><span class="section-number">01</span><div><h2>Kimai &amp; Zugang</h2><p>Verbindung und Admin-Zugangsdaten</p></div></div>
         <div class="form-grid">
           <label>
             Kimai-URL
@@ -36,6 +63,12 @@
               (input)="updateAdminPassword($any($event.target).value)"
               autocomplete="new-password">
           </label>
+        </div>
+      </section>
+
+      <section class="admin-section" id="booking">
+        <div class="section-head"><span class="section-number">02</span><div><h2>Buchungsvorgaben</h2><p>Standardwerte für Arbeitszeit und Pause</p></div></div>
+        <div class="form-grid">
           <label>
             Standard-Projekt
             <select [value]="projectSelectValue(settings.defaultProjectId)" (change)="updateDefaultProjectId($any($event.target).value)">
@@ -75,18 +108,13 @@
         </div>
 
         <div class="admin-actions">
-          <button type="button" (click)="importKimaiUsers()" [disabled]="adminBusy()">Kimai-Mitarbeiter laden</button>
-          <button type="button" (click)="importKimaiProjects()" [disabled]="adminBusy()">Kimai-Projekte laden</button>
-          <button type="button" (click)="importKimaiActivities()" [disabled]="adminBusy()">Kimai-Aktivitaeten laden</button>
-          <button type="button" (click)="addEmployee()">Manuell hinzufuegen</button>
-          <a class="admin-link-button" routerLink="/admin/status">Status anzeigen</a>
-          <a class="admin-link-button" routerLink="/admin/offline-rejections">Abgelehnte Offline-Stempel</a>
-          <button type="button" class="primary" (click)="saveAdminSettings()" [disabled]="adminBusy()">Speichern</button>
+          <button type="button" (click)="importKimaiProjects()">Projekte aktualisieren</button>
+          <button type="button" (click)="importKimaiActivities()">Aktivitäten aktualisieren</button>
         </div>
       </section>
 
-      <section class="admin-section nfc-admin-section">
-        <h2>NFC-Kartenleser</h2>
+      <section class="admin-section nfc-admin-section" id="nfc">
+        <div class="section-head"><span class="section-number">03</span><div><h2>NFC-Kartenleser</h2><p>Letzten Scan prüfen und einem Mitarbeiter zuweisen</p></div></div>
         <div class="form-grid">
           <label>
             Terminal-ID
@@ -127,8 +155,8 @@
       </section>
 
       @if (kimaiUsers().length > 0) {
-        <section class="admin-section">
-          <h2>Import</h2>
+        <section class="admin-section" id="import">
+          <h2>Kimai-Mitarbeiter übernehmen</h2>
           <div class="kimai-user-list">
             @for (user of kimaiUsers(); track user.id) {
               <button type="button" [class.imported]="isKimaiUserConfigured(user)" (click)="addKimaiUser(user)">
@@ -141,16 +169,21 @@
         </section>
       }
 
-      <section class="admin-section employee-admin-list">
-        <h2>Mitarbeiter</h2>
+      <section class="admin-section employee-admin-list" id="employees">
+        <div class="section-head"><span class="section-number">04</span><div><h2>Mitarbeiter <span class="count">{{ settings.employees.length }}</span></h2><p>Zugang, Buchungsregeln und Tätigkeiten pro Person</p></div></div>
+        <div class="admin-actions">
+          <button type="button" (click)="importKimaiUsers()">Aus Kimai laden</button>
+          <button type="button" (click)="addEmployee()">Mitarbeiter hinzufügen</button>
+        </div>
         @for (employee of settings.employees; track employee.id; let index = $index) {
-          <article class="employee-admin-card">
-            <div class="employee-admin-head">
+          <details class="employee-admin-card">
+            <summary class="employee-admin-head">
               <app-avatar
                 size="small"
                 [displayName]="employee.displayName"
                 [color]="employee.color"
                 [imageUrl]="employee.imageUrl" />
+              <span class="employee-name">{{ employee.displayName }}<small>{{ employee.isEnabled ? 'Aktiv' : 'Inaktiv' }} · {{ employee.tasks.length }} weitere Tätigkeiten</small></span>
               @if (statusFor(employee.id); as employeeStatus) {
                 <app-status-badge
                   [compact]="true"
@@ -159,14 +192,19 @@
                   [paused]="employeeStatus.state === 'paused'"
                   [available]="employeeStatus.isAvailable" />
               }
-              <label class="toggle">
+              <span class="employee-expand" aria-hidden="true">Details</span>
+            </summary>
+            <div class="employee-admin-body">
+              <div class="employee-actions"><label class="toggle">
                 <input type="checkbox" [checked]="employee.isEnabled" (change)="updateEmployee(index, { isEnabled: $any($event.target).checked })">
                 aktiv
               </label>
               <button type="button" class="danger" (click)="removeEmployee(index)">Entfernen</button>
-            </div>
+              </div>
 
-            <div class="form-grid">
+            <div class="employee-subsection">
+              <h3>Zugang &amp; Profil</h3>
+              <div class="form-grid">
               <label>
                 Name
                 <input [value]="employee.displayName" (input)="updateEmployee(index, { displayName: $any($event.target).value })">
@@ -196,6 +234,20 @@
                 Farbe
                 <input type="color" [value]="employee.color" (input)="updateEmployee(index, { color: $any($event.target).value })">
               </label>
+              </div>
+              <div class="image-actions">
+                <label class="file-button">
+                  Bild
+                  <input type="file" accept="image/*" (change)="setEmployeeImage(index, $event)">
+                </label>
+                <button type="button" (click)="clearEmployeeImage(index)">Bild entfernen</button>
+                <button type="button" (click)="assignLatestNfcCardId(index)" [disabled]="!latestNfcCardId()">Letzte NFC-Karte zuweisen</button>
+              </div>
+            </div>
+
+            <div class="employee-subsection">
+              <h3>Kimai-Buchung</h3>
+              <div class="form-grid">
               <label>
                 Projekt
                 <select [value]="projectSelectValue(employee.projectId)" (change)="updateEmployee(index, { projectId: $any($event.target).value ? +$any($event.target).value : null })">
@@ -228,15 +280,7 @@
                 Tags
                 <input [value]="employee.tags.join(', ')" (input)="updateEmployeeTags(index, $any($event.target).value)">
               </label>
-            </div>
-
-            <div class="image-actions">
-              <label class="file-button">
-                Bild
-                <input type="file" accept="image/*" (change)="setEmployeeImage(index, $event)">
-              </label>
-              <button type="button" (click)="clearEmployeeImage(index)">Bild entfernen</button>
-              <button type="button" (click)="assignLatestNfcCardId(index)" [disabled]="!latestNfcCardId()">Letzte NFC-Karte zuweisen</button>
+              </div>
               <label class="toggle">
                 <input type="checkbox" [checked]="employee.billable" (change)="updateEmployee(index, { billable: $any($event.target).checked })">
                 abrechenbar
@@ -301,10 +345,11 @@
                 <button type="button" (click)="addEmployeeTask(index)">Tätigkeit hinzufügen</button>
               </div>
             </div>
-          </article>
+            </div>
+          </details>
         }
       </section>
-
+      </fieldset>
       <div class="admin-savebar">
         <span>{{ adminDirty() ? 'Ungespeicherte Aenderungen' : 'Gespeichert' }}</span>
         <button type="button" class="primary" (click)="saveAdminSettings()" [disabled]="adminBusy()">Speichern</button>
@@ -312,9 +357,6 @@
     </div>
   }
 
-  @if (adminMessage()) {
-    <p class="message">{{ adminMessage() }}</p>
-  }
 </section>
 
 <app-version-badge />
