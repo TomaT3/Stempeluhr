@@ -47,6 +47,29 @@ public static class TelegramMessageFactory
             : $"⚠️ {count} Offline-Stempel nicht übernommen\nErster Fall: {Describe(first, firstZone)}\nLetzter Fall: {Describe(last, lastZone)}\nBitte in Kimai nachtragen.";
     }
 
+    /// <summary>Warnung: länger als <see cref="WorkTimeLimitCalculator.ContinuousLimit"/> ohne Pause.</summary>
+    public static string BuildContinuousWorkWarning(
+        string employeeName, DateTimeOffset startUtc, int workedSeconds, TimeZoneInfo timeZone)
+    {
+        var start = TimeZoneInfo.ConvertTime(startUtc, timeZone);
+        return $"⚠️ {employeeName} · über {WorkTimeLimitCalculator.ContinuousLimit.TotalHours:0} Std. ohne Pause "
+            + $"(ab {start:HH:mm}, {FormatDuration(workedSeconds)} Std.)";
+    }
+
+    /// <summary>
+    /// Warnung: länger als <see cref="WorkTimeLimitCalculator.ShiftLimit"/> in
+    /// einer Schicht. Mit Datum, weil Nachtschichten über Mitternacht gehen.
+    /// </summary>
+    public static string BuildShiftWorkWarning(
+        string employeeName, DateTimeOffset startUtc, int workedSeconds, TimeZoneInfo timeZone)
+    {
+        var start = TimeZoneInfo.ConvertTime(startUtc, timeZone);
+        return $"⚠️ {employeeName} · über {WorkTimeLimitCalculator.ShiftLimit.TotalHours:0} Std. in der Schicht "
+            + $"seit {start:dd.MM. HH:mm} ({FormatDuration(workedSeconds)} Std.)";
+    }
+
+    private static string FormatDuration(int seconds) => $"{seconds / 3600}:{seconds % 3600 / 60:00}";
+
     /// <summary>
     /// Aktionen entsprechen den Clock-Aktionen aus <c>KioskClockRequest.Action</c>.
     /// <paramref name="taskLabel"/> gilt für "start" (Tätigkeit, null = ohne

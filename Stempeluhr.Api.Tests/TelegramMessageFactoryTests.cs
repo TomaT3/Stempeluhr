@@ -95,4 +95,24 @@ public sealed class TelegramMessageFactoryTests
         Assert.Throws<ArgumentException>(() =>
             TelegramMessageFactory.Build("Max Mustermann", "toggle", stamp, Berlin));
     }
+
+    [Fact]
+    public void BuildContinuousWorkWarning_NamesStartAndDuration()
+    {
+        var start = new DateTimeOffset(2026, 9, 30, 5, 58, 0, TimeSpan.Zero); // CEST → 07:58
+
+        var text = TelegramMessageFactory.BuildContinuousWorkWarning("Max Mustermann", start, (6 * 60 + 5) * 60, Berlin);
+
+        Assert.Equal("⚠️ Max Mustermann · über 6 Std. ohne Pause (ab 07:58, 6:05 Std.)", text);
+    }
+
+    [Fact]
+    public void BuildShiftWorkWarning_NamesDateBecauseShiftsCrossMidnight()
+    {
+        var start = new DateTimeOffset(2026, 9, 29, 20, 0, 0, TimeSpan.Zero); // CEST → 22:00
+
+        var text = TelegramMessageFactory.BuildShiftWorkWarning("Max Mustermann", start, (10 * 60 + 2) * 60, Berlin);
+
+        Assert.Equal("⚠️ Max Mustermann · über 10 Std. in der Schicht seit 29.09. 22:00 (10:02 Std.)", text);
+    }
 }

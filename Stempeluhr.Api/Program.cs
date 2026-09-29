@@ -45,6 +45,11 @@ builder.Services.AddHttpClient(TelegramNotifier.ClientName, client =>
 });
 builder.Services.AddSingleton<ITelegramNotifier, TelegramNotifier>();
 builder.Services.AddSingleton<OfflineRejectionNotifier>();
+// Telegram warning after 6 h without a break or 10 h per shift.
+builder.Services.AddSingleton(sp => new WorkTimeAlertStore(
+    Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "work-time-alerts.json"),
+    sp.GetRequiredService<ILogger<WorkTimeAlertStore>>()));
+builder.Services.AddHostedService<WorkTimeAlertService>();
 builder.Services.AddHttpClient<IKimaiClient, KimaiClient>(client =>
 {
     // Every Kimai call runs under the global sync lock: one hung connection
