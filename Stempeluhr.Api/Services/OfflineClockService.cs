@@ -84,14 +84,13 @@ public sealed class OfflineClockService(
 
         // Malformed entries must be reported back explicitly so the sender can
         // drop them from its queue instead of silently retrying them forever.
+        // They are never journaled: no known employee stands behind them, and
+        // they need neither PIN nor card (issue #73). Their IDs are never
+        // registered, so a retry is rejected again instead of "duplicate".
         foreach (var invalid in events.Where(e => string.IsNullOrWhiteSpace(e.EventId) || string.IsNullOrWhiteSpace(e.EmployeeId)))
         {
             const string message = "EventId und EmployeeId sind erforderlich.";
             results.Add(new OfflineSyncEventResultDto(invalid.EventId ?? string.Empty, "rejected", message));
-            if (!string.IsNullOrWhiteSpace(invalid.EventId))
-            {
-                TryRecordRejected(invalid, message, notificationEligible: false);
-            }
         }
 
         var orderedKioskEvents = events
@@ -223,15 +222,26 @@ public sealed class OfflineClockService(
     /// A newly journaled refusal of a known employee marks the round for a
     /// Telegram warning (see <see cref="ReleaseSyncLock"/>); eligible calls
     /// happen while holding <see cref="_syncLock"/>.
+    /// Refusals for an employee ID that is not configured are not journaled
+    /// (issue #73): nobody could enter them in Kimai, and anyone in the LAN
+    /// could otherwise fill the admin journal. Returns false then, like on a
+    /// journal failure, so the caller frees the event ID and a retry is
+    /// rejected again instead of acknowledged as "duplicate".
     /// </summary>
     private bool TryRecordRejected(OfflineKioskClockEventDto entry, string message, bool notificationEligible = true)
     {
         try
         {
             var settings = settingsStore.Load();
-            var employeeName = settings.Employees
-                .FirstOrDefault(employee => string.Equals(employee.Id, entry.EmployeeId,
-                    StringComparison.OrdinalIgnoreCase))?.DisplayName ?? string.Empty;
+            var employee = settings.Employees.FirstOrDefault(employee => string.Equals(employee.Id, entry.EmployeeId,
+                StringComparison.OrdinalIgnoreCase));
+            if (employee is null)
+            {
+                logger.LogDebug("Rejected offline event {EventId} names no configured employee - not journaled", entry.EventId);
+                return false;
+            }
+
+            var employeeName = employee.DisplayName;
             // Only while Telegram is on: otherwise the entry would wait for a
             // push forever and surface as a stale summary once it is enabled.
             var record = new RejectedOfflineEvent(
@@ -1018,8 +1028,9 @@ public sealed class OfflineClockService(
             {
                 // Permanent failure: keep a journal record so a kiosk that got
                 // "buffered" can learn about the refusal on its next retry.
-                // If persistence fails, free the ID so that retry can receive
-                // a fresh verdict instead of a silent "duplicate".
+                // If persistence fails or the refusal is deliberately not
+                // journaled (unknown employee), free the ID so that retry can
+                // receive a fresh verdict instead of a silent "duplicate".
                 logger.LogError(ex, "Outbox: dropping kiosk event {EventId} after permanent error", kioskEntry.EventId);
                 if (!TryRecordRejected(kioskEntry, ex.Message, IsNotificationEligible(ex)))
                 {
