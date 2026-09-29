@@ -18,15 +18,18 @@ public sealed class WorkTimeAlertStoreTests : IDisposable
     public void SentAlerts_SurviveARestart_AndOldOnesAreDropped()
     {
         var at = DateTimeOffset.Parse("2026-09-30T12:00:00Z");
+        var old = Violation(WorkTimeViolationKind.Shift, at.AddDays(-4).AddHours(-11), at.AddDays(-4));
+        var current = Violation(WorkTimeViolationKind.Continuous, at.AddHours(-7), at);
         var store = new WorkTimeAlertStore(AlertPath);
-        store.MarkSent("max", "shift:old", at.AddDays(-4));
-        store.MarkSent("max", "continuous:new", at);
+        store.MarkSent("max", old, at.AddDays(-4));
+        store.MarkSent("max", current, at);
 
         var reloaded = new WorkTimeAlertStore(AlertPath);
 
-        Assert.True(reloaded.HasSent("MAX", "continuous:new"));
-        Assert.False(reloaded.HasSent("anna", "continuous:new"));
-        Assert.False(reloaded.HasSent("max", "shift:old"));
+        Assert.True(reloaded.HasSent("MAX", current));
+        Assert.False(reloaded.HasSent("anna", current));
+        Assert.False(reloaded.HasSent("max", current with { Kind = WorkTimeViolationKind.Shift }));
+        Assert.False(reloaded.HasSent("max", old));
     }
 
     [Fact]
@@ -36,10 +39,16 @@ public sealed class WorkTimeAlertStoreTests : IDisposable
         File.WriteAllText(AlertPath, "{broken");
         var store = new WorkTimeAlertStore(AlertPath);
 
-        Assert.False(store.HasSent("max", "shift:x"));
+        var now = DateTimeOffset.UtcNow;
+        var violation = Violation(WorkTimeViolationKind.Shift, now.AddHours(-11), now);
+
+        Assert.False(store.HasSent("max", violation));
         Assert.Single(Directory.GetFiles(_directory, "work-time-alerts.json.corrupt-*"));
 
-        store.MarkSent("max", "shift:x", DateTimeOffset.UtcNow);
-        Assert.True(new WorkTimeAlertStore(AlertPath).HasSent("max", "shift:x"));
+        store.MarkSent("max", violation, now);
+        Assert.True(new WorkTimeAlertStore(AlertPath).HasSent("max", violation));
     }
+
+    private static WorkTimeViolation Violation(WorkTimeViolationKind kind, DateTimeOffset start, DateTimeOffset end) =>
+        new(kind, start, end, (int)(end - start).TotalSeconds);
 }

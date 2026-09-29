@@ -32,6 +32,33 @@ public sealed class WorkTimeAlertServiceTests : IDisposable
         Assert.Equal("⚠️ Max · über 6 Std. ohne Pause (ab 09:00, 7:00 Std.)", text);
     }
 
+    [Theory]
+    [InlineData(5)]         // block: offline entry replayed before the reported start
+    [InlineData(7 * 60)]    // shift only: split shift, earlier part entered afterwards
+    public async Task EntryAddedBeforeAReportedGroup_DoesNotRepeatTheWarning(int gapMinutes)
+    {
+        var kimai = new StubKimaiClient();
+        var reportedStart = Now.AddHours(-10).AddMinutes(-30);
+        kimai.Timesheets["max"] = [Running(reportedStart)];
+        var telegram = new RecordingNotifier();
+        var clock = new ManualClock(Now);
+        var alerts = new WorkTimeAlertStore(AlertPath);
+
+        await CreateService(kimai, telegram, alerts, clock: clock).CheckAsync();
+        Assert.Equal(2, telegram.Messages.Count);
+
+        var earlierEnd = reportedStart.AddMinutes(-gapMinutes);
+        kimai.Timesheets["max"] =
+        [
+            new KimaiTimesheetEntryDto(2, earlierEnd.AddHours(-1), earlierEnd, 3600, 5),
+            Running(reportedStart),
+        ];
+        clock.Now = Now.AddMinutes(5);
+        await CreateService(kimai, telegram, new WorkTimeAlertStore(AlertPath), clock: clock).CheckAsync();
+
+        Assert.Equal(2, telegram.Messages.Count);
+    }
+
     [Fact]
     public async Task ShiftWarningFollowsLater_AsItsOwnMessage()
     {

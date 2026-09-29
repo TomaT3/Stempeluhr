@@ -2,11 +2,19 @@ using System.Text.Json;
 
 namespace Stempeluhr.Api.Services;
 
-public sealed record WorkTimeAlert(string EmployeeId, string Key, DateTimeOffset SentAt);
+/// <summary>A sent warning: the group's period as it looked at <paramref name="SentAt"/>.</summary>
+public sealed record WorkTimeAlert(
+    string EmployeeId,
+    WorkTimeViolationKind Kind,
+    DateTimeOffset Start,
+    DateTimeOffset End,
+    DateTimeOffset SentAt);
 
 /// <summary>
 /// Remembers which work time warnings Telegram already accepted, so a check
 /// every few minutes - and after a restart - sends each warning only once.
+/// A group counts as warned while it overlaps a sent period, so an entry
+/// added or corrected before its start later does not repeat the warning.
 /// </summary>
 public sealed class WorkTimeAlertStore(string filePath, ILogger<WorkTimeAlertStore>? logger = null)
 {
@@ -16,12 +24,13 @@ public sealed class WorkTimeAlertStore(string filePath, ILogger<WorkTimeAlertSto
     private readonly object _gate = new();
     private List<WorkTimeAlert>? _entries;
 
-    public bool HasSent(string employeeId, string key)
+    public bool HasSent(string employeeId, WorkTimeViolation violation)
     {
         lock (_gate)
         {
-            return Load().Any(entry => entry.Key == key
-                && string.Equals(entry.EmployeeId, employeeId, StringComparison.OrdinalIgnoreCase));
+            return Load().Any(entry => entry.Kind == violation.Kind
+                && string.Equals(entry.EmployeeId, employeeId, StringComparison.OrdinalIgnoreCase)
+                && violation.Overlaps(entry.Start, entry.End));
         }
     }
 
@@ -37,13 +46,13 @@ public sealed class WorkTimeAlertStore(string filePath, ILogger<WorkTimeAlertSto
     /// Takes effect in memory even if the file cannot be written (the error is
     /// still thrown), so a full disk cannot repeat the warning every check.
     /// </summary>
-    public void MarkSent(string employeeId, string key, DateTimeOffset at)
+    public void MarkSent(string employeeId, WorkTimeViolation violation, DateTimeOffset at)
     {
         lock (_gate)
         {
             var updated = Load()
                 .Where(entry => at - entry.SentAt <= Retention)
-                .Append(new WorkTimeAlert(employeeId, key, at))
+                .Append(new WorkTimeAlert(employeeId, violation.Kind, violation.Start, violation.End, at))
                 .ToList();
             _entries = updated;
             Persist(updated);

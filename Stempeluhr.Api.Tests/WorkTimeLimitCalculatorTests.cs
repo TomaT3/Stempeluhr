@@ -160,15 +160,15 @@ public sealed class WorkTimeLimitCalculatorTests
     }
 
     [Fact]
-    public void GroupNearTheWindowStart_IsNotEvaluated()
+    public void ShiftRunningForMoreThanFortyHours_IsStillReported()
     {
-        // Timesheets before the window are missing; the shift may be cut off.
-        var entries = new[] { Work(Now.AddHours(-11), null) };
+        // Forgotten clock-out: the whole shift lies inside the 48 h lookback.
+        var entries = new[] { Work(Now.AddHours(-42), null) };
 
-        var violation = Assert.Single(WorkTimeLimitCalculator.Evaluate(
-            entries, PauseActivity, windowStart: Now.AddHours(-12), Now));
+        var shift = Assert.Single(Evaluate(entries), violation => violation.Kind == WorkTimeViolationKind.Shift);
 
-        Assert.Equal(WorkTimeViolationKind.Continuous, violation.Kind);
+        Assert.Equal(Now.AddHours(-42), shift.Start);
+        Assert.Equal(Now, shift.End);
     }
 
     [Theory]
@@ -183,15 +183,29 @@ public sealed class WorkTimeLimitCalculatorTests
     }
 
     [Fact]
-    public void Keys_StayStableWhileTheShiftRuns()
+    public void EarlierEntryAddedLater_StillOverlapsTheReportedGroup()
     {
-        var entries = new[] { Work(Now.AddHours(-11), null) };
+        var reported = Assert.Single(Evaluate([Work(Now.AddHours(-7), null)]));
 
-        var first = Evaluate(entries).Select(violation => violation.Key).ToArray();
-        var later = Evaluate(entries, Now.AddMinutes(5)).Select(violation => violation.Key).ToArray();
+        var later = Now.AddMinutes(5);
+        var extended = Assert.Single(Evaluate(
+            [Work(Now.AddHours(-8), Now.AddHours(-7).AddMinutes(-5)), Work(Now.AddHours(-7), null)], later));
 
-        Assert.Equal(2, first.Length);
-        Assert.Equal(first, later);
+        Assert.Equal(Now.AddHours(-8), extended.Start);
+        Assert.True(extended.Overlaps(reported.Start, reported.End));
+    }
+
+    [Fact]
+    public void NextBlockAfterARealBreak_DoesNotOverlapTheReportedOne()
+    {
+        var blockEnd = Now.AddHours(-1);
+        var reported = Assert.Single(Evaluate([Work(blockEnd.AddHours(-7), null)], blockEnd));
+
+        var next = Assert.Single(Evaluate(
+            [Work(blockEnd.AddHours(-7), blockEnd), Work(blockEnd.AddMinutes(15), null)], blockEnd.AddHours(7)),
+            violation => violation.Start > reported.Start);
+
+        Assert.False(next.Overlaps(reported.Start, reported.End));
     }
 
     [Fact]
@@ -209,8 +223,7 @@ public sealed class WorkTimeLimitCalculatorTests
     private static IReadOnlyList<WorkTimeViolation> Evaluate(
         IReadOnlyCollection<KimaiTimesheetEntryDto> entries, DateTimeOffset? now = null)
     {
-        var at = now ?? Now;
-        return WorkTimeLimitCalculator.Evaluate(entries, PauseActivity, at - WorkTimeLimitCalculator.Lookback, at);
+        return WorkTimeLimitCalculator.Evaluate(entries, PauseActivity, now ?? Now);
     }
 
     private static KimaiTimesheetEntryDto Work(string begin, string? end, int activityId = WorkActivity) =>

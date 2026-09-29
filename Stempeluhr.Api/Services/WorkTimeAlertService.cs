@@ -81,9 +81,9 @@ public sealed class WorkTimeAlertService(
             TimeZoneInfo.ConvertTime(now, timeZone).DateTime,
             cancellationToken);
 
-        foreach (var violation in WorkTimeLimitCalculator.Evaluate(entries, settings.PauseActivityId, windowStart, now))
+        foreach (var violation in WorkTimeLimitCalculator.Evaluate(entries, settings.PauseActivityId, now))
         {
-            if (alerts.HasSent(employee.Id, violation.Key)) continue;
+            if (alerts.HasSent(employee.Id, violation)) continue;
 
             var text = violation.Kind == WorkTimeViolationKind.Continuous
                 ? TelegramMessageFactory.BuildContinuousWorkWarning(
@@ -93,7 +93,7 @@ public sealed class WorkTimeAlertService(
 
             // Not accepted: the next check tries again.
             if (!await telegram.SendMessageAsync(text)) return;
-            alerts.MarkSent(employee.Id, violation.Key, _clock.GetUtcNow());
+            alerts.MarkSent(employee.Id, violation, _clock.GetUtcNow());
         }
     }
 }

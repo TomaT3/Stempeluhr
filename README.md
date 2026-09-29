@@ -229,8 +229,10 @@ Gezählt wird nur Arbeit, keine Pause-Aktivität. Eine Pause oder Ausstempel-Lü
 unterbricht „am Stück“ erst ab 15 Minuten, ein Tätigkeitswechsel nie. Eine
 Schicht endet erst nach 8 Stunden ohne Arbeit, unabhängig von Mitternacht:
 Nachtschichten und geteilte Dienste zählen als Ganzes. Jede Überschreitung
-meldet sich einmal pro Block bzw. Schicht; `data/work-time-alerts.json` merkt
-sich gesendete Warnungen auch über einen Neustart. Scheitert der Versand,
+meldet sich einmal pro Block bzw. Schicht, auch wenn davor später noch Zeit
+nachgetragen oder der Beginn in Kimai korrigiert wird;
+`data/work-time-alerts.json` merkt sich gesendete Warnungen auch über einen
+Neustart. Scheitert der Versand,
 folgt der nächste Versuch bei der nächsten Prüfung. Fälle, die schon länger als
 24 Stunden vorbei sind, werden nicht mehr gemeldet. Ohne Telegram-Konfiguration
 fragt der Dienst Kimai gar nicht erst ab.

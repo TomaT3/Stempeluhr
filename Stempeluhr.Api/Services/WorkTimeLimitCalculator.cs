@@ -12,15 +12,24 @@ public enum WorkTimeViolationKind
 }
 
 /// <summary>
-/// Eine überschrittene Grenze. <paramref name="Key"/> hängt nur am Beginn der
-/// Gruppe und bleibt über alle Prüfungen gleich, solange Kimai nichts davor
-/// nachträgt - daran erkennt der Merker eine schon gesendete Warnung.
+/// Eine überschrittene Grenze für die Gruppe von <paramref name="Start"/> bis
+/// <paramref name="End"/> (laufend: jetzt). Der Merker erkennt eine schon
+/// gemeldete Gruppe an der Überlappung dieses Zeitraums, nicht am Beginn:
+/// Ein später davor nachgetragener oder korrigierter Eintrag verschiebt den
+/// Beginn, bleibt aber dieselbe Gruppe.
 /// </summary>
 public sealed record WorkTimeViolation(
     WorkTimeViolationKind Kind,
-    string Key,
     DateTimeOffset Start,
-    int WorkedSeconds);
+    DateTimeOffset End,
+    int WorkedSeconds)
+{
+    /// <summary>
+    /// Gruppen einer Art sind durch mindestens die Schwelle getrennt; ein
+    /// gemeinsamer Zeitpunkt heißt also: dieselbe (ggf. erweiterte) Gruppe.
+    /// </summary>
+    public bool Overlaps(DateTimeOffset start, DateTimeOffset end) => Start <= end && start <= End;
+}
 
 /// <summary>
 /// Prüft Kimai-Timesheets gegen die Arbeitszeit-Grenzen. Bewusst eine pure
@@ -51,16 +60,15 @@ public static class WorkTimeLimitCalculator
     /// </summary>
     public static readonly TimeSpan ReportWindow = TimeSpan.FromHours(24);
 
-    /// <param name="windowStart">
-    /// Beginn des Kimai-Abfragefensters. Davor liegende Timesheets fehlen in
-    /// <paramref name="entries"/>; eine Gruppe, die zu nah daran beginnt,
-    /// könnte abgeschnitten sein und bekäme einen anderen Key - sie wird
-    /// deshalb nicht bewertet.
-    /// </param>
+    /// <summary>
+    /// Timesheets vor dem Abfragefenster fehlen in <paramref name="entries"/>.
+    /// Eine dort abgeschnittene Gruppe zählt nur weniger Arbeit - das kann
+    /// keine falsche Warnung auslösen, und eine schon gemeldete Gruppe
+    /// überlappt weiterhin mit ihrem Merker.
+    /// </summary>
     public static IReadOnlyList<WorkTimeViolation> Evaluate(
         IReadOnlyCollection<KimaiTimesheetEntryDto> entries,
         int? pauseActivityId,
-        DateTimeOffset windowStart,
         DateTimeOffset now)
     {
         var intervals = entries
@@ -73,8 +81,8 @@ public static class WorkTimeLimitCalculator
             .ToArray();
 
         var violations = new List<WorkTimeViolation>();
-        Collect(intervals, MinimumBreak, ContinuousLimit, WorkTimeViolationKind.Continuous, "continuous", windowStart, now, violations);
-        Collect(intervals, ShiftRest, ShiftLimit, WorkTimeViolationKind.Shift, "shift", windowStart, now, violations);
+        Collect(intervals, MinimumBreak, ContinuousLimit, WorkTimeViolationKind.Continuous, now, violations);
+        Collect(intervals, ShiftRest, ShiftLimit, WorkTimeViolationKind.Shift, now, violations);
         return violations;
     }
 
@@ -83,8 +91,6 @@ public static class WorkTimeLimitCalculator
         TimeSpan separatingGap,
         TimeSpan limit,
         WorkTimeViolationKind kind,
-        string keyPrefix,
-        DateTimeOffset windowStart,
         DateTimeOffset now,
         List<WorkTimeViolation> violations)
     {
@@ -109,12 +115,9 @@ public static class WorkTimeLimitCalculator
                 running |= interval.Running;
             }
 
-            if (worked > limit
-                && start - windowStart >= separatingGap
-                && (running || now - end <= ReportWindow))
+            if (worked > limit && (running || now - end <= ReportWindow))
             {
-                violations.Add(new WorkTimeViolation(
-                    kind, $"{keyPrefix}:{start.UtcDateTime:O}", start, (int)worked.TotalSeconds));
+                violations.Add(new WorkTimeViolation(kind, start, end, (int)worked.TotalSeconds));
             }
         }
     }
