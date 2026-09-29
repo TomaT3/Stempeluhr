@@ -110,11 +110,11 @@ public sealed class OfflineClockService(
         try
         {
             // Never let a fresh batch jump over events that are still waiting
-            // in the outbox.
+            // in the outbox. Events queued behind the backlog leave the list.
             var queuedBehindBacklog = await BufferBatchBehindBacklogAsync(orderedKioskEvents, results, cancellationToken);
-            if (queuedBehindBacklog > 0)
+            buffered += queuedBehindBacklog;
+            if (queuedBehindBacklog > 0 && orderedKioskEvents.Count == 0)
             {
-                buffered += queuedBehindBacklog;
                 return new OfflineSyncResultDto(accepted, duplicates, buffered, results);
             }
 
@@ -136,7 +136,8 @@ public sealed class OfflineClockService(
             // Employees whose PIN is locked (issue #8). Their events are
             // answered "buffered" WITHOUT a server copy and without registering
             // the ID: the kiosk keeps them and retries after the lock, and they
-            // never block the outbox for everybody else.
+            // never block the outbox for everybody else. (An employee who
+            // already waits in the outbox was queued behind it above.)
             var lockedEmployees = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             for (var i = 0; i < orderedKioskEvents.Count; i++)
@@ -292,35 +293,54 @@ public sealed class OfflineClockService(
     /// arriving batch must not race ahead of it. Otherwise later actions would
     /// be applied against a Kimai state that misses earlier ones, turning them
     /// into "Lief nicht" no-ops acknowledged as applied. Drains what it can; if
-    /// a backlog survives (Kimai still unreachable), the incoming batch is
-    /// appended behind it instead of being applied live, followed by one
-    /// opportunistic flush. MUST be called while holding
-    /// <see cref="_syncLock"/>. Returns the number of buffered events (0 means
-    /// no backlog existed and the caller processes live).
+    /// a backlog survives because Kimai is still unreachable, the incoming
+    /// batch is appended behind it instead of being applied live, followed by
+    /// one opportunistic flush. If only events of PIN-locked employees survive
+    /// (issue #8), just THEIR new events queue behind them - the order only
+    /// matters per employee, and a locked account must not turn every other
+    /// sync into "buffered" for the length of the lock. Buffered events are
+    /// removed from <paramref name="orderedEvents"/>; the caller processes the
+    /// rest live. MUST be called while holding <see cref="_syncLock"/>.
+    /// Returns the number of buffered events.
     /// </summary>
     private async Task<int> BufferBatchBehindBacklogAsync(
-        IReadOnlyList<OfflineKioskClockEventDto> orderedEvents,
+        List<OfflineKioskClockEventDto> orderedEvents,
         List<OfflineSyncEventResultDto> results,
         CancellationToken cancellationToken)
     {
-        await FlushOutboxCoreAsync(cancellationToken);
+        var interrupted = await FlushOutboxCoreAsync(cancellationToken);
         if (_kioskOutbox.Count == 0)
         {
             return 0;
         }
 
-        foreach (var entry in orderedEvents)
+        var waiting = interrupted
+            ? null
+            : _kioskOutbox.Select(entry => entry.EmployeeId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var message = interrupted ? BufferedMessage : LockedMessage;
+        var behind = orderedEvents.Where(entry => waiting is null || waiting.Contains(entry.EmployeeId)).ToList();
+        foreach (var entry in behind)
         {
             // Physical dedup: a re-sent event that is already waiting in the
             // outbox must not add another copy (see _kioskOutboxIds). The
             // sender still gets "buffered" - the server DOES hold it and will
             // apply it on recovery.
             AddToOutbox(entry);
-            results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, BufferedMessage));
+            results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, message));
         }
 
-        await FlushOutboxCoreAsync(cancellationToken);
-        return orderedEvents.Count;
+        if (behind.Count == 0)
+        {
+            return 0;
+        }
+
+        orderedEvents.RemoveAll(behind.Contains);
+        if (orderedEvents.Count == 0)
+        {
+            await FlushOutboxCoreAsync(cancellationToken);
+        }
+
+        return behind.Count;
     }
 
     /// <summary>
@@ -1010,10 +1030,14 @@ public sealed class OfflineClockService(
     /// flush start (a later batch may carry events older than the backlog
     /// tail, e.g. from a second kiosk); a transient failure puts the head back
     /// at the front and ends the round, so the next flush resumes in the same
-    /// order. Callers must hold <see cref="_syncLock"/>.
+    /// order. Callers must hold <see cref="_syncLock"/>. Returns true when the
+    /// round ended early on a transient failure (Kimai unreachable, live
+    /// request still running); otherwise only events of PIN-locked employees
+    /// are left.
     /// </summary>
-    private async Task FlushOutboxCoreAsync(CancellationToken cancellationToken)
+    private async Task<bool> FlushOutboxCoreAsync(CancellationToken cancellationToken)
     {
+        var interrupted = false;
         var drained = 0;
         SortChronologically(_kioskOutbox, entry => entry.PerformedAt);
 
@@ -1058,6 +1082,7 @@ public sealed class OfflineClockService(
                 // back where it was, then stop flushing this round.
                 eventIdStore.Remove(kioskEntry.EventId);
                 _kioskOutbox.Insert(index, kioskEntry);
+                interrupted = true;
                 break;
             }
             catch (Exception ex) when (IsTransientError(ex))
@@ -1066,6 +1091,7 @@ public sealed class OfflineClockService(
                 // this event still running - put back and retry later.
                 eventIdStore.Remove(kioskEntry.EventId);
                 _kioskOutbox.Insert(index, kioskEntry);
+                interrupted = true;
                 break;
             }
             catch (PinLockedException)
@@ -1096,6 +1122,8 @@ public sealed class OfflineClockService(
         {
             logger.LogInformation("Outbox flushed {Count} offline event(s)", drained);
         }
+
+        return interrupted;
     }
 
     /// <summary>

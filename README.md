@@ -351,13 +351,18 @@ separater Schritt (siehe [Update](#update)).
 - Fehlversuchs-Sperre für PINs (im Speicher der API): Nach 5 falschen PINs oder
   Karten in Folge für einen Mitarbeiter sperrt die API ihn für 1, dann 5, dann
   15 Minuten. Das gilt für Live-Stempeln, `/api/clock/*` und den PIN-Nachtrag.
-  PIN-Login und Stundenübersicht ohne Mitarbeiter-ID teilen einen globalen
-  Zähler mit Schwelle 10. Eine erfolgreiche Anmeldung setzt den Zähler zurück,
-  nach einer Stunde ohne Fehlversuch beginnt er neu. Während der Sperre prüft
-  die API die PIN gar nicht erst und antwortet mit `429` und `Retry-After`.
-  Der Kiosk reiht Live-Stempel dann offline ein, und Nachträge des gesperrten
-  Mitarbeiters bleiben `buffered`, bis die Sperre abläuft. Nachträge über
-  Terminal-Token sind nicht betroffen. Ein API-Neustart hebt alle Sperren auf.
+  Eine erfolgreiche Anmeldung setzt diesen Zähler zurück, nach einer Stunde
+  ohne Fehlversuch beginnt er neu. PIN-Login und Stundenübersicht ohne
+  Mitarbeiter-ID teilen ein globales Budget von 10 Fehlversuchen in
+  15 Minuten. Ein erfolgreicher Login setzt es nicht zurück, sonst könnte sich
+  jeder mit eigener PIN neue Versuche verschaffen. Ist das Budget aufgebraucht,
+  bleibt der PIN-Login nur so lange gesperrt, bis der älteste Fehlversuch aus
+  dem Fenster fällt. Während einer Sperre prüft die API die PIN gar nicht erst
+  und antwortet mit `429` und `Retry-After`. Der Kiosk reiht Live-Stempel dann
+  offline ein, und Nachträge des gesperrten Mitarbeiters bleiben `buffered`,
+  bis die Sperre abläuft. Nachträge anderer Mitarbeiter laufen weiter.
+  Nachträge über Terminal-Token sind nicht betroffen. Ein API-Neustart hebt
+  alle Sperren auf.
 
 ## Bekannte Grenzen und offene Punkte
 
@@ -374,3 +379,9 @@ separater Schritt (siehe [Update](#update)).
 - Wer eine Mitarbeiter-ID kennt, kann diesen Mitarbeiter mit falschen PINs
   gezielt sperren. Seine Stempel gehen dabei nicht verloren, werden aber erst
   nach Ablauf der Sperre gebucht.
+- Das globale PIN-Login-Budget lässt sich von jedem Gerät im Netz mit 10 falschen
+  PINs pro 15 Minuten dauerhaft ausschöpfen. Dann sind PIN-Login und
+  Stundenübersicht für alle gesperrt. Der Kiosk meldet Mitarbeiter mit
+  gemerkter PIN offline an und reiht ihre Stempel ein. Wer keine gemerkte PIN
+  hat (neuer Mitarbeiter, geänderte PIN, anderer Browser), kommt nur per Karte
+  herein.

@@ -10,8 +10,11 @@ namespace Stempeluhr.Api.Services;
 /// for 1, then 5, then 15 minutes. A successful authentication resets it.
 ///
 /// PIN login and hours carry no employee ID (the PIN alone selects the
-/// employee); they share the global <see cref="PinLoginKey"/> with a higher
-/// threshold, because every terminal contributes to it.
+/// employee); they share the global <see cref="PinLoginKey"/>: at most
+/// <see cref="PinLoginThreshold"/> failures per sliding
+/// <see cref="PinLoginWindow"/>. A success does NOT reset that budget -
+/// anybody with a valid PIN of their own could otherwise guess without end,
+/// and the logins of a normal working day would keep reopening it.
 ///
 /// While locked, a request is refused BEFORE its PIN is checked - otherwise
 /// the lock would still reveal the verdict. State lives in memory only and
@@ -24,6 +27,9 @@ public sealed class PinAttemptGuard(ILogger<PinAttemptGuard>? logger = null, Tim
 
     public const int EmployeeThreshold = 5;
     public const int PinLoginThreshold = 10;
+
+    /// <summary>Sliding window of the global PIN-login budget.</summary>
+    public static readonly TimeSpan PinLoginWindow = TimeSpan.FromMinutes(15);
 
     private static readonly TimeSpan[] LockDurations =
         [TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(15)];
@@ -39,6 +45,9 @@ public sealed class PinAttemptGuard(ILogger<PinAttemptGuard>? logger = null, Tim
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly object _gate = new();
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
+
+    // Times of the counted PIN-login failures inside the window, oldest first.
+    private readonly Queue<DateTimeOffset> _pinLoginFailures = new();
 
     public static string EmployeeKey(string employeeId) => $"employee:{employeeId}";
 
@@ -67,18 +76,29 @@ public sealed class PinAttemptGuard(ILogger<PinAttemptGuard>? logger = null, Tim
 
     private EmployeeSettings? Guard(string key, Func<EmployeeSettings?> verify)
     {
-        ThrowIfLocked(key);
-        var employee = verify();
-        if (employee is null)
+        // Check, verify and count in ONE critical section: parallel requests
+        // could otherwise all pass the check before the failure that locks is
+        // recorded, and each would still get its verdict. verify only
+        // compares configured values in memory, so holding the gate is cheap.
+        lock (_gate)
         {
-            RecordFailure(key);
-        }
-        else
-        {
-            RecordSuccess(key);
-        }
+            if (RemainingLockCore(key) is { } remaining)
+            {
+                throw new PinLockedException(remaining);
+            }
 
-        return employee;
+            var employee = verify();
+            if (employee is null)
+            {
+                RecordFailureCore(key);
+            }
+            else
+            {
+                RecordSuccessCore(key);
+            }
+
+            return employee;
+        }
     }
 
     /// <summary>Remaining lock time, or null when the key may try a PIN.</summary>
@@ -86,19 +106,7 @@ public sealed class PinAttemptGuard(ILogger<PinAttemptGuard>? logger = null, Tim
     {
         lock (_gate)
         {
-            var now = _clock.GetUtcNow();
-            return _entries.TryGetValue(key, out var entry) && entry.LockedUntil > now
-                ? entry.LockedUntil - now
-                : null;
-        }
-    }
-
-    /// <exception cref="PinLockedException">The key is locked.</exception>
-    public void ThrowIfLocked(string key)
-    {
-        if (RemainingLock(key) is { } remaining)
-        {
-            throw new PinLockedException(remaining);
+            return RemainingLockCore(key);
         }
     }
 
@@ -106,30 +114,7 @@ public sealed class PinAttemptGuard(ILogger<PinAttemptGuard>? logger = null, Tim
     {
         lock (_gate)
         {
-            var now = _clock.GetUtcNow();
-            var entry = _entries.TryGetValue(key, out var existing) && now - existing.LastFailureAt < ForgetAfter
-                ? existing
-                : new Entry(0, 0, now, DateTimeOffset.MinValue);
-            if (entry.LockedUntil > now)
-            {
-                // Callers check the lock first; a failure that raced past it
-                // must not extend or escalate the lock.
-                return;
-            }
-
-            var failures = entry.Failures + 1;
-            var threshold = key == PinLoginKey ? PinLoginThreshold : EmployeeThreshold;
-            if (failures < threshold)
-            {
-                _entries[key] = entry with { Failures = failures, LastFailureAt = now };
-                return;
-            }
-
-            var duration = LockDurations[Math.Min(entry.Locks, LockDurations.Length - 1)];
-            _entries[key] = new Entry(0, entry.Locks + 1, now, now + duration);
-            logger?.LogWarning(
-                "PIN locked for {Key} after {Failures} failed attempt(s) - {Minutes} minute(s)",
-                key, failures, duration.TotalMinutes);
+            RecordFailureCore(key);
         }
     }
 
@@ -137,7 +122,97 @@ public sealed class PinAttemptGuard(ILogger<PinAttemptGuard>? logger = null, Tim
     {
         lock (_gate)
         {
+            RecordSuccessCore(key);
+        }
+    }
+
+    private TimeSpan? RemainingLockCore(string key)
+    {
+        var now = _clock.GetUtcNow();
+        if (key == PinLoginKey)
+        {
+            PrunePinLoginFailures(now);
+            return _pinLoginFailures.Count >= PinLoginThreshold
+                ? _pinLoginFailures.Peek() + PinLoginWindow - now
+                : null;
+        }
+
+        return _entries.TryGetValue(key, out var entry) && entry.LockedUntil > now
+            ? entry.LockedUntil - now
+            : null;
+    }
+
+    private void RecordFailureCore(string key)
+    {
+        var now = _clock.GetUtcNow();
+        if (key == PinLoginKey)
+        {
+            RecordPinLoginFailure(now);
+            return;
+        }
+
+        var entry = _entries.TryGetValue(key, out var existing) && now - existing.LastFailureAt < ForgetAfter
+            ? existing
+            : new Entry(0, 0, now, DateTimeOffset.MinValue);
+        if (entry.LockedUntil > now)
+        {
+            // A failure during the lock must not extend or escalate it.
+            return;
+        }
+
+        var failures = entry.Failures + 1;
+        if (failures < EmployeeThreshold)
+        {
+            _entries[key] = entry with { Failures = failures, LastFailureAt = now };
+            return;
+        }
+
+        var duration = LockDurations[Math.Min(entry.Locks, LockDurations.Length - 1)];
+        _entries[key] = new Entry(0, entry.Locks + 1, now, now + duration);
+        logger?.LogWarning(
+            "PIN locked for {Key} after {Failures} failed attempt(s) - {Minutes} minute(s)",
+            key, failures, duration.TotalMinutes);
+    }
+
+    /// <summary>
+    /// Budget instead of escalation: a lock lasts only until the oldest
+    /// counted failure leaves the window. Every terminal shares this key, so
+    /// a long escalated lock would shut out all employees - and anyone could
+    /// keep it up with a handful of requests.
+    /// </summary>
+    private void RecordPinLoginFailure(DateTimeOffset now)
+    {
+        PrunePinLoginFailures(now);
+        if (_pinLoginFailures.Count >= PinLoginThreshold)
+        {
+            // Locked: not counted, so the lock does not grow.
+            return;
+        }
+
+        _pinLoginFailures.Enqueue(now);
+        if (_pinLoginFailures.Count == PinLoginThreshold)
+        {
+            var remaining = _pinLoginFailures.Peek() + PinLoginWindow - now;
+            logger?.LogWarning(
+                "PIN locked for {Key} after {Failures} failed attempt(s) within {Window} minute(s) - {Seconds} second(s)",
+                PinLoginKey, PinLoginThreshold, PinLoginWindow.TotalMinutes, Math.Ceiling(remaining.TotalSeconds));
+        }
+    }
+
+    private void RecordSuccessCore(string key)
+    {
+        // The global budget only drains with time (see the class summary).
+        if (key != PinLoginKey)
+        {
             _entries.Remove(key);
+        }
+    }
+
+    private void PrunePinLoginFailures(DateTimeOffset now)
+    {
+        while (_pinLoginFailures.Count > 0 && now - _pinLoginFailures.Peek() >= PinLoginWindow)
+        {
+            _pinLoginFailures.Dequeue();
         }
     }
 }

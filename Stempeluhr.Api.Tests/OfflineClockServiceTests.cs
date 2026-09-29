@@ -440,8 +440,15 @@ public sealed class OfflineClockServiceTests
         Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([maxStart])).Results).Status);
         for (var i = 0; i < PinAttemptGuard.EmployeeThreshold; i++) guard.RecordFailure(PinAttemptGuard.EmployeeKey("max"));
 
-        // Queued behind the backlog, but applied by the flush right away.
-        await service.SyncKioskAsync([Kiosk("anna-start", "start", T10, "5678") with { EmployeeId = "anna" }]);
+        // Only Max's own new event queues behind his backlog; Anna is applied
+        // live and learns it right away instead of only on a later retry.
+        var mixed = await service.SyncKioskAsync([
+            Kiosk("anna-start", "start", T10, "5678") with { EmployeeId = "anna" },
+            Kiosk("max-stop", "stop", T12),
+        ]);
+        Assert.Equal("applied", mixed.Results.Single(r => r.EventId == "anna-start").Status);
+        Assert.Equal("buffered", mixed.Results.Single(r => r.EventId == "max-stop").Status);
+        Assert.Equal(1, mixed.Accepted);
         Assert.Equal(new[] { ("start", T10) }, kimai.Operations);
         await service.FlushOutboxAsync();
         Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([maxStart])).Results).Status);
@@ -450,6 +457,22 @@ public sealed class OfflineClockServiceTests
         await service.FlushOutboxAsync();
 
         Assert.Equal("duplicate", Assert.Single((await service.SyncKioskAsync([maxStart])).Results).Status);
+        // The event queued behind the backlog was applied by the outbox too.
+        Assert.Equal("duplicate", Assert.Single((await service.SyncKioskAsync([Kiosk("max-stop", "stop", T12)])).Results).Status);
+    }
+
+    [Fact]
+    public async Task KimaiOutage_StillQueuesTheWholeBatchBehindTheBacklog()
+    {
+        var guard = new PinAttemptGuard(clock: new ManualClock(T08));
+        var (service, kimai, _) = CreateServiceWithPinGuard(guard);
+        kimai.FailNextStatusCalls = 4;
+        Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([Kiosk("max-start", "start", T08)])).Results).Status);
+
+        var anna = await service.SyncKioskAsync([Kiosk("anna-start", "start", T10, "5678") with { EmployeeId = "anna" }]);
+
+        Assert.Equal("buffered", Assert.Single(anna.Results).Status);
+        Assert.Empty(kimai.Operations);
     }
 
     private static (OfflineClockService Service, FakeKimaiClient Kimai, RejectedOfflineEventStore Journal) CreateServiceWithPinGuard(

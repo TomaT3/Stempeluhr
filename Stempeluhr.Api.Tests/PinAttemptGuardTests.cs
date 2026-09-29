@@ -143,8 +143,78 @@ public sealed class PinAttemptGuardTests
         // An empty PIN is no guess and does not touch the lock.
         Assert.Null(await service.LoginWithPinAsync(""));
 
-        clock.Advance(TimeSpan.FromMinutes(1));
+        clock.Advance(PinAttemptGuard.PinLoginWindow);
         Assert.Equal("max", (await service.LoginWithPinAsync("1234"))?.Employee.Id);
+    }
+
+    [Fact]
+    public async Task OwnValidPin_DoesNotReopenTheGlobalBudget()
+    {
+        var guard = new PinAttemptGuard(clock: new ManualClock());
+        var service = new ClockService(new StubSettingsStore(Settings()), new EmployeeService(), new CountingKimaiClient(), pinAttempts: guard);
+
+        for (var i = 0; i < PinAttemptGuard.PinLoginThreshold - 1; i++)
+        {
+            Assert.Null(await service.LoginWithPinAsync("0000"));
+        }
+
+        // An employee logging in with their own PIN must not buy more guesses.
+        Assert.NotNull(await service.LoginWithPinAsync("1234"));
+        Assert.Null(await service.LoginWithPinAsync("0001"));
+
+        await Assert.ThrowsAsync<PinLockedException>(() => service.LoginWithPinAsync("0002"));
+    }
+
+    [Fact]
+    public void GlobalLock_LastsUntilTheOldestFailureLeavesTheWindow_WithoutEscalating()
+    {
+        var clock = new ManualClock();
+        var guard = new PinAttemptGuard(clock: clock);
+        var key = PinAttemptGuard.PinLoginKey;
+
+        guard.RecordFailure(key);
+        clock.Advance(TimeSpan.FromMinutes(10));
+        Fail(guard, key, PinAttemptGuard.PinLoginThreshold - 1);
+        Assert.Equal(PinAttemptGuard.PinLoginWindow - TimeSpan.FromMinutes(10), guard.RemainingLock(key));
+
+        // Failures during the lock neither count nor extend it.
+        Fail(guard, key, 20);
+        clock.Advance(PinAttemptGuard.PinLoginWindow - TimeSpan.FromMinutes(10));
+        Assert.Null(guard.RemainingLock(key));
+
+        // One failure fills the budget again; the lock lasts until the next
+        // oldest failure leaves the window - never longer than the window.
+        guard.RecordFailure(key);
+        Assert.Equal(TimeSpan.FromMinutes(10), guard.RemainingLock(key));
+    }
+
+    [Fact]
+    public async Task ParallelGuesses_GetNoMoreVerdictsThanTheThreshold()
+    {
+        var guard = new PinAttemptGuard(clock: new ManualClock());
+        var settings = Settings();
+        var verdicts = 0;
+        var locked = 0;
+
+        await Task.WhenAll(Enumerable.Range(0, 200).Select(_ => Task.Run(() =>
+        {
+            try
+            {
+                guard.Authenticate(settings, "max", () =>
+                {
+                    Interlocked.Increment(ref verdicts);
+                    Thread.SpinWait(1_000);
+                    return null;
+                });
+            }
+            catch (PinLockedException)
+            {
+                Interlocked.Increment(ref locked);
+            }
+        })));
+
+        Assert.Equal(PinAttemptGuard.EmployeeThreshold, verdicts);
+        Assert.Equal(200 - PinAttemptGuard.EmployeeThreshold, locked);
     }
 
     [Fact]
