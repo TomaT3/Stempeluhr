@@ -233,6 +233,10 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             "Authorization": "Bearer " + config.terminal_token,
             "X-Terminal-Id": config.terminal_id,
             "Content-Type": "application/json",
+            # Own name instead of urllib's default "Python-urllib/3.x": bot
+            # filters in front of the server (e.g. Cloudflare) answer that
+            # one with 403, which blocks catalog and replay for good.
+            "User-Agent": f"Stempeluhr-NFC-Agent/{AGENT_VERSION}",
         })
         # Never forward the credential to a redirect target.
         class NoRedirect(urllib.request.HTTPRedirectHandler):

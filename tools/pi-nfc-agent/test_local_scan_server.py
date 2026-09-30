@@ -185,7 +185,8 @@ def test_terminal_proxy() -> None:
         assert seen[-1][0] == "/api/kiosk/catalog"
         assert seen[-1][1]["Authorization"] == "Bearer private-terminal-token"
         assert seen[-1][1]["X-Terminal-Id"] == "pi-1"
-        payload = {"events": [{"eventId": "e1", "terminalId": "pi-1", "pin": "1234", "nfcCardId": "04AB"}]}
+        assert seen[-1][1]["User-Agent"].startswith("Stempeluhr-NFC-Agent/"), seen[-1][1]
+        payload ={"events": [{"eventId": "e1", "terminalId": "pi-1", "pin": "1234", "nfcCardId": "04AB"}]}
         req = urllib.request.Request(agent.url + "/terminal/sync", data=json.dumps(payload).encode(),
                                      headers={"Origin": KIOSK, "Content-Type": "application/json"})
         with urllib.request.urlopen(req) as response:
