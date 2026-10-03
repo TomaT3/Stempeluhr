@@ -1,7 +1,15 @@
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 
-import { AdminEmployeeStatus, AdminRejectedOfflineEvent, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../models/admin.models';
+import {
+  AdminEmployeeStatus,
+  AdminRejectedOfflineEvent,
+  AdminSettings,
+  AdminTerminalStatus,
+  KimaiActivity,
+  KimaiProject,
+  KimaiUser,
+} from '../models/admin.models';
 import { NfcLatestEvent } from '../models/kiosk.models';
 
 @Injectable({
@@ -44,6 +52,10 @@ export class AdminApi {
 
   getEmployeeStatuses(adminPassword: string) {
     return this.http.get<AdminEmployeeStatus[]>('/api/admin/employee-statuses', { headers: this.headers(adminPassword) });
+  }
+
+  getTerminalStatuses(adminPassword: string) {
+    return this.http.get<AdminTerminalStatus[]>('/api/admin/terminal-statuses', { headers: this.headers(adminPassword) });
   }
 
   getRejectedOfflineEvents(adminPassword: string) {

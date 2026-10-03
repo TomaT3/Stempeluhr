@@ -2028,6 +2028,7 @@ public sealed class OfflineClockServiceTests
             Messages.Add(text);
             return Task.FromResult(SendSucceeds);
         }
+        public Task<bool> SendAlertAsync(string text) => throw new NotSupportedException();
         public Task SendStampNotificationAsync(string employeeName, string action, DateTimeOffset stampUtc,
             TimeZoneInfo timeZone, string? taskLabel = null) => Task.CompletedTask;
     }

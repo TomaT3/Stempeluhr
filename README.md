@@ -259,6 +259,18 @@ fragt der Dienst Kimai gar nicht erst ab.
 
 Sendefehler beeinflussen das Stempeln nie.
 
+**Terminal-Überwachung:** Meldet sich ein Terminal nicht mehr, hängt die
+Kiosk-Seite oder sind Werte wie Temperatur oder Speicher kritisch, kommt eine
+Nachricht, z. B. `🔴 Meldet sich nicht (letzter Bericht 12:34)`, und nach dem
+Ende der Störung eine Entwarnung. Regeln und Grenzwerte:
+[Terminal-Diagnose](docs/terminal-diagnostics.md#überwachung). Technische
+Warnungen können in einen eigenen Chat gehen; ohne `telegramAlertChatId`
+landen sie in `telegramChatId`:
+
+```json
+{ "telegramAlertChatId": "-1009876543210" }
+```
+
 ### Terminal (Raspberry Pi)
 
 Zuerst ein eigenes Terminal-Token in `data/settings.json` registrieren und

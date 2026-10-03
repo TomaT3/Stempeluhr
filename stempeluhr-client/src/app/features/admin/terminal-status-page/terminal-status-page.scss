@@ -1,0 +1,264 @@
+:host {
+  display: block;
+}
+
+h2,
+p,
+dl,
+dd {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.status-page {
+  display: grid;
+  gap: 16px;
+}
+
+.status-toolbar,
+.status-summary,
+.terminal-row {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 24px rgba(24, 39, 75, 0.07);
+}
+
+.status-toolbar {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.back-link {
+  width: fit-content;
+  color: var(--color-primary);
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.status-login {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: #435064;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+input {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: #172033;
+  font-size: 1rem;
+}
+
+button {
+  display: inline-grid;
+  min-height: 42px;
+  place-items: center;
+  padding: 0 16px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-primary);
+  color: #ffffff;
+  font-weight: 850;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.status-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+}
+
+.status-summary div {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  background: var(--color-surface-muted);
+}
+
+.status-summary span {
+  color: #152033;
+  font-size: 1.75rem;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.status-summary small {
+  color: #657083;
+  font-weight: 800;
+}
+
+.terminal-list {
+  display: grid;
+  gap: 10px;
+}
+
+.terminal-row {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border-left: 6px solid var(--color-indicator);
+}
+
+.terminal-row[data-state='online'] {
+  border-left-color: var(--color-success);
+}
+
+.terminal-row[data-state='problem'] {
+  border-left-color: #c98a17;
+}
+
+.terminal-row[data-state='unreachable'] {
+  border-left-color: var(--color-danger);
+}
+
+.terminal-main small,
+.report-time {
+  color: #657083;
+  font-weight: 800;
+}
+
+.state-badge {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: #f8fafc;
+  color: #566277;
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+[data-state='online'] .state-badge {
+  border-color: #95d0b3;
+  background: #f1fbf6;
+  color: #13704c;
+}
+
+[data-state='problem'] .state-badge {
+  border-color: #e7c47d;
+  background: #fff8e8;
+  color: #865c13;
+}
+
+[data-state='unreachable'] .state-badge {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-surface);
+  color: var(--color-danger-text);
+}
+
+.problems {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px 10px 28px;
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius);
+  background: var(--color-danger-surface);
+  color: var(--color-danger-text);
+  font-weight: 800;
+}
+
+.terminal-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.terminal-main h2 {
+  color: #152033;
+  font-size: 1.1rem;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.status-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.status-details div {
+  display: grid;
+  gap: 3px;
+}
+
+.status-details dt {
+  color: #657083;
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.status-details dd {
+  color: #243045;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.message,
+.empty-state {
+  color: #8a3a2f;
+  font-size: 1.05rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.empty-state {
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: #657083;
+}
+
+@media (min-width: 980px) {
+  .status-toolbar {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: end;
+  }
+
+  .status-login {
+    justify-self: end;
+  }
+}
+
+@media (max-width: 720px) {
+  .status-login {
+    grid-template-columns: 1fr;
+  }
+
+  .status-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .status-details {
+    grid-template-columns: 1fr;
+  }
+}

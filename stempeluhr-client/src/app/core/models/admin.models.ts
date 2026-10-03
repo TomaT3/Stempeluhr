@@ -1,3 +1,36 @@
+export type AdminTerminalState = 'online' | 'problem' | 'unreachable' | 'never';
+
+/** Letzter Diagnosebericht eines Terminals (nur technische Felder). */
+export interface AdminTerminalReport {
+  agentVersion: string | null;
+  appVersion: string | null;
+  uiStatus: 'alive' | 'missing' | 'not-seen' | null;
+  heartbeatAgeSeconds: number | null;
+  screen: 'idle' | 'session' | null;
+  blocked: 'none' | 'request' | 'backlog' | 'status' | null;
+  busy: boolean | null;
+  offline: boolean | null;
+  pending: number | null;
+  rejected: number | null;
+  cpuPercent: number | null;
+  availableMemoryKb: number | null;
+  chromiumRssSumKb: number | null;
+  temperatureC: number | null;
+  throttledFlags: number | null;
+  diskFreeMb: number | null;
+  uptimeSeconds: number | null;
+  load1: number | null;
+}
+
+export interface AdminTerminalStatus {
+  terminalId: string;
+  state: AdminTerminalState;
+  lastReportAt: string | null;
+  problems: { kind: string; since: string; text: string }[];
+  report: AdminTerminalReport | null;
+  powerFlags: string[];
+}
+
 export interface AdminEmployeeStatus {
   employeeId: string;
   displayName: string;

@@ -50,6 +50,9 @@ builder.Services.AddSingleton(sp => new WorkTimeAlertStore(
     Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "work-time-alerts.json"),
     sp.GetRequiredService<ILogger<WorkTimeAlertStore>>()));
 builder.Services.AddHostedService<WorkTimeAlertService>();
+// Terminal monitoring: status page and Telegram alarm when a terminal stops reporting.
+builder.Services.AddSingleton<TerminalHealthStore>();
+builder.Services.AddHostedService<TerminalHealthWatcher>();
 builder.Services.AddHttpClient<IKimaiClient, KimaiClient>(client =>
 {
     // Every Kimai call runs under the global sync lock: one hung connection

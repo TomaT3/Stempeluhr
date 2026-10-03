@@ -1,3 +1,6 @@
+using System.Text.Json;
+using Stempeluhr.Api.Services;
+
 namespace Stempeluhr.Api.Models;
 
 public sealed record AdminEmployeeStatusDto(
@@ -11,6 +14,38 @@ public sealed record AdminEmployeeStatusDto(
     bool IsAvailable,
     string? ActiveTaskLabel = null);
 
+/// <summary>One entry of the admin terminal status page. Never contains tokens.</summary>
+public sealed record AdminTerminalStatusDto(
+    string TerminalId,
+    string State,
+    string? LastReportAt,
+    IReadOnlyCollection<AdminTerminalProblemDto> Problems,
+    TerminalHealthReport? Report,
+    IReadOnlyCollection<string> PowerFlags)
+{
+    public static AdminTerminalStatusDto From(
+        string terminalId, TerminalHealthSnapshot snapshot, DateTimeOffset now, TimeZoneInfo timeZone)
+    {
+        var state = snapshot.ReceivedAt is null ? "never"
+            : snapshot.Alarms.ContainsKey(TerminalCondition.Unreachable) ? "unreachable"
+            : snapshot.Alarms.Count > 0 ? "problem"
+            : "online";
+        return new AdminTerminalStatusDto(
+            terminalId,
+            state,
+            snapshot.ReceivedAt?.ToString("O"),
+            snapshot.Alarms.Select(alarm => new AdminTerminalProblemDto(
+                JsonNamingPolicy.CamelCase.ConvertName(alarm.Key.ToString()),
+                alarm.Value.ToString("O"),
+                TelegramMessageFactory.DescribeTerminalProblem(alarm.Key, alarm.Value, snapshot.Report, now, timeZone)))
+                .ToArray(),
+            snapshot.Report,
+            TerminalHealthEvaluator.DescribeThrottling(snapshot.Report?.ThrottledFlags));
+    }
+}
+
+public sealed record AdminTerminalProblemDto(string Kind, string Since, string Text);
+
 public sealed record AdminSettingsDto(
     string BaseUrl,
     bool HasAdminPassword,
@@ -23,6 +58,7 @@ public sealed record AdminSettingsDto(
     IReadOnlyCollection<AdminEmployeeDto> Employees)
 {
     public IReadOnlyCollection<string> TerminalIds { get; init; } = [];
+    public string? TelegramAlertChatId { get; init; }
 
     public static AdminSettingsDto FromSettings(RuntimeSettings settings)
     {
@@ -36,7 +72,10 @@ public sealed record AdminSettingsDto(
             !string.IsNullOrWhiteSpace(settings.TelegramBotToken),
             settings.TelegramChatId,
             settings.Employees.Select(AdminEmployeeDto.FromSettings).ToArray())
-        { TerminalIds = settings.TerminalTokens.Keys.ToArray() };
+        {
+            TerminalIds = settings.TerminalTokens.Keys.ToArray(),
+            TelegramAlertChatId = settings.TelegramAlertChatId,
+        };
     }
 }
 
@@ -116,7 +155,8 @@ public sealed record AdminSettingsUpdateDto(
     int? PauseActivityId,
     string? TelegramBotToken,
     string? TelegramChatId,
-    IReadOnlyCollection<AdminEmployeeUpdateDto> Employees)
+    IReadOnlyCollection<AdminEmployeeUpdateDto> Employees,
+    string? TelegramAlertChatId = null)
 {
     public RuntimeSettings ToSettings(RuntimeSettings current)
     {
@@ -134,6 +174,9 @@ public sealed record AdminSettingsUpdateDto(
             // nicht löschen (Löschen geht manuell in settings.json).
             TelegramBotToken = string.IsNullOrWhiteSpace(TelegramBotToken) ? current.TelegramBotToken : TelegramBotToken.Trim(),
             TelegramChatId = string.IsNullOrWhiteSpace(TelegramChatId) ? current.TelegramChatId : TelegramChatId.Trim(),
+            TelegramAlertChatId = string.IsNullOrWhiteSpace(TelegramAlertChatId)
+                ? current.TelegramAlertChatId
+                : TelegramAlertChatId.Trim(),
             TerminalTokens = current.TerminalTokens,
             Employees = employees
         };

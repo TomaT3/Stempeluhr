@@ -266,6 +266,8 @@ public sealed class WorkTimeAlertServiceTests : IDisposable
             Messages.Add(text);
             return Task.FromResult(Accepts);
         }
+
+        public Task<bool> SendAlertAsync(string text) => throw new NotSupportedException();
     }
 
     private sealed class StubKimaiClient : IKimaiClient

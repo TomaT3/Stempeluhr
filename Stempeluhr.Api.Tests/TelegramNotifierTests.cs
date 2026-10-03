@@ -122,4 +122,35 @@ public sealed class TelegramNotifierTests
 
         Assert.Single(handler.Requests);
     }
+
+    [Theory]
+    [InlineData("-200", "-200")]
+    [InlineData(null, "-1001234567890")]
+    public async Task SendAlertAsync_UsesTheAlertChatOrFallsBackToTheStampChat(string? alertChatId, string expectedChat)
+    {
+        var handler = new RecordingHandler();
+        var settings = new RuntimeSettings
+        {
+            TelegramBotToken = "123456:ABC-secret",
+            TelegramChatId = "-1001234567890",
+            TelegramAlertChatId = alertChatId,
+        };
+
+        Assert.True(await CreateNotifier(settings, handler).SendAlertAsync("Terminal"));
+
+        var body = await Assert.Single(handler.Requests).Content!.ReadAsStringAsync();
+        Assert.Contains($"\"chat_id\":\"{expectedChat}\"", body);
+    }
+
+    [Fact]
+    public async Task SendAlertAsync_OnlyAlertChat_SendsWithoutStampChat()
+    {
+        var handler = new RecordingHandler();
+        var settings = new RuntimeSettings { TelegramBotToken = "123456:ABC-secret", TelegramAlertChatId = "-200" };
+        var notifier = CreateNotifier(settings, handler);
+
+        Assert.False(await notifier.SendMessageAsync("Stempel"));
+        Assert.True(await notifier.SendAlertAsync("Terminal"));
+        Assert.Single(handler.Requests);
+    }
 }
