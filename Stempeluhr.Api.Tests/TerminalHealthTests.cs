@@ -143,6 +143,45 @@ public sealed class TerminalHealthTests
     }
 
     [Fact]
+    public async Task ClearingReportBetweenChecks_RestartsTheHoldTime()
+    {
+        var (clock, store, telegram, watcher) = Create();
+        store.Record("pi-01", Healthy with { Pending = 1 });
+        await watcher.CheckAsync();
+
+        clock.Now = Start.AddMinutes(14).AddSeconds(40);
+        store.Record("pi-01", Healthy with { Pending = 0 });
+        clock.Now = Start.AddMinutes(14).AddSeconds(55);
+        store.Record("pi-01", Healthy with { Pending = 1 });
+        clock.Now = Start.AddMinutes(15);
+        await watcher.CheckAsync();
+        Assert.Empty(telegram.Alerts);
+
+        clock.Now = Start.AddMinutes(29).AddSeconds(55);
+        store.Record("pi-01", Healthy with { Pending = 1 });
+        await watcher.CheckAsync();
+        Assert.Contains("Offline-Stempel seit 12:14 nicht übertragen", Assert.Single(telegram.Alerts));
+    }
+
+    [Fact]
+    public async Task ReportBelowTheClearLimitBetweenChecks_ResetsTheHysteresis()
+    {
+        var (clock, store, telegram, watcher) = Create();
+        store.Record("pi-01", Healthy with { TemperatureC = 82 });
+        await watcher.CheckAsync();
+
+        clock.Now = Start.AddMinutes(1);
+        store.Record("pi-01", Healthy with { TemperatureC = 74 });
+        clock.Now = Start.AddMinutes(2);
+        store.Record("pi-01", Healthy with { TemperatureC = 77 });
+        clock.Now = Start.AddMinutes(6);
+        await watcher.CheckAsync();
+
+        Assert.Empty(telegram.Alerts);
+        Assert.Empty(store.Snapshot("pi-01", clock.Now).Alarms);
+    }
+
+    [Fact]
     public async Task RejectedMessage_IsSentAgainOnTheNextCheck()
     {
         var (clock, store, telegram, watcher) = Create();

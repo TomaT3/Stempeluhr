@@ -30,13 +30,19 @@ public sealed class TerminalHealthStore
     /// <summary>Stands in for the last report of terminals not heard from since the start.</summary>
     public DateTimeOffset MonitoringSince { get; }
 
+    /// <summary>
+    /// Evaluates every report right away: a clearing report between two checks
+    /// must reset hold times and hysteresis even if the next report triggers again.
+    /// </summary>
     public void Record(string terminalId, TerminalHealthReport report)
     {
         lock (_gate)
         {
             var entry = Get(terminalId);
+            var now = _clock.GetUtcNow();
             entry.Report = report;
-            entry.ReceivedAt = _clock.GetUtcNow();
+            entry.ReceivedAt = now;
+            entry.Present = Evaluate(entry, now);
         }
     }
 

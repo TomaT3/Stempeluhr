@@ -1,6 +1,7 @@
 import { DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, computed, DestroyRef, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterLink } from '@angular/router';
 
 import { AdminTerminalReport, AdminTerminalState, AdminTerminalStatus } from '../../../core/models/admin.models';
@@ -37,6 +38,7 @@ export class TerminalStatusPage {
   static readonly RefreshIntervalMs = 30_000;
 
   private readonly adminApi = inject(AdminApi);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly tick = signal(Date.now());
   private refreshId: number | undefined;
 
@@ -51,7 +53,7 @@ export class TerminalStatusPage {
 
   constructor() {
     const tickId = window.setInterval(() => this.tick.set(Date.now()), 1000);
-    inject(DestroyRef).onDestroy(() => {
+    this.destroyRef.onDestroy(() => {
       window.clearInterval(tickId);
       window.clearInterval(this.refreshId);
     });
@@ -66,7 +68,8 @@ export class TerminalStatusPage {
 
     this.isBusy.set(true);
     this.message.set('');
-    this.adminApi.getTerminalStatuses(password).subscribe({
+    // A late answer after leaving the page must not start a new refresh timer.
+    this.adminApi.getTerminalStatuses(password).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: statuses => {
         this.statuses.set(statuses);
         this.hasLoaded.set(true);

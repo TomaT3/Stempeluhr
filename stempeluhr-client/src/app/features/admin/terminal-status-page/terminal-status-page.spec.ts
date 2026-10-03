@@ -65,4 +65,21 @@ describe('TerminalStatusPage', () => {
     expect(page.querySelector('.message')?.textContent).toContain('Admin-Passwort stimmt nicht.');
     fixture.destroy();
   });
+
+  it('cancels a pending request and refreshes nothing after leaving the page', async () => {
+    vi.useFakeTimers();
+    try {
+      const { fixture, http } = await setup();
+      const request = http.expectOne('/api/admin/terminal-statuses');
+
+      fixture.destroy();
+      expect(request.cancelled).toBe(true);
+
+      vi.advanceTimersByTime(TerminalStatusPage.RefreshIntervalMs * 2);
+      http.expectNone('/api/admin/terminal-statuses');
+      http.verify();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
