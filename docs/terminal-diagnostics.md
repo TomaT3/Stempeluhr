@@ -29,6 +29,9 @@ Ein HTTP 400 löst keine Ersatzbuchung mit der aktuellen Uhrzeit mehr aus.
 Offline-Stops setzen das erfasste Ende direkt per PATCH, ohne vorher auf
 „jetzt“ zu stoppen. Wird das Zeitfeld abgelehnt, bleibt der laufende Eintrag
 unverändert; auch Pause und Tätigkeitswechsel stoppen dann keinen Eintrag.
+Der Mitarbeiter bleibt in Kimai eingestempelt, bis jemand den tatsächlichen
+Stop bzw. Pausen- oder Tätigkeitswechsel manuell korrigiert. Die Ablehnung
+verhindert damit eine Buchung zur falschen Uhrzeit und muss bearbeitet werden.
 Stop und anschließender Start eines anderen Eintrags bleiben zwei getrennte
 Kimai-Anfragen; Kimai bietet dafür keine gemeinsame Transaktion.
 Der frühere Ersatzversuch konnte einen laufenden Eintrag mit falschem Beginn
@@ -80,8 +83,11 @@ Bestehende `config.json`-Dateien bleiben gültig.
   gesamte Systemjournal; vorhandene strengere lokale Einstellungen beachten.
   Führt noch das alte Updater-Skript das erste Update aus, richtet der nächste
   Timer-Lauf das Journal auch bei gleicher Version und ohne Serververbindung
-  ein. Ein fehlgeschlagener journald-Neustart wird gemeldet und unterbricht
-  das Agent-Update nicht; die Einstellung greift dann beim nächsten Neustart.
+  ein. Fehler beim Anlegen oder Installieren der journald-Konfiguration
+  werden gemeldet und unterbrechen das Agent-Update nicht; der nächste
+  Update-Lauf versucht die Installation erneut. Ein fehlgeschlagener
+  journald-Neustart wird ebenfalls gemeldet; die installierte Einstellung
+  greift dann beim nächsten Neustart.
   Ein abruptes Abschalten kann die allerletzten noch nicht geschriebenen
   Journaleinträge verlieren.
 

@@ -1,18 +1,50 @@
 """Diagnostics tests without Pi hardware or a live upstream."""
 import json
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import urllib.error
 import urllib.request
 
 from terminal_diagnostics import DiagnosticsMonitor, sanitize_heartbeat, SystemSampler
 # Reuse the smartcard stub; importing does not start a reader or server.
 from test_local_scan_server import LocalScanServer
+from stempeluhr_nfc_agent import AgentConfig, forward_diagnostics
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_missing_token_keeps_events_until_successful_forward(self):
+        config = AgentConfig("https://kiosk.test", "test", 3, None)
+        event = {"kind": "error", "code": "promise", "seq": 1}
+        with tempfile.TemporaryDirectory() as folder:
+            monitor = DiagnosticsMonitor(Path(folder), "test", lambda snapshot: forward_diagnostics(config, snapshot))
+            monitor._sampler.sample = lambda: {}
+            try:
+                monitor.accept({"events": [event]})
+                with patch("stempeluhr_nfc_agent.upstream_request") as upstream:
+                    monitor.sample()
+                    monitor.sample()
+                    upstream.assert_not_called()
+                    config = replace(config, terminal_token="TEST-TOKEN")
+                    response = MagicMock()
+                    upstream.return_value.__enter__.return_value = response
+                    monitor.sample()
+                    args, kwargs = upstream.call_args
+                    self.assertEqual(args[0], config)
+                    self.assertEqual(args[1], "/api/kiosk/diagnostics")
+                    self.assertEqual(kwargs["timeout"], 5)
+                    self.assertEqual(json.loads(args[2])["ui"]["events"], [event])
+                    response.read.assert_called_once_with(4096)
+                    monitor.sample()
+                    self.assertEqual(json.loads(upstream.call_args.args[2])["ui"]["events"], [])
+            finally:
+                monitor.close()
+            history = (Path(folder) / "diagnostics.jsonl").read_text()
+            self.assertEqual(history.count('"kind": "forward-failed"'), 2)
+            self.assertNotIn("TEST-TOKEN", history)
+
     def test_javascript_timestamp_is_normalized_for_python39(self):
         import terminal_diagnostics
         from datetime import datetime as real_datetime

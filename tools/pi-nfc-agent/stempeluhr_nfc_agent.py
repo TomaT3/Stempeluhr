@@ -137,6 +137,18 @@ def upstream_request(config: AgentConfig, path: str, body: bytes | None = None, 
     return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
 
 
+def forward_diagnostics(config: AgentConfig, snapshot: dict):
+    if not config.terminal_token:
+        # Returning normally would acknowledge events that were never sent.
+        raise ValueError("Terminal token required for diagnostic forwarding")
+    try:
+        with upstream_request(config, "/api/kiosk/diagnostics", json.dumps(snapshot).encode("utf-8"), timeout=5) as response:
+            response.read(4096)
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise
+
+
 @dataclass
 class LastScan:
     card_id: str
@@ -475,16 +487,7 @@ def main() -> int:
     )
 
     config = AgentConfig.load(Path(args.config))
-    def forward_diagnostics(snapshot):
-        if not config.terminal_token:
-            return
-        try:
-            with upstream_request(config, "/api/kiosk/diagnostics", json.dumps(snapshot).encode("utf-8"), timeout=5) as response:
-                response.read(4096)
-        except urllib.error.HTTPError as error:
-            error.close()
-            raise
-    diagnostics = DiagnosticsMonitor(state_directory(), AGENT_VERSION, forward_diagnostics)
+    diagnostics = DiagnosticsMonitor(state_directory(), AGENT_VERSION, lambda snapshot: forward_diagnostics(config, snapshot))
     LOGGER.info(
         "Starting NFC agent %s for terminal '%s'", AGENT_VERSION, config.terminal_id
     )

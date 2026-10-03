@@ -54,8 +54,11 @@ PY
 install_journal() { # release-verzeichnis (auch alte Bundles ohne Datei)
   if [ -f "$1/journald-stempeluhr.conf" ] \
     && ! cmp -s "$1/journald-stempeluhr.conf" "$JOURNALD_DIR/stempeluhr.conf"; then
-    mkdir -p "$JOURNALD_DIR"
-    install -m 644 "$1/journald-stempeluhr.conf" "$JOURNALD_DIR/stempeluhr.conf"
+    if ! mkdir -p "$JOURNALD_DIR" \
+      || ! install -m 644 "$1/journald-stempeluhr.conf" "$JOURNALD_DIR/stempeluhr.conf"; then
+      log "WARNUNG: journald-Konfiguration nicht installiert; nächster Versuch beim nächsten Update-Lauf." >&2
+      return 0
+    fi
     if ! "$SYSTEMCTL" restart systemd-journald.service; then
       log "WARNUNG: journald-Neustart fehlgeschlagen; Konfiguration greift beim nächsten Neustart." >&2
     fi
