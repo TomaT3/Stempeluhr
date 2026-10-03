@@ -15,6 +15,8 @@ und in der API, nicht im Agenten.
 | `GET` | `/terminal/catalog` | authentifizierter Mitarbeiter-Katalog vom Server |
 | `POST` | `/terminal/sync` | PIN-freier Queue-Nachtrag mit Agent-Token |
 | `GET` | `/health` | `{"ok": true, "version": "x.y.z"}` |
+| `POST` | `/diagnostics/heartbeat` | technisches Browser-Lebenszeichen; ausschließlich konfigurierte Origin |
+| `GET` | `/diagnostics` | letzte Pi-/Browser-Diagnose für lokale Wartung |
 
 Bestätigt die Kiosk-App einen Scan nicht innerhalb von
 `selection_timeout_seconds`, wird er verworfen (Log + Fehler-Piep). CORS- und
@@ -68,6 +70,9 @@ Schlüssel älterer Versionen (`reader_token`, `queue_path`, `fallback_mode`)
 werden ignoriert.
 
 ## Bekannte Einschränkungen
+
+Messwerte und eine begrenzte neustartfeste Historie sind in
+[Terminal-Diagnose](../../docs/terminal-diagnostics.md) beschrieben.
 
 - Während der Watchdog auf das Ack wartet, erkennt der Reader-Loop keine neue
   Karte.

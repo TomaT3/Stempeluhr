@@ -387,6 +387,9 @@ separater Schritt (siehe [Update](#update)).
 
 ## Bekannte Grenzen und offene Punkte
 
+Terminal-Hänger und Kimai-Ablehnungen: Vorgehen, technische Messwerte und
+Logexport stehen in [Terminal-Diagnose](docs/terminal-diagnostics.md).
+
 - Für PIN-freie Terminal-Nachträge müssen bestehende Pis einmalig ein
   registriertes Terminal-Token erhalten. Alte Agent-Konfigurationen und alte
   Agent-Versionen bleiben bis zum ersten erfolgreichen Katalogabruf beim

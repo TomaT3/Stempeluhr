@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from terminal_diagnostics import DiagnosticsMonitor, state_directory
 
 from smartcard.Exceptions import CardConnectionException, NoCardException
 from smartcard.System import readers
@@ -141,6 +142,12 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             self._terminal_proxy("/api/kiosk/catalog")
             return
 
+        if self.path == "/diagnostics":
+            if self._reject_foreign_origin():
+                return
+            self._send_json(200, scan_server.diagnostics.snapshot() if scan_server.diagnostics else {})
+            return
+
         if self.path != "/scan/latest":
             self._send_json(404, {"error": "not found"})
             return
@@ -164,6 +171,9 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming convention
         scan_server: LocalScanServer = self.server.scan_server  # type: ignore[attr-defined]
+        if self.path == "/diagnostics/heartbeat":
+            self._heartbeat()
+            return
         if self.path == "/terminal/sync":
             self._terminal_proxy("/api/kiosk/clock/sync", post=True)
             return
@@ -253,6 +263,35 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         except (OSError, ValueError):
             self._send_json(502, {"error": "server unavailable"})
 
+    def _heartbeat(self) -> None:
+        server: LocalScanServer = self.server.scan_server
+        # Diagnostic writes are allowed only from the configured kiosk,
+        # including on legacy terminals without a terminal token.
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            self.connection.settimeout(5)
+            # Drain bounded bodies even for rejected origins to avoid a TCP
+            # reset obscuring the response. Large streams are closed early.
+            raw = self.rfile.read(min(max(length, 0), 32769))
+            if not 0 < length <= 32768:
+                raise ValueError()
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError()
+        except (OSError, ValueError):
+            self.close_connection = True
+            self._send_json(400, {"error": "invalid heartbeat"})
+            return
+        origin = self.headers.get("Origin")
+        if not origin or not server.allowed_origin or not server.allows_origin(origin):
+            self._send_json(403, {"error": "origin not allowed"}, allow_origin=False)
+            return
+        if server.diagnostics is None:
+            self._send_json(503, {"error": "diagnostics unavailable"})
+            return
+        accepted = server.diagnostics.accept(payload)
+        self._send_json(200 if accepted else 429, {"ok": accepted})
+
     def do_OPTIONS(self) -> None:  # noqa: N802 - stdlib naming convention
         # CORS preflight: the kiosk UI runs on a different origin (the
         # backend host) than this loopback server, so the browser blocks
@@ -316,9 +355,10 @@ class LocalScanServer:
 
     def __init__(
         self, port: int = DEFAULT_LOCAL_SCAN_PORT, allowed_origin: str | None = None,
-        config: AgentConfig | None = None
+        config: AgentConfig | None = None, diagnostics: DiagnosticsMonitor | None = None
     ) -> None:
         self.config = config
+        self.diagnostics = diagnostics
         self._scan: LastScan | None = None
         self._lock = threading.Lock()
         self.allowed_origin = origin_of(allowed_origin) if allowed_origin else None
@@ -430,6 +470,26 @@ def main() -> int:
     )
 
     config = AgentConfig.load(Path(args.config))
+    def forward_diagnostics(snapshot):
+        if not config.terminal_token:
+            return
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+        request = urllib.request.Request(config.api_base_url + "/api/kiosk/diagnostics",
+            data=json.dumps(snapshot).encode("utf-8"), headers={
+                "Authorization": "Bearer " + config.terminal_token,
+                "X-Terminal-Id": config.terminal_id,
+                "Content-Type": "application/json",
+                "User-Agent": f"Stempeluhr-NFC-Agent/{AGENT_VERSION}",
+            })
+        try:
+            with urllib.request.build_opener(NoRedirect()).open(request, timeout=5) as response:
+                response.read(4096)
+        except urllib.error.HTTPError as error:
+            error.close()
+            raise
+    diagnostics = DiagnosticsMonitor(state_directory(), AGENT_VERSION, forward_diagnostics)
     LOGGER.info(
         "Starting NFC agent %s for terminal '%s'", AGENT_VERSION, config.terminal_id
     )
@@ -438,14 +498,16 @@ def main() -> int:
         # The bind() in the constructor raises OSError when the port is
         # already taken - fail with a clear log line instead of a traceback.
         scan_server = LocalScanServer(
-            port=config.local_port, allowed_origin=config.allowed_origin, config=config
+            port=config.local_port, allowed_origin=config.allowed_origin, config=config, diagnostics=diagnostics
         )
         scan_thread = scan_server.start_background()
     except OSError as error:
         LOGGER.error(
             "Cannot start local scan server on port %d: %s", config.local_port, error
         )
+        diagnostics.close()
         return 1
+    diagnostics.start()
     LOGGER.info(
         "Local scan server listening on %s for %s", scan_server.url, scan_server.allowed_origin
     )
@@ -453,6 +515,7 @@ def main() -> int:
     try:
         run(config, scan_server)
     finally:
+        diagnostics.close()
         scan_server.shutdown()
         scan_thread.join(timeout=5)
         scan_server.server_close()

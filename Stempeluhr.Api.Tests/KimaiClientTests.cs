@@ -7,14 +7,8 @@ using Xunit;
 namespace Stempeluhr.Api.Tests;
 
 /// <summary>
-/// Regression tests for the transient-retry treatment of the timestamp
-/// backdate PATCHes (review round on the offline PR): the begin-backdate in
-/// <see cref="KimaiClient.StartAtAsync"/>'s old-Kimai fallback previously had
-/// NO retry - one transient 5xx left the fresh timesheet running with
-/// begin=now, which a later offline replay could never correct ("Lief
-/// bereits"). Now both backdates share one retry loop, and a definitively
-/// failed begin-backdate stops the misdated sheet so the replay can recreate
-/// it with the intended begin.
+/// Offline starts must be created with the real timestamp or fail without
+/// a replacement booking at now. End-backdate PATCHes retain their retry.
 /// </summary>
 public sealed class KimaiClientTests
 {
@@ -26,53 +20,57 @@ public sealed class KimaiClientTests
     private static readonly KimaiTimesheetTarget Target = new(1, 1, "Stempeluhr", true, null, null);
 
     [Fact]
-    public async Task BeginBackdate_FallbackRetriesTransientPatchFailures()
+    public async Task StartAt_CreatesWithCapturedTimestamp()
     {
-        var handler = new ScriptedHandler(
-            Resp(HttpStatusCode.BadRequest),                    // POST create WITH begin -> old Kimai rejects
-            Resp(HttpStatusCode.OK, """{"id":7}"""),            // POST create WITHOUT begin
-            Resp(HttpStatusCode.InternalServerError),           // PATCH begin -> transient
-            Resp(HttpStatusCode.InternalServerError),           // PATCH begin -> transient
-            Resp(HttpStatusCode.OK, "{}"));                     // PATCH begin -> success
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.OK, """{"id":7}"""));
         var client = CreateClient(handler);
 
         await client.StartAtAsync(Settings, Employee, Target, T08);
 
-        Assert.Equal(
-        [
-            "POST /api/timesheets?full=true",
-            "POST /api/timesheets?full=true",
-            "PATCH /api/timesheets/7",
-            "PATCH /api/timesheets/7",
-            "PATCH /api/timesheets/7",
-        ], handler.Requests);
+        Assert.Equal("POST /api/timesheets?full=true", Assert.Single(handler.Requests));
+        using var body = System.Text.Json.JsonDocument.Parse(Assert.Single(handler.Bodies)!);
+        Assert.Equal(T08, DateTimeOffset.Parse(body.RootElement.GetProperty("begin").GetString()!));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    public async Task StartAt_RejectionNeverCreatesAtNow(HttpStatusCode status)
+    {
+        var handler = new ScriptedHandler(Resp(status, "{}"));
+        var client = CreateClient(handler);
+
+        var thrown = await Assert.ThrowsAnyAsync<KimaiApiException>(
+            () => client.StartAtAsync(Settings, Employee, Target, T08));
+        Assert.Equal(status, thrown.StatusCode);
+        Assert.Equal("POST /api/timesheets?full=true", Assert.Single(handler.Requests));
     }
 
     [Fact]
-    public async Task BeginBackdate_DefinitiveFailure_StopsMisdatedTimesheet()
+    public async Task StartAt_TimeClockFormExplainsForbiddenBegin()
     {
-        var handler = new ScriptedHandler(
-            Resp(HttpStatusCode.BadRequest),
-            Resp(HttpStatusCode.OK, """{"id":7}"""),
-            Resp(HttpStatusCode.InternalServerError),
-            Resp(HttpStatusCode.ServiceUnavailable),
-            Resp(HttpStatusCode.BadGateway),                    // all 3 retry attempts fail
-            Resp(HttpStatusCode.OK, "{}"));                     // compensating stop succeeds
-        var client = CreateClient(handler);
+        const string details = """{"code":400,"errors":{"errors":["This form should not contain extra fields."],"children":{"project":{},"activity":{},"description":{},"user":{},"tags":{},"billable":{}}}}""";
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.BadRequest, details));
+        var error = await Assert.ThrowsAsync<KimaiApiException>(() => CreateClient(handler).StartAtAsync(Settings, Employee, Target, T08));
+        Assert.Equal(new[] { "begin" }, error.RejectedFields);
+        Assert.Contains("Erfassungsmodus", error.Message);
+        Assert.DoesNotContain("edit_billable", error.Message);
+        Assert.Equal(details, error.Details);
+        Assert.Single(handler.Requests);
+    }
 
-        // The compensating stop succeeds, but the backdate failure is now
-        // re-thrown so the sync loop buffers the event as transient and a
-        // later replay can recreate the sheet with the intended begin.
-        // Pin the concrete transient exception type: a permanent error here
-        // would be classified as "rejected" and lose the stamp instead.
-        var thrown = await Assert.ThrowsAnyAsync<KimaiApiException>(
-            () => client.StartAtAsync(Settings, Employee, Target, T08));
-        Assert.Equal(HttpStatusCode.BadGateway, thrown.StatusCode);
-
-        // The last request must be the compensating stop of the misdated
-        // sheet so a later replay can recreate it with the intended begin.
-        Assert.Equal("PATCH /api/timesheets/7/stop", handler.Requests[^1]);
-        Assert.Equal(6, handler.Requests.Count);
+    [Theory]
+    [InlineData("not JSON")]
+    [InlineData("{}")]
+    [InlineData("{\"errors\":null}")]
+    public async Task StartAt_UnrecognizedErrorPreservesKimaiDetails(string details)
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.BadRequest, details));
+        var error = await Assert.ThrowsAsync<KimaiApiException>(() => CreateClient(handler).StartAtAsync(Settings, Employee, Target, T08));
+        Assert.Equal(details, error.Details);
+        Assert.Empty(error.RejectedFields);
+        Assert.Single(handler.Requests);
     }
 
     [Fact]
@@ -211,14 +209,16 @@ public sealed class KimaiClientTests
         private int _next;
 
         public List<string> Requests { get; } = [];
+        public List<string?> Bodies { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add($"{request.Method} {request.RequestUri!.PathAndQuery}");
+            Bodies.Add(request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken));
             var response = _next < responses.Length
                 ? responses[_next++]
                 : Resp(HttpStatusCode.InternalServerError);
-            return Task.FromResult(response);
+            return response;
         }
     }
 }

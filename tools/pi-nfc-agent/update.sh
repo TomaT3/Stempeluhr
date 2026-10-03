@@ -22,6 +22,7 @@ set -euo pipefail
 CONFIG="${STEMPELUHR_AGENT_CONFIG:-/etc/stempeluhr-nfc-agent/config.json}"
 BASE_DIR="${STEMPELUHR_AGENT_DIR:-/opt/stempeluhr-nfc-agent}"
 SYSTEMD_DIR="${STEMPELUHR_SYSTEMD_DIR:-/etc/systemd/system}"
+JOURNALD_DIR="${STEMPELUHR_JOURNALD_DIR:-/etc/systemd/journald.conf.d}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 HEALTH_TIMEOUT_SECONDS="${STEMPELUHR_HEALTH_TIMEOUT:-30}"
 KEEP_RELEASES=3
@@ -110,6 +111,14 @@ install_units() { # release-verzeichnis
   done
   if [ "$changed" -eq 1 ]; then
     "$SYSTEMCTL" daemon-reload
+  fi
+  # Previous boots are needed after a hard power cycle. Old bundles do not
+  # contain this file; rollback to them remains supported.
+  if [ -f "$1/journald-stempeluhr.conf" ] \
+    && ! cmp -s "$1/journald-stempeluhr.conf" "$JOURNALD_DIR/stempeluhr.conf"; then
+    mkdir -p "$JOURNALD_DIR"
+    install -m 644 "$1/journald-stempeluhr.conf" "$JOURNALD_DIR/stempeluhr.conf"
+    "$SYSTEMCTL" restart systemd-journald.service
   fi
 }
 

@@ -50,6 +50,22 @@ describe('LocalNfcScanService', () => {
     expect(emitted).toBeNull();
   });
 
+  it('releases a hanging local scan or ack after three seconds', () => {
+    vi.useFakeTimers();
+    try {
+      let result: unknown = undefined;
+      service.poll().subscribe(value => result = value);
+      const scanRequest = httpMock.expectOne('http://127.0.0.1:8737/scan/latest');
+      vi.advanceTimersByTime(3000);
+      expect(scanRequest.cancelled).toBe(true);
+      expect(result).toBeNull();
+      service.ack().subscribe(value => result = value);
+      const ackRequest = httpMock.expectOne('http://127.0.0.1:8737/scan/ack');
+      vi.advanceTimersByTime(3000);
+      expect(ackRequest.cancelled).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('emits each new scan once and suppresses repeats of the same scan', () => {
     const emissions: Array<LocalNfcScan | null> = [];
 

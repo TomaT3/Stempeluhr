@@ -57,6 +57,7 @@ cat > "$WORK/systemctl" <<EOF
 #!/usr/bin/env bash
 case "\$1" in
   restart)
+    [ "\$2" = "systemd-journald.service" ] && exit 0
     [ -f "$WORK/agent.pid" ] && kill "\$(cat "$WORK/agent.pid")" 2>/dev/null || true
     sleep 0.3
     PYTHONPATH="$WORK/stub" nohup python3 "$WORK/opt/current/stempeluhr_nfc_agent.py" \
@@ -72,6 +73,7 @@ run_update() {
   STEMPELUHR_AGENT_CONFIG="$WORK/config.json" \
   STEMPELUHR_AGENT_DIR="$WORK/opt" \
   STEMPELUHR_SYSTEMD_DIR="$WORK/systemd" \
+  STEMPELUHR_JOURNALD_DIR="$WORK/journald" \
   STEMPELUHR_HEALTH_TIMEOUT=8 \
   SYSTEMCTL="$WORK/systemctl" \
     bash "$AGENT_SRC/update.sh" "$@" > "$WORK/update.log" 2>&1
@@ -107,6 +109,9 @@ if run_update --force; then ok "update.sh --force endet erfolgreich"; else bad "
 [ "$(current_version)" = "1.0.0" ] && ok "current -> 1.0.0" || bad "current ist $(current_version)"
 [ "$(health_version)" = "1.0.0" ] && ok "/health meldet 1.0.0" || bad "/health meldet $(health_version)"
 [ -f "$WORK/systemd/stempeluhr-nfc-agent-update.timer" ] && ok "systemd-Units installiert" || bad "Units fehlen"
+[ -f "$WORK/opt/current/terminal_diagnostics.py" ] && ok "Diagnosemodul im Bundle" || bad "Diagnosemodul fehlt"
+grep -q '^Storage=persistent' "$WORK/journald/stempeluhr.conf" \
+  && ok "Journal überlebt Neustarts" || bad "Persistentes Journal fehlt"
 grep -q "current/stempeluhr_nfc_agent.py" "$WORK/systemd/stempeluhr-nfc-agent.service" \
   && ok "Service startet aus current/" || bad "Service-Unit zeigt nicht auf current/"
 

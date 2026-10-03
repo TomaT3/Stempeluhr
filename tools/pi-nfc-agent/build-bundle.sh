@@ -19,7 +19,7 @@ esac
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-for f in stempeluhr_nfc_agent.py update.sh install.sh config.example.json \
+for f in stempeluhr_nfc_agent.py terminal_diagnostics.py journald-stempeluhr.conf update.sh install.sh config.example.json \
   stempeluhr-nfc-agent.service stempeluhr-nfc-agent-update.service \
   stempeluhr-nfc-agent-update.timer; do
   cp "$SRC/$f" "$STAGE/$f"

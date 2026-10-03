@@ -26,6 +26,13 @@ def request(path, body=None, token=None, terminal="test-terminal", authorization
 
 
 token = "integration-terminal-token"
+diagnostics = {"agentVersion": "0.17.1", "uiStatus": "alive", "system": {"availableMemoryKb": 800000}}
+assert request("/api/kiosk/diagnostics", diagnostics)[0] == 401
+assert request("/api/kiosk/diagnostics", diagnostics, token="wrong")[0] == 401
+assert request("/api/kiosk/diagnostics", {"padding": "x" * 33000}, token=token)[0] == 413
+assert request("/api/kiosk/diagnostics", diagnostics, token=token)[0] == 200
+assert request("/api/kiosk/diagnostics", diagnostics, token=token)[0] == 200
+assert request("/api/kiosk/diagnostics", diagnostics, token=token)[0] == 429
 assert request("/api/kiosk/catalog")[0] == 401
 assert request("/api/kiosk/catalog", token="wrong")[0] == 401
 status, catalog = request("/api/kiosk/catalog", token=token)
@@ -46,6 +53,7 @@ settings = json.loads(path.read_text())
 settings["terminalTokens"]["test-terminal"] = "rotated-terminal-token"
 path.write_text(json.dumps(settings))
 assert request("/api/kiosk/catalog", token=token)[0] == 401
+assert request("/api/kiosk/diagnostics", diagnostics, token=token)[0] == 401
 assert request("/api/kiosk/clock/sync", {"events": [event]}, token=token)[0] == 401
 assert request("/api/kiosk/catalog", token="rotated-terminal-token")[0] == 200
 settings["terminalTokens"].clear()
