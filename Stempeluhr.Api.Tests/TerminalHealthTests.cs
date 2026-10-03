@@ -215,6 +215,8 @@ public sealed class TerminalHealthTests
     {
         var store = new TerminalHealthStore(new ManualClock(Start));
         Assert.Equal("never", AdminTerminalStatusDto.From("pi-01", store.Snapshot("pi-01", Start), Start, TimeZoneInfo.Utc).State);
+        var silent = Start.AddMinutes(6);
+        Assert.Equal("unreachable", AdminTerminalStatusDto.From("pi-01", store.Snapshot("pi-01", silent), silent, TimeZoneInfo.Utc).State);
 
         store.Record("pi-01", Healthy);
         Assert.Equal("online", AdminTerminalStatusDto.From("pi-01", store.Snapshot("pi-01", Start), Start, TimeZoneInfo.Utc).State);

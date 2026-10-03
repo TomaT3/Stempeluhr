@@ -26,8 +26,9 @@ public sealed record AdminTerminalStatusDto(
     public static AdminTerminalStatusDto From(
         string terminalId, TerminalHealthSnapshot snapshot, DateTimeOffset now, TimeZoneInfo timeZone)
     {
-        var state = snapshot.ReceivedAt is null ? "never"
-            : snapshot.Alarms.ContainsKey(TerminalCondition.Unreachable) ? "unreachable"
+        // "never" only until the start grace period ends; then it is an outage.
+        var state = snapshot.Alarms.ContainsKey(TerminalCondition.Unreachable) ? "unreachable"
+            : snapshot.ReceivedAt is null ? "never"
             : snapshot.Alarms.Count > 0 ? "problem"
             : "online";
         return new AdminTerminalStatusDto(
