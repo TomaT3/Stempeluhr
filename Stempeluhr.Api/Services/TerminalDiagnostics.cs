@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Stempeluhr.Api.Services;
@@ -26,13 +27,23 @@ public static class TerminalDiagnostics
             pcscdRssKb = Number(system, "pcscdRssKb"), temperatureC = Number(system, "temperatureC"),
             throttledFlags = Number(system, "throttledFlags"), diskFreeMb = Number(system, "diskFreeMb"),
             uptimeSeconds = Number(system, "uptimeSeconds"), load1 = Number(system, "load1"),
-            events = Array(ui, "events").Take(20).Select(e => new
+            requests = Array(ui, "requests").Take(10).Select(r => new
+            {
+                operation = Choice(r, "operation", "clock", "sync", "login", "identify", "hours", "health"),
+                ageMs = Number(r, "ageMs"),
+            }).ToArray(),
+            events = Array(ui, "events").Take(80).Select(e => new
             {
                 kind = Choice(e, "kind", "http", "error", "state"),
                 operation = Choice(e, "operation", "clock", "sync", "login", "identify", "hours", "health"),
                 code = Choice(e, "code", "javascript", "promise", "storage"),
                 eventId = SafeIdentifier(e, "eventId"),
                 status = Number(e, "status", -1, 599), durationMs = Number(e, "durationMs"),
+                at = Timestamp(e, "at"), seq = Number(e, "seq", 0, 9_007_199_254_740_991),
+                screen = Choice(e, "screen", "idle", "session"),
+                blocked = Choice(e, "blocked", "none", "request", "backlog", "status"),
+                busy = Boolean(e, "busy"), offline = Boolean(e, "offline"),
+                pending = Number(e, "pending"), rejected = Number(e, "rejected"),
             }).ToArray(),
         };
     }
@@ -51,6 +62,11 @@ public static class TerminalDiagnostics
     private static string? Choice(JsonElement value, string key, params string[] choices) =>
         Object(value, key) is { ValueKind: JsonValueKind.String } child && choices.Contains(child.GetString()) ? child.GetString() : null;
     private static string? Version(JsonElement value, string key) => SafeIdentifier(value, key, @"\A[0-9A-Za-z.+-]{1,64}\z");
+    private static string? Timestamp(JsonElement value, string key) =>
+        Object(value, key) is { ValueKind: JsonValueKind.String } child && child.GetString() is { Length: <= 40 } text
+        && Regex.IsMatch(text, @"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|[+-]\d{2}:\d{2})\z")
+        && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
+            ? parsed.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) : null;
     private static string? SafeIdentifier(JsonElement value, string key, string pattern = @"\A[0-9A-Za-z-]{1,64}\z") =>
         Object(value, key) is { ValueKind: JsonValueKind.String } child && child.GetString() is { Length: <= 64 } text
         && Regex.IsMatch(text, pattern) ? text : null;

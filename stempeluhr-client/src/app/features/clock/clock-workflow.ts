@@ -92,8 +92,10 @@ export abstract class ClockWorkflow implements OnDestroy {
   readonly isOffline = signal(false);
   private readonly replayStatusPending = signal(false);
   private replayStatusRequest: Subscription | null = null;
-  readonly actionsBlocked = computed(() => this.isBusy() || this.replayStatusPending()
-    || (!this.isOffline() && this.hasPendingForEmployee(this.selectedEmployee()?.id)));
+  readonly actionBlockReason = computed<'none' | 'request' | 'status' | 'backlog'>(() =>
+    this.isBusy() ? 'request' : this.replayStatusPending() ? 'status'
+      : !this.isOffline() && this.hasPendingForEmployee(this.selectedEmployee()?.id) ? 'backlog' : 'none');
+  readonly actionsBlocked = computed(() => this.actionBlockReason() !== 'none');
 
   private hasPendingForEmployee(employeeId: string | undefined): boolean {
     return !!employeeId && this.offlineQueue.pendingCount().some(entry =>
@@ -306,8 +308,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (this.isReleaseBuild()) {
       this.stopDiagnostics = this.diagnostics.start(() => ({
         screen: this.selectedEmployee() ? 'session' : 'idle', busy: this.isBusy(),
-        blocked: this.isBusy() ? 'request' : this.hasPendingForEmployee(this.selectedEmployee()?.id) ? 'backlog'
-          : this.replayStatusPending() ? 'status' : 'none',
+        blocked: this.actionBlockReason(),
         offline: this.isOffline(), pending: this.pendingStamps(), rejected: this.rejectedStamps().length,
       }));
     }

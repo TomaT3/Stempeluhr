@@ -30,6 +30,7 @@ export class KioskDiagnostics {
   private lastBeatAt = 0;
   private lastState = '';
   private sequence = 0;
+  private lastHealthStatus: number | null = null;
   private events: Array<Record<string, unknown>> = [];
   private active = new Map<number, { operation: string; started: number }>();
   private readonly onInput = () => {
@@ -62,7 +63,9 @@ export class KioskDiagnostics {
     this.active.set(id, { operation, started });
     return (status) => {
       this.active.delete(id);
-      if (operation !== 'health' || status !== 200) {
+      const recordHealth = operation === 'health' && status !== 200 && status !== this.lastHealthStatus;
+      if (operation === 'health') this.lastHealthStatus = status;
+      if (operation !== 'health' || recordHealth) {
         this.record({
           kind: 'http',
           operation,
@@ -84,7 +87,8 @@ export class KioskDiagnostics {
       this.lastState = serialized;
     }
     if (this.request && !this.request.closed) return;
-    const sentSequence = this.sequence;
+    const sentEvents = this.events.slice(0, 20);
+    const sentSequences = new Set(sentEvents.map((e) => e['seq']));
     this.request = this.injector
       .get(HttpClient)
       .post(`http://127.0.0.1:${this.port}/diagnostics/heartbeat`, {
@@ -96,12 +100,12 @@ export class KioskDiagnostics {
         requests: [...this.active.values()]
           .slice(-10)
           .map((r) => ({ operation: r.operation, ageMs: Math.round(now - r.started) })),
-        events: this.events.slice(-20),
+        events: sentEvents,
       })
       .pipe(timeout(3000))
       .subscribe({
         next: () => {
-          this.events = this.events.filter((e) => Number(e['seq']) > sentSequence);
+          this.events = this.events.filter((e) => !sentSequences.has(e['seq']));
         },
         error: () => undefined, // Old/offline agents must never affect stamping.
       });
@@ -120,6 +124,7 @@ export class KioskDiagnostics {
     this.events = [];
     this.lastState = '';
     this.lastInputAt = null;
+    this.lastHealthStatus = null;
   }
 }
 

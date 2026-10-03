@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 import logging
 from logging.handlers import RotatingFileHandler
 import math
@@ -69,9 +70,13 @@ def sanitize_heartbeat(raw: dict) -> dict:
             else:
                 continue
             try:
-                event["at"] = datetime.fromisoformat(str(entry.get("at"))).astimezone(timezone.utc).isoformat()
+                parsed = datetime.fromisoformat(str(entry.get("at")).replace("Z", "+00:00"))
+                if parsed.tzinfo is not None:
+                    event["at"] = parsed.astimezone(timezone.utc).isoformat()
             except (ValueError, OverflowError):
                 pass
+            if type(entry.get("seq")) is int and 0 <= entry["seq"] <= 9_007_199_254_740_991:
+                event["seq"] = entry["seq"]
             result["events"].append(event)
     return result
 
@@ -143,6 +148,9 @@ class DiagnosticsMonitor:
         self._ui = None
         self._snapshot = {}
         self._last_accepted = None
+        self._pending_events = []
+        self._seen_events = deque(maxlen=160)
+        self._event_sequence = 0
         self._stop = threading.Event()
         self._sampler = SystemSampler()
         self._logger = logging.Logger("terminal-diagnostics")
@@ -162,6 +170,15 @@ class DiagnosticsMonitor:
                 return False
             self._last_accepted = now
             self._ui = sanitize_heartbeat(raw)
+            for event in self._ui["events"]:
+                # seq restarts when Chromium reloads, so include the timestamp.
+                # Legacy heartbeats without seq are deduplicated by content.
+                key = json.dumps(event, sort_keys=True)
+                if key not in self._seen_events:
+                    self._seen_events.append(key)
+                    self._event_sequence += 1
+                    self._pending_events.append((self._event_sequence, event))
+            self._pending_events = self._pending_events[-80:]
             self._last_seen = now
             ui = self._ui.copy()
         self._write({"kind": "heartbeat", "ui": ui})
@@ -170,7 +187,8 @@ class DiagnosticsMonitor:
     def sample(self) -> dict:
         with self._lock:
             age = None if self._last_seen is None else round(time.monotonic() - self._last_seen, 1)
-            ui = self._ui
+            sent_events = self._pending_events.copy()
+            ui = None if self._ui is None else {**self._ui, "events": [event for _, event in sent_events]}
         snapshot = {"agentVersion": self.version, "heartbeatAgeSeconds": age,
                     "uiStatus": "not-seen" if age is None else "missing" if age > 60 else "alive",
                     "ui": ui, "system": self._sampler.sample()}
@@ -180,6 +198,9 @@ class DiagnosticsMonitor:
         if self.forward:
             try:
                 self.forward(snapshot)
+                sent_ids = {seq for seq, _ in sent_events}
+                with self._lock:
+                    self._pending_events = [(seq, event) for seq, event in self._pending_events if seq not in sent_ids]
             except Exception:
                 # No credentials, upstream body or URLs in diagnostic errors.
                 self._write({"kind": "forward-failed"})

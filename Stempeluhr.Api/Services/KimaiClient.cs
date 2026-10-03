@@ -100,22 +100,16 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         return SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Post, "api/timesheets?full=true", body, cancellationToken);
     }
 
-    public async Task StopAtAsync(
+    public Task StopAtAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
         int timesheetId,
         DateTimeOffset stoppedAt,
         CancellationToken cancellationToken = default)
     {
-        // First stop the timesheet normally so Kimai computes a duration.
-        await StopAsync(settings, employee, timesheetId, cancellationToken);
-
-        // Then backdate the end timestamp to the real scan time. If the stop
-        // went through but this PATCH is lost to a transient error, the
-        // timesheet keeps end=now and a later replay sees IsRunning == false.
-        // Callers that must repair that call the two halves themselves
-        // (OfflineClockService.StopTransitionAsync).
-        await BackdateEndAsync(settings, employee, timesheetId, stoppedAt, cancellationToken);
+        // Updating end also stops a running sheet. Validate and save the
+        // captured time together; never stop at now before a rejected PATCH.
+        return BackdateEndAsync(settings, employee, timesheetId, stoppedAt, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -362,7 +356,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         if (!response.IsSuccessStatusCode)
         {
             var details = await response.Content.ReadAsStringAsync(cancellationToken);
-            var rejectedFields = FindRejectedFields(details, body);
+            var rejectedFields = response.StatusCode == HttpStatusCode.BadRequest ? FindRejectedFields(details, body) : [];
             logger.LogWarning("Kimai {Operation}: HTTP {Status} after {ElapsedMs} ms; unsupported fields: {Fields}",
                 operation, (int)response.StatusCode, Stopwatch.GetElapsedTime(started).TotalMilliseconds,
                 string.Join(",", rejectedFields));
@@ -382,8 +376,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             using var document = JsonDocument.Parse(details);
             var errors = document.RootElement.GetProperty("errors");
             if (!errors.TryGetProperty("errors", out var messages) || messages.ValueKind != JsonValueKind.Array
-                || !messages.EnumerateArray().Any(m => m.ValueKind == JsonValueKind.String
-                    && m.GetString()!.Contains("extra fields", StringComparison.OrdinalIgnoreCase))
+                || !messages.EnumerateArray().Any(m => m.ValueKind == JsonValueKind.String)
                 || !errors.TryGetProperty("children", out var children) || children.ValueKind != JsonValueKind.Object)
                 return [];
             return JsonSerializer.SerializeToElement(body, JsonOptions).EnumerateObject()

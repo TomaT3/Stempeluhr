@@ -51,6 +51,21 @@ print(default if value in (None, "") else value)
 PY
 }
 
+install_journal() { # release-verzeichnis (auch alte Bundles ohne Datei)
+  if [ -f "$1/journald-stempeluhr.conf" ] \
+    && ! cmp -s "$1/journald-stempeluhr.conf" "$JOURNALD_DIR/stempeluhr.conf"; then
+    mkdir -p "$JOURNALD_DIR"
+    install -m 644 "$1/journald-stempeluhr.conf" "$JOURNALD_DIR/stempeluhr.conf"
+    if ! "$SYSTEMCTL" restart systemd-journald.service; then
+      log "WARNUNG: journald-Neustart fehlgeschlagen; Konfiguration greift beim nächsten Neustart." >&2
+    fi
+  fi
+}
+
+# The first upgrade may still run an old updater. On its next timer run,
+# configure the installed bundle before same-version/offline early exits.
+install_journal "$BASE_DIR/current"
+
 [ -f "$CONFIG" ] || fail "$CONFIG fehlt"
 BASE_URL="$(json_value "$CONFIG" api_base_url "")"
 BASE_URL="${BASE_URL%/}"
@@ -112,14 +127,7 @@ install_units() { # release-verzeichnis
   if [ "$changed" -eq 1 ]; then
     "$SYSTEMCTL" daemon-reload
   fi
-  # Previous boots are needed after a hard power cycle. Old bundles do not
-  # contain this file; rollback to them remains supported.
-  if [ -f "$1/journald-stempeluhr.conf" ] \
-    && ! cmp -s "$1/journald-stempeluhr.conf" "$JOURNALD_DIR/stempeluhr.conf"; then
-    mkdir -p "$JOURNALD_DIR"
-    install -m 644 "$1/journald-stempeluhr.conf" "$JOURNALD_DIR/stempeluhr.conf"
-    "$SYSTEMCTL" restart systemd-journald.service
-  fi
+  install_journal "$1"
 }
 
 switch_current() { # release-verzeichnis

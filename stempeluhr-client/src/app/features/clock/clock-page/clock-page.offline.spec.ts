@@ -142,6 +142,21 @@ describe('ClockPage offline behaviour', () => {
     return TestBed.createComponent(ClockPage);
   }
 
+  it('reports no action block for an offline employee with a backlog', () => {
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+    pinLoginResult.next(session);
+    pendingQueue.set([{ event: { employeeId: 'max' } }]);
+    expect(component.actionBlockReason()).toBe('backlog');
+    component.isOffline.set(true);
+    expect(component.actionBlockReason()).toBe('none');
+    expect(component.actionsBlocked()).toBe(false);
+    component.isBusy.set(true);
+    expect(component.actionBlockReason()).toBe('request');
+    expect(component.actionsBlocked()).toBe(true);
+  });
+
   it('keeps the terminal unlocked after an offline stamp and resets only once events are processed', () => {
     const fixture = createComponent();
     const component = fixture.componentInstance;

@@ -34,6 +34,29 @@ public sealed class OfflineClockServiceTests
     private static readonly DateTimeOffset T12 = Parse("2026-08-24T12:00:00Z");
     private static readonly DateTimeOffset T1230 = Parse("2026-08-24T12:30:00Z");
 
+    [Theory]
+    [InlineData("stop", false)]
+    [InlineData("pauseStart", false)]
+    [InlineData("pauseEnd", true)]
+    [InlineData("switch", false)]
+    public async Task RejectedEndPatch_LeavesTheOriginalSheetRunning(string action, bool paused)
+    {
+        var (service, kimai) = CreateService();
+        await service.SyncKioskAsync([Kiosk("start", "start", T08)]);
+        if (paused) await service.SyncKioskAsync([Kiosk("pause", "pauseStart", T10)]);
+        var sheetId = kimai.ActiveTimesheetId;
+        var operations = kimai.Operations.Count;
+        kimai.StopAtFailure = new KimaiApiException(System.Net.HttpStatusCode.BadRequest, "end forbidden");
+        var entry = action == "switch" ? Switch("rejected-end", "kx", T12) : Kiosk("rejected-end", action, T12);
+        var result = await service.SyncKioskAsync([entry]);
+        Assert.Equal("rejected", Assert.Single(result.Results).Status);
+        Assert.True(kimai.IsRunning);
+        Assert.Equal(paused, kimai.ActiveIsPause);
+        Assert.Equal(sheetId, kimai.ActiveTimesheetId);
+        Assert.Null(kimai.EndOf(sheetId!.Value));
+        Assert.Equal(operations, kimai.Operations.Count);
+    }
+
     [Fact]
     public async Task RejectedReplay_SendsOneSummaryPerBatch_AndThrottlesLaterBatches()
     {
@@ -1396,12 +1419,9 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
-    public async Task PauseEnd_BackdateFailedAfterStop_RepairsTheEndAndResumes()
+    public async Task PauseEnd_AtomicStopFailed_RetriesTheEndAndResumes()
     {
-        // Issue #10: the pause stop went through, its end backdate failed -
-        // the pause keeps the wall clock of that attempt (18:00) as its end.
-        // The old time window (end vs. event) no longer matched, the retry
-        // became a no-op and the employee stayed clocked out.
+        // A failed end PATCH leaves the pause running; retry the atomic stop.
         var (service, kimai) = CreateService();
         await service.SyncKioskAsync([Kiosk("y1", "start", T08), Kiosk("y2", "pauseStart", T12)]);
         var pauseId = kimai.ActiveTimesheetId!.Value;
@@ -1418,7 +1438,7 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
-    public async Task Switch_BackdateFailedAfterStop_RepairsTheEndAndResumesOnTarget()
+    public async Task Switch_AtomicStopFailed_RetriesTheEndAndResumesOnTarget()
     {
         var (service, kimai) = CreateService();
         await service.SyncKioskAsync([Kiosk("s1", "start", T08)]);
@@ -2345,10 +2365,18 @@ public sealed class OfflineClockServiceTests
             DateTimeOffset stoppedAt,
             CancellationToken cancellationToken = default)
         {
+            if (StopAtFailure is { } failure) throw failure;
+            if (FailNextBackdateCalls > 0)
+            {
+                FailNextBackdateCalls--;
+                throw new HttpRequestException("simulated transient end PATCH failure");
+            }
             Operations.Add(("stop", stoppedAt));
             StopActive(stoppedAt);
             return Task.CompletedTask;
         }
+
+        public Exception? StopAtFailure { get; set; }
 
         /// <summary>
         /// Plain stop: the sheet ends at <see cref="StopWallClock"/>. Logged in

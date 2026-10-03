@@ -47,10 +47,12 @@ public sealed class KimaiClientTests
         Assert.Equal("POST /api/timesheets?full=true", Assert.Single(handler.Requests));
     }
 
-    [Fact]
-    public async Task StartAt_TimeClockFormExplainsForbiddenBegin()
+    [Theory]
+    [InlineData("This form should not contain extra fields.")]
+    [InlineData("Dieses Formular sollte keine zusätzlichen Felder enthalten.")]
+    public async Task StartAt_TimeClockFormExplainsForbiddenBegin(string message)
     {
-        const string details = """{"code":400,"errors":{"errors":["This form should not contain extra fields."],"children":{"project":{},"activity":{},"description":{},"user":{},"tags":{},"billable":{}}}}""";
+        var details = """{"code":400,"errors":{"errors":["MESSAGE"],"children":{"project":{},"activity":{},"description":{},"user":{},"tags":{},"billable":{}}}}""".Replace("MESSAGE", message);
         var handler = new ScriptedHandler(Resp(HttpStatusCode.BadRequest, details));
         var error = await Assert.ThrowsAsync<KimaiApiException>(() => CreateClient(handler).StartAtAsync(Settings, Employee, Target, T08));
         Assert.Equal(new[] { "begin" }, error.RejectedFields);
@@ -77,7 +79,6 @@ public sealed class KimaiClientTests
     public async Task EndBackdate_StillRetriesTransientFailures()
     {
         var handler = new ScriptedHandler(
-            Resp(HttpStatusCode.OK, "{}"),                      // PATCH stop
             Resp(HttpStatusCode.InternalServerError),           // PATCH end -> transient
             Resp(HttpStatusCode.OK, "{}"));                     // PATCH end -> success
         var client = CreateClient(handler);
@@ -86,10 +87,40 @@ public sealed class KimaiClientTests
 
         Assert.Equal(
         [
-            "PATCH /api/timesheets/42/stop",
             "PATCH /api/timesheets/42",
             "PATCH /api/timesheets/42",
         ], handler.Requests);
+        Assert.All(handler.Bodies, json =>
+        {
+            using var body = System.Text.Json.JsonDocument.Parse(json!);
+            Assert.Equal(T08, DateTimeOffset.Parse(body.RootElement.GetProperty("end").GetString()!));
+        });
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task StopAt_RejectionNeverStopsAtNow(HttpStatusCode status)
+    {
+        const string details = """{"errors":{"errors":["Dieses Formular sollte keine zusätzlichen Felder enthalten."],"children":{"project":{},"activity":{}}}}""";
+        var handler = new ScriptedHandler(Resp(status, details));
+        var error = await Assert.ThrowsAsync<KimaiApiException>(() => CreateClient(handler).StopAtAsync(Settings, Employee, 42, T08));
+        Assert.Equal("PATCH /api/timesheets/42", Assert.Single(handler.Requests));
+        if (status == HttpStatusCode.BadRequest)
+        {
+            Assert.Equal(new[] { "end" }, error.RejectedFields);
+            Assert.Contains("Erfassungsmodus", error.Message);
+        }
+        else Assert.Empty(error.RejectedFields);
+    }
+
+    [Fact]
+    public async Task StartAt_InvalidAllowedBeginIsNotAnUnsupportedField()
+    {
+        const string details = """{"errors":{"errors":["Ungültiger Zeitpunkt."],"children":{"project":{},"activity":{},"description":{},"tags":{},"billable":{},"begin":{"errors":["Ungültiger Zeitpunkt."]}}}}""";
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.BadRequest, details));
+        var error = await Assert.ThrowsAsync<KimaiApiException>(() => CreateClient(handler).StartAtAsync(Settings, Employee, Target, T08));
+        Assert.Empty(error.RejectedFields);
     }
 
     [Fact]

@@ -86,4 +86,36 @@ describe('KioskDiagnostics', () => {
     request.flush({ ok: true });
     subscription.unsubscribe();
   });
+
+  it('acknowledges only transmitted events and retains events recorded during a request', () => {
+    for (let i = 0; i < 30; i++) service.record({ kind: 'http', operation: 'clock', eventId: `event-${i}`, status: 400 });
+    vi.advanceTimersByTime(15_000);
+    const first = http.expectOne(heartbeat);
+    expect(first.request.body.events[0].eventId).toBe('event-0');
+    expect(first.request.body.events).toHaveLength(20);
+    service.record({ kind: 'http', operation: 'sync', eventId: 'during-request', status: 500 });
+    first.flush({ ok: true });
+    vi.advanceTimersByTime(15_000);
+    const second = http.expectOne(heartbeat);
+    expect(second.request.body.events).toContainEqual(expect.objectContaining({ eventId: 'event-20' }));
+    expect(second.request.body.events).toContainEqual(expect.objectContaining({ eventId: 'during-request' }));
+    expect(second.request.body.events).not.toContainEqual(expect.objectContaining({ eventId: 'event-0' }));
+    second.flush({ ok: true });
+  });
+
+  it('retains failed deliveries and records repeated health failures only when status changes', () => {
+    service.track('clock', 'important')(400);
+    for (let i = 0; i < 50; i++) service.track('health')(0);
+    vi.advanceTimersByTime(15_000);
+    const first = http.expectOne(heartbeat);
+    expect(first.request.body.events.filter((e: { operation: string }) => e.operation === 'health')).toHaveLength(1);
+    first.flush({}, { status: 500, statusText: 'Error' });
+    service.track('health')(200);
+    service.track('health')(0);
+    vi.advanceTimersByTime(15_000);
+    const retry = http.expectOne(heartbeat);
+    expect(retry.request.body.events).toContainEqual(expect.objectContaining({ eventId: 'important' }));
+    expect(retry.request.body.events.filter((e: { operation: string }) => e.operation === 'health')).toHaveLength(2);
+    retry.flush({ ok: true });
+  });
 });

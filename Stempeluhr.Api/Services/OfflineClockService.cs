@@ -605,11 +605,8 @@ public sealed class OfflineClockService(
     }
 
     /// <summary>
-    /// First step of a transition: stop the sheet and backdate its end. The
-    /// marker is set as soon as Kimai confirmed the stop, before the backdate
-    /// that can fail on its own (issue #10): a retry then knows this replay
-    /// stopped that very sheet - the sheet id survives a failed backdate,
-    /// which a time window would not.
+    /// First step of a transition: atomically set the captured end. Remember
+    /// the confirmed stop so a retry can complete a failed subsequent start.
     /// </summary>
     private async Task StopTransitionAsync(
         RuntimeSettings settings,
@@ -619,9 +616,8 @@ public sealed class OfflineClockService(
         DateTimeOffset timestamp,
         CancellationToken cancellationToken)
     {
-        await kimai.StopAsync(settings, employee, timesheetId, cancellationToken);
+        await kimai.StopAtAsync(settings, employee, timesheetId, timestamp, cancellationToken);
         kioskEvents.Remember(eventId, timesheetId);
-        await kimai.BackdateEndAsync(settings, employee, timesheetId, timestamp, cancellationToken);
     }
 
     private const string UnclearTransitionMessage = "nicht eindeutig nachtragbar - bitte in Kimai pruefen.";

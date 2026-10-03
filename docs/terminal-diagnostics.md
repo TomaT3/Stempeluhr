@@ -5,8 +5,9 @@
 Der Adminbereich unter **Abgelehnte Offline-Stempel** enthält den vollständigen
 Kimai-Fehler, Event-ID und Ereigniszeit. Telegram kürzt den Fehler. Im
 `errors.children`-Objekt stehen die Felder, die das Formular des API-Benutzers
-anbietet. Fehlt ein tatsächlich gesendetes Feld und nennt der Fehler „extra
-fields“, lässt Kimai es in diesem Modus bzw. für diesen Benutzer nicht zu.
+anbietet. Fehlt ein tatsächlich gesendetes Feld bei einem Formularfehler,
+lässt Kimai es in diesem Modus bzw. für diesen Benutzer nicht zu. Die
+Erkennung ist unabhängig von der Sprache der Fehlermeldung.
 
 - `begin` oder `end` fehlen: Unter **System → Einstellungen → Zeiterfassung →
   Erfassungsmodus** prüfen. Kimais Modus **Stempeluhr / Time-clock** verhindert
@@ -25,6 +26,11 @@ Referenzen: [Kimai-Einstellungen](https://www.kimai.org/documentation/configurat
 
 Offline-Starts werden nur mit dem tatsächlichen Startzeitpunkt angelegt.
 Ein HTTP 400 löst keine Ersatzbuchung mit der aktuellen Uhrzeit mehr aus.
+Offline-Stops setzen das erfasste Ende direkt per PATCH, ohne vorher auf
+„jetzt“ zu stoppen. Wird das Zeitfeld abgelehnt, bleibt der laufende Eintrag
+unverändert; auch Pause und Tätigkeitswechsel stoppen dann keinen Eintrag.
+Stop und anschließender Start eines anderen Eintrags bleiben zwei getrennte
+Kimai-Anfragen; Kimai bietet dafür keine gemeinsame Transaktion.
 Der frühere Ersatzversuch konnte einen laufenden Eintrag mit falschem Beginn
 hinterlassen, wenn auch der anschließende PATCH abgewiesen wurde. Bei alten
 Ablehnungen deshalb vorhandene Kimai-Zeiten prüfen und korrigieren, bevor eine
@@ -62,12 +68,20 @@ Bestehende `config.json`-Dateien bleiben gültig.
   `/api/kiosk/diagnostics`. Die API prüft Token und Terminal-ID, begrenzt
   Anfragen und protokolliert nur erlaubte technische Felder. Die vollständige
   Ereignishistorie liegt auf dem Pi; der Server bekommt Stichproben.
+  Zwischen den Sendeläufen sammelt der Agent bis zu 80 Ereignisse und
+  bestätigt sie erst nach erfolgreicher Übertragung. Ältere Ereignisse
+  können bei längerem Ausfall aus diesem begrenzten Puffer fallen.
+  Wiederholte identische Health-Fehler werden nur bei Statusänderung erfasst.
   Ohne Token bleibt die lokale Diagnose aktiv. Ausfälle beim Versand
   beeinflussen weder Kartenlesen noch Stempeln und werden nicht unbegrenzt gepuffert.
 - Das Update installiert `/etc/systemd/journald.conf.d/stempeluhr.conf`:
   persistentes Systemjournal mit 64 MiB Zielgrenze, 128 MiB freizuhaltendem
   Platz und maximal sieben Tagen Aufbewahrung. Diese Limits gelten für das
   gesamte Systemjournal; vorhandene strengere lokale Einstellungen beachten.
+  Führt noch das alte Updater-Skript das erste Update aus, richtet der nächste
+  Timer-Lauf das Journal auch bei gleicher Version und ohne Serververbindung
+  ein. Ein fehlgeschlagener journald-Neustart wird gemeldet und unterbricht
+  das Agent-Update nicht; die Einstellung greift dann beim nächsten Neustart.
   Ein abruptes Abschalten kann die allerletzten noch nicht geschriebenen
   Journaleinträge verlieren.
 

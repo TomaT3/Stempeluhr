@@ -13,6 +13,58 @@ from test_local_scan_server import LocalScanServer
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_javascript_timestamp_is_normalized_for_python39(self):
+        import terminal_diagnostics
+        from datetime import datetime as real_datetime
+        class Python39Datetime:
+            @staticmethod
+            def fromisoformat(value):
+                if value.endswith("Z"):
+                    raise ValueError("Python 3.9 does not support Z")
+                return real_datetime.fromisoformat(value)
+        with patch.object(terminal_diagnostics, "datetime", Python39Datetime):
+            clean = sanitize_heartbeat({"events": [{"kind": "error", "code": "promise", "at": "2026-10-03T16:00:00.123Z"}]})
+        self.assertEqual(clean["events"][0]["at"], "2026-10-03T16:00:00.123000+00:00")
+
+    def test_accumulates_heartbeats_deduplicates_and_preserves_events_during_forward(self):
+        with tempfile.TemporaryDirectory() as folder:
+            reports = []
+            monitor = DiagnosticsMonitor(Path(folder), "test")
+            monitor._sampler.sample = lambda: {}
+            def event(seq):
+                return {"kind": "http", "operation": "clock", "seq": seq, "at": "2026-10-03T16:00:00Z", "status": 400}
+            for i in range(4):
+                with patch("terminal_diagnostics.time.monotonic", return_value=100 + i * 15):
+                    monitor.accept({"events": [event(max(0, i - 1)), event(i)]})
+            def forward(snapshot):
+                reports.append(snapshot)
+                with patch("terminal_diagnostics.time.monotonic", return_value=170):
+                    monitor.accept({"events": [event(3), event(4)]})
+            monitor.forward = forward
+            monitor.sample()
+            self.assertEqual([e["seq"] for e in reports[0]["ui"]["events"]], [0, 1, 2, 3])
+            monitor.forward = reports.append
+            monitor.sample()
+            self.assertEqual([e["seq"] for e in reports[1]["ui"]["events"]], [4])
+            monitor.sample()
+            self.assertEqual(reports[2]["ui"]["events"], [])
+            monitor.close()
+
+    def test_forward_failure_keeps_bounded_events_for_retry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            monitor = DiagnosticsMonitor(Path(folder), "test", lambda _: (_ for _ in ()).throw(OSError()))
+            monitor._sampler.sample = lambda: {}
+            for i in range(6):
+                with patch("terminal_diagnostics.time.monotonic", return_value=100 + i * 15):
+                    monitor.accept({"events": [{"kind": "error", "code": "promise", "seq": i * 20 + n} for n in range(20)]})
+            failed = monitor.sample()
+            self.assertEqual(len(failed["ui"]["events"]), 80)
+            reports = []
+            monitor.forward = reports.append
+            monitor.sample()
+            self.assertEqual(reports[0]["ui"]["events"], failed["ui"]["events"])
+            monitor.close()
+
     def test_state_event_keeps_its_original_state(self):
         clean = sanitize_heartbeat({"screen": "idle", "busy": False,
             "events": [{"kind": "state", "screen": "session", "busy": True,

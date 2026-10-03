@@ -40,6 +40,7 @@ from stempeluhr_nfc_agent import (  # noqa: E402
     AgentConfig,
     LocalScanServer,
     origin_of,
+    upstream_request,
 )
 
 KIOSK = "https://stempeluhr.example.com"
@@ -165,6 +166,11 @@ def test_terminal_proxy() -> None:
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             seen.append((self.path, dict(self.headers), payload))
+            if redirect:
+                self.send_response(307)
+                self.send_header("Location", "/redirect-target")
+                self.end_headers()
+                return
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'{"results":[]}')
@@ -230,6 +236,17 @@ def test_terminal_proxy() -> None:
         redirect = True
         assert request(agent.url + "/terminal/catalog", origin=KIOSK)[0] == 502
         assert len(seen) == 5  # Redirect target must not receive the bearer token.
+        try:
+            with upstream_request(config, "/api/kiosk/diagnostics", b'{"ui":{}}', timeout=5):
+                raise AssertionError("diagnostic redirect accepted")
+        except urllib.error.HTTPError as error:
+            assert error.code == 307
+            error.close()
+        assert len(seen) == 6
+        assert seen[-1][0] == "/api/kiosk/diagnostics"
+        assert seen[-1][1]["Authorization"] == "Bearer private-terminal-token"
+        assert seen[-1][1]["X-Terminal-Id"] == "pi-1"
+        assert seen[-1][1]["User-Agent"] == f"Stempeluhr-NFC-Agent/{AGENT_VERSION}"
     finally:
         agent.shutdown()
         agent.server_close()

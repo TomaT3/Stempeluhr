@@ -120,6 +120,23 @@ class AgentConfig:
         )
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def upstream_request(config: AgentConfig, path: str, body: bytes | None = None, timeout: int = 15):
+    """Shared authenticated transport. Never forward credentials on redirects."""
+    request = urllib.request.Request(config.api_base_url + path, data=body, headers={
+        "Authorization": "Bearer " + config.terminal_token,
+        "X-Terminal-Id": config.terminal_id,
+        "Content-Type": "application/json",
+        # Avoid bot filters rejecting urllib's default User-Agent.
+        "User-Agent": f"Stempeluhr-NFC-Agent/{AGENT_VERSION}",
+    })
+    return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
+
+
 @dataclass
 class LastScan:
     card_id: str
@@ -239,25 +256,13 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             except (ValueError, KeyError, TypeError):
                 self._send_json(400, {"error": "invalid sync batch"})
                 return
-        request = urllib.request.Request(config.api_base_url + path, data=body, headers={
-            "Authorization": "Bearer " + config.terminal_token,
-            "X-Terminal-Id": config.terminal_id,
-            "Content-Type": "application/json",
-            # Own name instead of urllib's default "Python-urllib/3.x": bot
-            # filters in front of the server (e.g. Cloudflare) answer that
-            # one with 403, which blocks catalog and replay for good.
-            "User-Agent": f"Stempeluhr-NFC-Agent/{AGENT_VERSION}",
-        })
-        # Never forward the credential to a redirect target.
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, req, fp, code, msg, headers, newurl):
-                return None
         try:
-            with urllib.request.build_opener(NoRedirect()).open(request, timeout=270 if post else 15) as response:
+            with upstream_request(config, path, body, timeout=270 if post else 15) as response:
                 result = json.load(response)
             self._send_json(200, result)
         except urllib.error.HTTPError as error:
             # Upstream error bodies may contain diagnostics: do not expose them.
+            error.close()
             self._send_json(error.code if error.code in (400, 401, 403, 429) else 502,
                             {"error": "terminal request rejected"})
         except (OSError, ValueError):
@@ -473,18 +478,8 @@ def main() -> int:
     def forward_diagnostics(snapshot):
         if not config.terminal_token:
             return
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, req, fp, code, msg, headers, newurl):
-                return None
-        request = urllib.request.Request(config.api_base_url + "/api/kiosk/diagnostics",
-            data=json.dumps(snapshot).encode("utf-8"), headers={
-                "Authorization": "Bearer " + config.terminal_token,
-                "X-Terminal-Id": config.terminal_id,
-                "Content-Type": "application/json",
-                "User-Agent": f"Stempeluhr-NFC-Agent/{AGENT_VERSION}",
-            })
         try:
-            with urllib.request.build_opener(NoRedirect()).open(request, timeout=5) as response:
+            with upstream_request(config, "/api/kiosk/diagnostics", json.dumps(snapshot).encode("utf-8"), timeout=5) as response:
                 response.read(4096)
         except urllib.error.HTTPError as error:
             error.close()

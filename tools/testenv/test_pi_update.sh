@@ -57,7 +57,10 @@ cat > "$WORK/systemctl" <<EOF
 #!/usr/bin/env bash
 case "\$1" in
   restart)
-    [ "\$2" = "systemd-journald.service" ] && exit 0
+    if [ "\$2" = "systemd-journald.service" ]; then
+      [ -f "$WORK/fail-journald" ] && exit 1
+      exit 0
+    fi
     [ -f "$WORK/agent.pid" ] && kill "\$(cat "$WORK/agent.pid")" 2>/dev/null || true
     sleep 0.3
     PYTHONPATH="$WORK/stub" nohup python3 "$WORK/opt/current/stempeluhr_nfc_agent.py" \
@@ -126,13 +129,22 @@ SCAN_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: http://127.0.0.
 
 say "2: Gleiche Version - nichts zu tun"
 PID_BEFORE="$(cat "$WORK/agent.pid")"
+# Emulate an upgrade performed by the old updater, which installed the new
+# bundle/units but knew nothing about journald. The next timer run must repair
+# this at the same server version, without restarting the agent.
+rm "$WORK/journald/stempeluhr.conf"
 if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
 [ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent wurde nicht neu gestartet" || bad "Agent unnötig neu gestartet"
+[ -f "$WORK/journald/stempeluhr.conf" ] && ok "Gleiche Version repariert Journal nach altem Updater" || bad "Journal fehlt weiterhin"
 
 say "3: Server liefert neue Version"
 publish 1.1.0
+rm "$WORK/journald/stempeluhr.conf"
+touch "$WORK/fail-journald"
 if run_update; then ok "Update endet erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
 [ "$(health_version)" = "1.1.0" ] && ok "/health meldet 1.1.0" || bad "/health meldet $(health_version)"
+grep -q 'WARNUNG: journald' "$WORK/update.log" && ok "journald-Fehler wird toleriert und gemeldet" || bad "journald-Warnung fehlt"
+rm "$WORK/fail-journald"
 
 say "4: Manipulierte Prüfsumme"
 publish 1.2.0
