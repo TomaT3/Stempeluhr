@@ -30,7 +30,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$WORK/www/pi" "$WORK/opt" "$WORK/systemd" "$WORK/stub/smartcard"
+mkdir -p "$WORK/www/pi" "$WORK/opt" "$WORK/systemd" "$WORK/stub/smartcard" "$WORK/bin"
+
+# Fail only the optional journal installation, keeping unit installation real.
+INSTALL_COMMAND="$(command -v install)"
+cat > "$WORK/bin/install" <<EOF
+#!/usr/bin/env bash
+if [ -f "$WORK/fail-journal-install" ] && [[ "\$*" == *journald-stempeluhr.conf* ]]; then
+  exit 1
+fi
+exec "$INSTALL_COMMAND" "\$@"
+EOF
+chmod +x "$WORK/bin/install"
 
 # pyscard-Stub: der Agent importiert smartcard beim Start.
 cat > "$WORK/stub/smartcard/__init__.py" <<'EOF'
@@ -57,6 +68,11 @@ cat > "$WORK/systemctl" <<EOF
 #!/usr/bin/env bash
 case "\$1" in
   restart)
+    if [ "\$2" = "systemd-journald.service" ]; then
+      echo restart >> "$WORK/journald-restarts"
+      [ -f "$WORK/fail-journald" ] && exit 1
+      exit 0
+    fi
     [ -f "$WORK/agent.pid" ] && kill "\$(cat "$WORK/agent.pid")" 2>/dev/null || true
     sleep 0.3
     PYTHONPATH="$WORK/stub" nohup python3 "$WORK/opt/current/stempeluhr_nfc_agent.py" \
@@ -72,7 +88,9 @@ run_update() {
   STEMPELUHR_AGENT_CONFIG="$WORK/config.json" \
   STEMPELUHR_AGENT_DIR="$WORK/opt" \
   STEMPELUHR_SYSTEMD_DIR="$WORK/systemd" \
+  STEMPELUHR_JOURNALD_DIR="${TEST_JOURNALD_DIR:-$WORK/journald}" \
   STEMPELUHR_HEALTH_TIMEOUT=8 \
+  PATH="$WORK/bin:$PATH" \
   SYSTEMCTL="$WORK/systemctl" \
     bash "$AGENT_SRC/update.sh" "$@" > "$WORK/update.log" 2>&1
 }
@@ -107,6 +125,9 @@ if run_update --force; then ok "update.sh --force endet erfolgreich"; else bad "
 [ "$(current_version)" = "1.0.0" ] && ok "current -> 1.0.0" || bad "current ist $(current_version)"
 [ "$(health_version)" = "1.0.0" ] && ok "/health meldet 1.0.0" || bad "/health meldet $(health_version)"
 [ -f "$WORK/systemd/stempeluhr-nfc-agent-update.timer" ] && ok "systemd-Units installiert" || bad "Units fehlen"
+[ -f "$WORK/opt/current/terminal_diagnostics.py" ] && ok "Diagnosemodul im Bundle" || bad "Diagnosemodul fehlt"
+grep -q '^Storage=persistent' "$WORK/journald/stempeluhr.conf" \
+  && ok "Journal überlebt Neustarts" || bad "Persistentes Journal fehlt"
 grep -q "current/stempeluhr_nfc_agent.py" "$WORK/systemd/stempeluhr-nfc-agent.service" \
   && ok "Service startet aus current/" || bad "Service-Unit zeigt nicht auf current/"
 
@@ -121,13 +142,45 @@ SCAN_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: http://127.0.0.
 
 say "2: Gleiche Version - nichts zu tun"
 PID_BEFORE="$(cat "$WORK/agent.pid")"
+# Emulate an upgrade performed by the old updater, which installed the new
+# bundle/units but knew nothing about journald. The next timer run must repair
+# this at the same server version, without restarting the agent.
+rm "$WORK/journald/stempeluhr.conf"
 if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
 [ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent wurde nicht neu gestartet" || bad "Agent unnötig neu gestartet"
+[ -f "$WORK/journald/stempeluhr.conf" ] && ok "Gleiche Version repariert Journal nach altem Updater" || bad "Journal fehlt weiterhin"
 
 say "3: Server liefert neue Version"
 publish 1.1.0
+rm "$WORK/journald/stempeluhr.conf"
+touch "$WORK/fail-journald"
 if run_update; then ok "Update endet erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
 [ "$(health_version)" = "1.1.0" ] && ok "/health meldet 1.1.0" || bad "/health meldet $(health_version)"
+grep -q 'WARNUNG: journald' "$WORK/update.log" && ok "journald-Fehler wird toleriert und gemeldet" || bad "journald-Warnung fehlt"
+rm "$WORK/fail-journald"
+
+say "3b: Fehler der Journal-Installation blockieren kein Agent-Update"
+for failure in mkdir install; do
+  rm -f "$WORK/journald-restarts"
+  if [ "$failure" = mkdir ]; then
+    # A regular file cannot be used as a directory, even when running as root.
+    TEST_JOURNALD_DIR="$WORK/journald-unavailable"
+    touch "$TEST_JOURNALD_DIR"
+  else
+    rm "$WORK/journald/stempeluhr.conf"
+    touch "$WORK/fail-journal-install"
+  fi
+  # --force exercises both the current-bundle repair and install_units path.
+  if run_update --force; then ok "$failure-Fehler: Update erfolgreich"; else bad "$failure-Fehler: $(tail -3 "$WORK/update.log")"; fi
+  [ "$(health_version)" = "1.1.0" ] && ok "$failure-Fehler: Agent läuft" || bad "$failure-Fehler: Agent nicht gesund"
+  grep -q 'WARNUNG: journald-Konfiguration nicht installiert' "$WORK/update.log" \
+    && ok "$failure-Fehler wird gemeldet" || bad "$failure-Warnung fehlt"
+  [ ! -f "$WORK/journald-restarts" ] && ok "$failure-Fehler: kein journald-Neustart" || bad "$failure-Fehler: journald trotzdem neu gestartet"
+  unset TEST_JOURNALD_DIR
+  rm -f "$WORK/fail-journal-install"
+done
+if run_update; then ok "Journal-Installation wird nach Fehler erneut versucht"; else bad "Journal-Reparatur: $(tail -3 "$WORK/update.log")"; fi
+[ -f "$WORK/journald/stempeluhr.conf" ] && ok "Journal nach Fehler repariert" || bad "Journal fehlt nach Reparatur"
 
 say "4: Manipulierte Prüfsumme"
 publish 1.2.0

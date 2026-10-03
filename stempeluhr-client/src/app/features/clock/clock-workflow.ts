@@ -11,6 +11,7 @@ import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState, projectClockStatus } from '../../core/services/clock-state';
 import { KioskApi, isTransientHttpStatus } from '../../core/services/kiosk-api';
 import { LocalNfcScanService } from '../../core/services/local-nfc-scan.service';
+import { KioskDiagnostics } from '../../core/services/kiosk-diagnostics';
 import {
   forgetEmployeePin,
   lastKnownStatus,
@@ -74,6 +75,8 @@ export abstract class ClockWorkflow implements OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly localNfcScan = inject(LocalNfcScanService);
   private readonly appVersion = inject(AppVersionService);
+  private readonly diagnostics = inject(KioskDiagnostics);
+  private stopDiagnostics: (() => void) | null = null;
   /** Nur im Produktions-Build registriert (app.config.ts); in Tests/Dev null. */
   private readonly swUpdate = inject(SwUpdate, { optional: true });
   protected readonly offlineQueue = inject(OfflineQueueService);
@@ -89,8 +92,10 @@ export abstract class ClockWorkflow implements OnDestroy {
   readonly isOffline = signal(false);
   private readonly replayStatusPending = signal(false);
   private replayStatusRequest: Subscription | null = null;
-  readonly actionsBlocked = computed(() => this.isBusy() || this.replayStatusPending()
-    || (!this.isOffline() && this.hasPendingForEmployee(this.selectedEmployee()?.id)));
+  readonly actionBlockReason = computed<'none' | 'request' | 'status' | 'backlog'>(() =>
+    this.isBusy() ? 'request' : this.replayStatusPending() ? 'status'
+      : !this.isOffline() && this.hasPendingForEmployee(this.selectedEmployee()?.id) ? 'backlog' : 'none');
+  readonly actionsBlocked = computed(() => this.actionBlockReason() !== 'none');
 
   private hasPendingForEmployee(employeeId: string | undefined): boolean {
     return !!employeeId && this.offlineQueue.pendingCount().some(entry =>
@@ -300,6 +305,13 @@ export abstract class ClockWorkflow implements OnDestroy {
         if (catalog !== null) this.offlineQueue.enableTerminalAuth(this.terminalId!);
       });
     };
+    if (this.isReleaseBuild()) {
+      this.stopDiagnostics = this.diagnostics.start(() => ({
+        screen: this.selectedEmployee() ? 'session' : 'idle', busy: this.isBusy(),
+        blocked: this.actionBlockReason(),
+        offline: this.isOffline(), pending: this.pendingStamps(), rejected: this.rejectedStamps().length,
+      }));
+    }
     refreshCatalog();
     this.catalogTimer = window.setInterval(refreshCatalog, 60_000);
     this.pollConnectivity();
@@ -684,6 +696,7 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.stopDiagnostics?.();
     this.replayStatusRequest?.unsubscribe();
     if (this.catalogTimer !== null) window.clearInterval(this.catalogTimer);
     this.catalogRequest?.unsubscribe();

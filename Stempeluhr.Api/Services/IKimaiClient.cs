@@ -30,7 +30,7 @@ public interface IKimaiClient
         int timesheetId,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Stops a timesheet and backdates its end to <paramref name="stoppedAt"/>.</summary>
+    /// <summary>Atomically stops a timesheet at <paramref name="stoppedAt"/>.</summary>
     Task StopAtAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
@@ -40,8 +40,7 @@ public interface IKimaiClient
 
     /// <summary>
     /// Sets the end of an already stopped timesheet to <paramref name="endedAt"/>
-    /// (second half of <see cref="StopAtAsync"/>). Lets the offline replay
-    /// tell a confirmed stop apart from a failed backdate.
+    /// to repair an interrupted live transition before offline replay resumes it.
     /// </summary>
     Task BackdateEndAsync(
         RuntimeSettings settings,

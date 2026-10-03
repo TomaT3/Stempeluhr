@@ -97,6 +97,13 @@ Weitere Regeln:
   nachgetragenen Einträgen werden die letzten 1000 aufbewahrt. Ist die
   Journaldatei beschädigt, legt die API sie als `.corrupt` zur Prüfung beiseite
   und beginnt eine neue Historie.
+- Verbietet Kimais Erfassungsmodus oder die Berechtigung des Mitarbeiter-Tokens
+  nachgetragene Zeitfelder, wird der Offline-Stempel abgelehnt. Bei einem
+  abgelehnten Stop, Pausenbeginn oder Tätigkeitswechsel bleibt der laufende
+  Kimai-Eintrag unverändert und der Mitarbeiter eingestempelt. Den tatsächlichen
+  Zeitpunkt in Kimai manuell korrigieren und den Fall im Admin markieren;
+  es wird keine Ersatzbuchung zur aktuellen Uhrzeit angelegt. Details stehen
+  in der [Terminal-Diagnose](docs/terminal-diagnostics.md).
 
 ## Einrichtung
 
@@ -386,6 +393,9 @@ separater Schritt (siehe [Update](#update)).
   alle Sperren auf.
 
 ## Bekannte Grenzen und offene Punkte
+
+Terminal-Hänger und Kimai-Ablehnungen: Vorgehen, technische Messwerte und
+Logexport stehen in [Terminal-Diagnose](docs/terminal-diagnostics.md).
 
 - Für PIN-freie Terminal-Nachträge müssen bestehende Pis einmalig ein
   registriertes Terminal-Token erhalten. Alte Agent-Konfigurationen und alte

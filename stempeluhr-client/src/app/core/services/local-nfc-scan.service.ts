@@ -43,6 +43,7 @@ export class LocalNfcScanService {
    */
   poll() {
     return this.http.get<LocalNfcScan>(`http://127.0.0.1:${this.port}/scan/latest`).pipe(
+      timeout(3000),
       catchError(() => of<LocalNfcScan | null>(null)),
       // A failed agent request must never throw - it just yields no scan.
       map(scan => (this.isNewScan(scan) ? scan : null)),
@@ -59,7 +60,7 @@ export class LocalNfcScanService {
 
   /** Marks the current agent scan as consumed so it is not re-emitted. */
   ack() {
-    return this.http.post(`http://127.0.0.1:${this.port}/scan/ack`, {}).pipe(catchError(() => of(null)));
+    return this.http.post(`http://127.0.0.1:${this.port}/scan/ack`, {}).pipe(timeout(3000), catchError(() => of(null)));
   }
 
   /**

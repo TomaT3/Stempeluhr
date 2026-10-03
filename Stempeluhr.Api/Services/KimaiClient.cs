@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -73,7 +74,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         return SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Patch, $"api/timesheets/{timesheetId}/stop", null, cancellationToken);
     }
 
-    public async Task StartAtAsync(
+    public Task StartAtAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
         KimaiTimesheetTarget target,
@@ -87,108 +88,28 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             description = target.Description,
             tags = employee.Tags.Length == 0 ? null : string.Join(",", employee.Tags),
             billable = target.Billable,
-            // Kimai expects ISO 8601; with ?full=true the begin date is accepted on create.
+            // full=true only expands the response. The tracking mode and the
+            // token owner's permissions determine whether begin is allowed.
             begin = startedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz")
         };
 
-        try
-        {
-            await SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Post, "api/timesheets?full=true", body, cancellationToken);
-        }
-        catch (KimaiApiException ex) when (ex.StatusCode == HttpStatusCode.BadRequest)
-        {
-            // Older Kimai versions reject `begin` on create. Fallback: create
-            // now, then edit the begin date on the new timesheet.
-            var created = await SendAsync<JsonElement>(
-                settings.BaseUrl, employee.ApiToken, HttpMethod.Post,
-                "api/timesheets?full=true",
-                new { project = body.project, activity = body.activity, description = body.description, tags = body.tags, billable = body.billable },
-                cancellationToken);
-
-            if (created.ValueKind is JsonValueKind.Object && created.TryGetProperty("id", out var idProperty) && idProperty.ValueKind == JsonValueKind.Number)
-            {
-                var timesheetId = idProperty.GetInt32();
-                try
-                {
-                    // Same transient-retry as the end-backdate: without it ONE
-                    // 5xx/network hiccup left the sheet running with begin=now.
-                    await BackdatePatchAsync(
-                        settings, employee, "begin-backdate", timesheetId, startedAt,
-                        new { begin = body.begin },
-                        cancellationToken);
-                }
-                catch (Exception backdateEx) when (IsTransientBackdateFailure(backdateEx))
-                {
-                    // The sheet now runs with begin=now: a later offline replay
-                    // sees IsRunning == true and answers "Lief bereits" - the
-                    // wrong start time would persist silently. Stop the
-                    // misdated sheet so the replay can recreate it with the
-                    // intended begin instead.
-                    logger.LogWarning(
-                        backdateEx,
-                        "Kimai: begin-backdate for timesheet {TimesheetId} failed after retries - stopping the misdated sheet (intended begin {Intended}) so a later replay can recreate it",
-                        timesheetId, startedAt);
-                    try
-                    {
-                        await SendAsync<JsonElement>(
-                            settings.BaseUrl, employee.ApiToken, HttpMethod.Patch,
-                            $"api/timesheets/{timesheetId}/stop",
-                            null,
-                            cancellationToken);
-                    }
-                    catch (Exception stopEx)
-                    {
-                        // Stop failed: the sheet keeps running with begin=now
-                        // and would answer any replayed start with "Lief
-                        // bereits" - manual correction required. Re-throwing
-                        // still preserves the event in the offline buffer, so
-                        // the response-lost case stays recoverable once the
-                        // sheet is corrected.
-                        logger.LogError(
-                            stopEx,
-                            "Kimai: could not stop misdated timesheet {TimesheetId}; it keeps begin=now instead of {Intended}. Manual correction required.",
-                            timesheetId, startedAt);
-                        throw;
-                    }
-
-                    // Stop succeeded: the misdated sheet is closed and no longer
-                    // blocks a replay. Swallowing the backdate error here would
-                    // acknowledge the start-event even though nothing in Kimai
-                    // reflects it - the whole offline session (including its
-                    // later stop) would be lost silently. Re-throw so the sync
-                    // loop buffers this event as transient and the replay can
-                    // recreate it with the intended begin.
-                    throw;
-                }
-            }
-            else
-            {
-                // The timesheet was created without `begin`; without its ID we
-                // cannot backdate it. Log loudly instead of silently accepting
-                // a wrong start time.
-                logger.LogWarning(
-                    "Kimai fallback: created timesheet without id, begin backdate skipped ({BaseUrl}, user {User})",
-                    settings.BaseUrl, employee.Id);
-            }
-        }
+        // A 400 may mean that begin is forbidden, not that this is an old
+        // API. Creating at 'now' and PATCHing afterwards then fails too and
+        // leaves a running, incorrectly dated sheet. Only create atomically
+        // with the captured time; permanent errors remain in the journal.
+        return SendAsync<JsonElement>(settings.BaseUrl, employee.ApiToken, HttpMethod.Post, "api/timesheets?full=true", body, cancellationToken);
     }
 
-    public async Task StopAtAsync(
+    public Task StopAtAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
         int timesheetId,
         DateTimeOffset stoppedAt,
         CancellationToken cancellationToken = default)
     {
-        // First stop the timesheet normally so Kimai computes a duration.
-        await StopAsync(settings, employee, timesheetId, cancellationToken);
-
-        // Then backdate the end timestamp to the real scan time. If the stop
-        // went through but this PATCH is lost to a transient error, the
-        // timesheet keeps end=now and a later replay sees IsRunning == false.
-        // Callers that must repair that call the two halves themselves
-        // (OfflineClockService.StopTransitionAsync).
-        await BackdateEndAsync(settings, employee, timesheetId, stoppedAt, cancellationToken);
+        // Updating end also stops a running sheet. Validate and save the
+        // captured time together; never stop at now before a rejected PATCH.
+        return BackdateEndAsync(settings, employee, timesheetId, stoppedAt, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -206,13 +127,8 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
     }
 
     /// <summary>
-    /// PATCHes one timestamp correction (begin/end backdate) with a short
-    /// transient-retry loop. A lost backdate silently leaves a WRONG time
-    /// behind (begin=now keeps running; end=now shifts worked time) and a
-    /// later offline replay usually cannot correct it anymore - the retry
-    /// used to exist only for the end-backdate; the begin-backdate in
-    /// <see cref="StartAtAsync"/>'s old-Kimai fallback now shares the same
-    /// mechanism, so one transient 5xx no longer freezes a wrong start time.
+    /// PATCHes an end timestamp with a short transient-retry loop. A lost
+    /// backdate would otherwise silently leave a wrong stop time.
     /// </summary>
     private async Task BackdatePatchAsync(
         RuntimeSettings settings,
@@ -432,16 +348,44 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         }
 
+        var started = Stopwatch.GetTimestamp();
         using var response = await httpClient.SendAsync(request, cancellationToken);
+        var operation = $"{method} /{path.Split('?')[0]}";
+        logger.LogDebug("Kimai {Operation}: HTTP {Status} in {ElapsedMs} ms",
+            operation, (int)response.StatusCode, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         if (!response.IsSuccessStatusCode)
         {
             var details = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new KimaiApiException(response.StatusCode, details);
+            var rejectedFields = response.StatusCode == HttpStatusCode.BadRequest ? FindRejectedFields(details, body) : [];
+            logger.LogWarning("Kimai {Operation}: HTTP {Status} after {ElapsedMs} ms; unsupported fields: {Fields}",
+                operation, (int)response.StatusCode, Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                string.Join(",", rejectedFields));
+            throw new KimaiApiException(response.StatusCode, details, operation, rejectedFields);
         }
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         return JsonSerializer.Deserialize<T>(json, JsonOptions)
             ?? throw new InvalidOperationException("Kimai returned an empty response.");
+    }
+
+    private static string[] FindRejectedFields(string details, object? body)
+    {
+        if (body is null) return [];
+        try
+        {
+            using var document = JsonDocument.Parse(details);
+            var errors = document.RootElement.GetProperty("errors");
+            if (!errors.TryGetProperty("errors", out var messages) || messages.ValueKind != JsonValueKind.Array
+                || !messages.EnumerateArray().Any(m => m.ValueKind == JsonValueKind.String)
+                || !errors.TryGetProperty("children", out var children) || children.ValueKind != JsonValueKind.Object)
+                return [];
+            return JsonSerializer.SerializeToElement(body, JsonOptions).EnumerateObject()
+                .Where(field => !children.TryGetProperty(field.Name, out _)).Select(field => field.Name).ToArray();
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            return []; // Preserve the original error for other Kimai response formats.
+        }
     }
 
     private static KimaiUserDto ParseKimaiUser(JsonElement user)
@@ -544,11 +488,22 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
     }
 }
 
-public sealed class KimaiApiException(HttpStatusCode statusCode, string details)
-    : Exception($"Kimai API returned {(int)statusCode}: {details}")
+public sealed class KimaiApiException(HttpStatusCode statusCode, string details, string? operation = null, string[]? rejectedFields = null)
+    : Exception(Describe(statusCode, details, operation, rejectedFields))
 {
     public HttpStatusCode StatusCode { get; } = statusCode;
     public string Details { get; } = details;
+    public string? Operation { get; } = operation;
+    public IReadOnlyList<string> RejectedFields { get; } = rejectedFields ?? [];
+
+    private static string Describe(HttpStatusCode status, string details, string? operation, string[]? fields)
+    {
+        var hint = fields?.Any(f => f is "begin" or "end") == true
+            ? "Kimai erlaubt keine nachgetragenen Zeitpunkte für diesen API-Benutzer. Erfassungsmodus und Berechtigungen in Kimai prüfen. "
+            : fields?.Contains("billable") == true
+                ? "Kimai erlaubt diesem API-Benutzer das Feld billable nicht. Berechtigung edit_billable_own_timesheet prüfen. " : "";
+        return $"{hint}Kimai API returned {(int)status}{(operation is null ? "" : $" ({operation})")}: {details}";
+    }
 
     /// <summary>
     /// Kimai may accept the same request later: 5xx, 408 (timeout), 429

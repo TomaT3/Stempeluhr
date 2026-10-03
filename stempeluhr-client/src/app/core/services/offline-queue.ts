@@ -4,6 +4,7 @@ import { defer, finalize, firstValueFrom, Observable, of, Subject, timeout } fro
 import { catchError } from 'rxjs/operators';
 import { confirmSyncedStatus } from './offline-cache';
 import { LOCAL_NFC_SCAN_PORT } from './local-nfc-scan.service';
+import { KioskDiagnostics } from './kiosk-diagnostics';
 
 import {
   OfflineKioskClockEvent,
@@ -67,6 +68,7 @@ interface StoredOfflineEvent {
  */
 @Injectable({ providedIn: 'root' })
 export class OfflineQueueService {
+  private readonly diagnostics = inject(KioskDiagnostics);
   private readonly http = inject(HttpClient);
   private readonly agentPort = inject(LOCAL_NFC_SCAN_PORT);
   private readonly authenticatedTerminals = this.readAuthenticatedTerminals();
@@ -420,6 +422,7 @@ export class OfflineQueueService {
     } catch {
       // Storage full/blocked: keep the in-memory queue so nothing is lost
       // during this browser session.
+      this.diagnostics.record({ kind: 'error', code: 'storage' });
     }
   }
 

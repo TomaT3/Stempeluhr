@@ -128,6 +128,7 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
     component.confirmPin();
     fixture.detectChanges();
     expect(component.actionsBlocked()).toBe(true);
+    expect(component.actionBlockReason()).toBe('status'); // Status takes precedence over the remaining backlog.
     component.start();
     expect(clockSubjects).toHaveLength(0);
     await drainMicrotasks();
@@ -136,12 +137,14 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
     await drainMicrotasks();
     expect(api.pinLogin).toHaveBeenCalledTimes(2);
     expect(component.actionsBlocked()).toBe(true);
+    expect(component.actionBlockReason()).toBe('status');
     component.start();
     expect(clockSubjects).toHaveLength(0);
     if (leave) component.back();
     refreshed.next(session);
     refreshed.complete();
     expect(component.actionsBlocked()).toBe(false);
+    expect(component.actionBlockReason()).toBe('none');
     if (leave) {
       expect(component.selectedEmployee()).toBeNull();
       expect(component.clockState.status()).toBeNull();
