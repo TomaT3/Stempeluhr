@@ -607,6 +607,8 @@ public sealed class ClockServiceNotificationTests
         }
 
         public Task<bool> SendMessageAsync(string text) => Task.FromResult(true);
+
+        public Task<bool> SendAlertAsync(string text) => Task.FromResult(true);
     }
 
     private sealed class RecordingLogger : ILogger<ClockService>

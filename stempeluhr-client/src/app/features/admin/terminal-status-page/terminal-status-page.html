@@ -1,0 +1,117 @@
+<section class="status-page">
+  <div class="status-toolbar">
+    <a class="back-link" routerLink="/admin">&lt; Admin</a>
+    <div class="status-login">
+      <label>
+        Admin-Passwort
+        <input
+          type="password"
+          [value]="adminPassword()"
+          (input)="adminPassword.set($any($event.target).value)"
+          (keyup.enter)="loadStatuses()"
+          autocomplete="current-password">
+      </label>
+      <button type="button" (click)="loadStatuses()" [disabled]="isBusy()">Aktualisieren</button>
+    </div>
+  </div>
+
+  @if (hasLoaded()) {
+    <div class="status-summary" aria-label="Terminal-Zusammenfassung">
+      <div>
+        <span>{{ statuses().length }}</span>
+        <small>Terminals</small>
+      </div>
+      <div>
+        <span>{{ onlineCount() }}</span>
+        <small>Online</small>
+      </div>
+      <div>
+        <span>{{ troubleCount() }}</span>
+        <small>Mit Störung</small>
+      </div>
+    </div>
+
+    <section class="terminal-list" aria-label="Terminalstatus">
+      @for (status of statuses(); track status.terminalId) {
+        <article class="terminal-row" [attr.data-state]="status.state">
+          <div class="terminal-main">
+            <h2>{{ status.terminalId }}</h2>
+            <span class="state-badge">{{ stateLabel(status) }}</span>
+            <small>Zuletzt gemeldet {{ lastReportAge(status) }}</small>
+          </div>
+
+          @if (status.problems.length) {
+            <ul class="problems">
+              @for (problem of status.problems; track problem.kind) {
+                <li>{{ problem.text }}</li>
+              }
+            </ul>
+          }
+
+          @if (status.report; as report) {
+            <dl class="status-details">
+              <div>
+                <dt>Kiosk-Seite</dt>
+                <dd>{{ pageLabel(report) }}</dd>
+              </div>
+              <div>
+                <dt>Bildschirm</dt>
+                <dd>{{ report.screen === 'session' ? 'Mitarbeiter angemeldet' : report.screen === 'idle' ? 'Ruhebildschirm' : '-' }}</dd>
+              </div>
+              <div>
+                <dt>Gesperrt</dt>
+                <dd>{{ blockedLabel(report) }}</dd>
+              </div>
+              <div>
+                <dt>Offline-Modus</dt>
+                <dd>{{ report.offline === null ? '-' : report.offline ? 'ja' : 'nein' }}</dd>
+              </div>
+              <div>
+                <dt>Offline-Stempel</dt>
+                <dd>{{ report.pending ?? '-' }} offen · {{ report.rejected ?? '-' }} abgelehnt</dd>
+              </div>
+              <div>
+                <dt>Temperatur</dt>
+                <dd>{{ value(report.temperatureC, '°C') }}</dd>
+              </div>
+              <div>
+                <dt>Freier RAM</dt>
+                <dd>{{ megabytes(report.availableMemoryKb) }}</dd>
+              </div>
+              <div>
+                <dt>CPU</dt>
+                <dd>{{ value(report.cpuPercent, '%') }}</dd>
+              </div>
+              <div>
+                <dt>Speicherplatz</dt>
+                <dd>{{ value(report.diskFreeMb, 'MB') }}</dd>
+              </div>
+              <div>
+                <dt>Laufzeit</dt>
+                <dd>{{ uptime(report) }}</dd>
+              </div>
+              <div>
+                <dt>Stromversorgung</dt>
+                <dd>{{ status.powerFlags.length ? status.powerFlags.join(', ') : 'ok' }}</dd>
+              </div>
+              <div>
+                <dt>Version</dt>
+                <dd>Agent {{ report.agentVersion ?? '-' }} · App {{ report.appVersion ?? '-' }}</dd>
+              </div>
+            </dl>
+          }
+
+          @if (status.lastReportAt) {
+            <small class="report-time">Letzter Bericht {{ status.lastReportAt | date: 'dd.MM.yyyy HH:mm:ss' }}</small>
+          }
+        </article>
+      } @empty {
+        <p class="empty-state">Keine Terminals mit Token in settings.json konfiguriert.</p>
+      }
+    </section>
+  }
+
+  @if (message()) {
+    <p class="message">{{ message() }}</p>
+  }
+</section>

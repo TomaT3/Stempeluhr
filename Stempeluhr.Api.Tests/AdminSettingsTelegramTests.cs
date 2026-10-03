@@ -102,4 +102,43 @@ public sealed class AdminSettingsTelegramTests
         Assert.Equal("789:NEW-token", result.TelegramBotToken);
         Assert.Equal("-42", result.TelegramChatId);
     }
+
+    [Fact]
+    public void TelegramAlertChatId_IsReturnedKeptAndReplaced()
+    {
+        var current = new RuntimeSettings
+        {
+            BaseUrl = "http://kimai.test",
+            TelegramBotToken = "123456:ABC-secret",
+            TelegramChatId = "-100",
+            TelegramAlertChatId = "-200",
+        };
+        AdminSettingsUpdateDto Update(string? alertChatId) => new(
+            BaseUrl: "http://kimai.test",
+            AdminPassword: null,
+            AdminApiToken: null,
+            KeepAdminApiToken: true,
+            DefaultProjectId: null,
+            DefaultActivityId: null,
+            PauseActivityId: null,
+            Employees: [],
+            TelegramBotToken: null,
+            TelegramChatId: null,
+            TelegramAlertChatId: alertChatId);
+
+        Assert.Equal("-200", AdminSettingsDto.FromSettings(current).TelegramAlertChatId);
+        Assert.Equal("-200", Update(null).ToSettings(current).TelegramAlertChatId);
+        Assert.Equal("-300", Update(" -300 ").ToSettings(current).TelegramAlertChatId);
+    }
+
+    [Fact]
+    public void TelegramAlertChat_FallsBackToTheStampChat()
+    {
+        var settings = new RuntimeSettings { TelegramBotToken = "t", TelegramChatId = "-100" };
+
+        Assert.Equal("-100", settings.TelegramAlertChat);
+        Assert.True(settings.TelegramAlertsEnabled);
+        Assert.Equal("-200", new RuntimeSettings { TelegramChatId = "-100", TelegramAlertChatId = "-200" }.TelegramAlertChat);
+        Assert.False(new RuntimeSettings { TelegramChatId = "-100" }.TelegramAlertsEnabled);
+    }
 }

@@ -54,6 +54,26 @@ public static class AdminEndpoints
             return Results.Ok(statuses);
         });
 
+        app.MapGet("/api/admin/terminal-statuses", (
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            IRuntimeSettingsStore settingsStore,
+            TerminalHealthStore health) =>
+        {
+            if (!authorization.IsAdmin(request))
+            {
+                return Results.Unauthorized();
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var statuses = settingsStore.Load().TerminalTokens.Keys
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .Select(terminalId => AdminTerminalStatusDto.From(
+                    terminalId, health.Snapshot(terminalId, now), now, TimeZoneInfo.Local))
+                .ToArray();
+            return Results.Ok(statuses);
+        });
+
         app.MapPut("/api/admin/settings", async (
             HttpRequest request,
             AdminSettingsUpdateDto update,

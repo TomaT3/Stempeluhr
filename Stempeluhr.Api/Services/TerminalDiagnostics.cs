@@ -48,6 +48,32 @@ public static class TerminalDiagnostics
         };
     }
 
+    /// <summary>The same allowed fields as <see cref="Filter"/>, typed for monitoring.</summary>
+    public static TerminalHealthReport Summarize(JsonElement report)
+    {
+        var ui = Object(report, "ui");
+        var system = Object(report, "system");
+        return new TerminalHealthReport(
+            AgentVersion: Version(report, "agentVersion"),
+            AppVersion: Version(ui, "appVersion"),
+            UiStatus: Choice(report, "uiStatus", "alive", "missing", "not-seen"),
+            HeartbeatAgeSeconds: Number(report, "heartbeatAgeSeconds"),
+            Screen: Choice(ui, "screen", "idle", "session"),
+            Blocked: Choice(ui, "blocked", "none", "request", "backlog", "status"),
+            Busy: Boolean(ui, "busy"),
+            Offline: Boolean(ui, "offline"),
+            Pending: Number(ui, "pending"),
+            Rejected: Number(ui, "rejected"),
+            CpuPercent: Number(system, "cpuPercent"),
+            AvailableMemoryKb: Number(system, "availableMemoryKb"),
+            ChromiumRssSumKb: Number(system, "chromiumRssSumKb"),
+            TemperatureC: Number(system, "temperatureC", -100),
+            ThrottledFlags: Number(system, "throttledFlags", 0, int.MaxValue),
+            DiskFreeMb: Number(system, "diskFreeMb"),
+            UptimeSeconds: Number(system, "uptimeSeconds"),
+            Load1: Number(system, "load1"));
+    }
+
     private static JsonElement Object(JsonElement value, string key) =>
         value.ValueKind == JsonValueKind.Object && value.TryGetProperty(key, out var child) ? child : default;
     private static IEnumerable<JsonElement> Array(JsonElement value, string key) =>

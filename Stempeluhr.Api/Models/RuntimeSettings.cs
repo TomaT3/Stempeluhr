@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Stempeluhr.Api.Models;
 
 public sealed class RuntimeSettings
@@ -25,6 +27,21 @@ public sealed class RuntimeSettings
 
     public bool TelegramEnabled =>
         !string.IsNullOrWhiteSpace(TelegramBotToken) && !string.IsNullOrWhiteSpace(TelegramChatId);
+
+    /// <summary>
+    /// Optionaler eigener Chat für technische Warnungen (Terminal-Überwachung).
+    /// Leer: die Warnungen gehen in <see cref="TelegramChatId"/>.
+    /// </summary>
+    public string? TelegramAlertChatId { get; init; }
+
+    // Derived: must not end up in settings.json as if it were configured.
+    [JsonIgnore]
+    public string? TelegramAlertChat =>
+        string.IsNullOrWhiteSpace(TelegramAlertChatId) ? TelegramChatId : TelegramAlertChatId;
+
+    [JsonIgnore]
+    public bool TelegramAlertsEnabled =>
+        !string.IsNullOrWhiteSpace(TelegramBotToken) && !string.IsNullOrWhiteSpace(TelegramAlertChat);
 
     /// <summary>
     /// Maximaler Abstand zwischen dem Ende des letzten gestoppten

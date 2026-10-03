@@ -98,6 +98,47 @@ Das normale NFC-Journal älterer Agenten enthält weiterhin Karten-IDs;
 Logexporte daher vertraulich behandeln und nicht in Git committen.
 Die Diagnose startet keinen Browser neu und führt keine Buchung aus.
 
+## Überwachung
+
+Die API merkt sich den letzten Bericht jedes Terminals im Speicher. Die Seite
+**Admin → Terminalstatus** (`/admin/terminals`) zeigt für jedes Terminal mit
+Eintrag in `terminalTokens` den Zustand, die Zeit seit dem letzten Bericht,
+aktive Probleme und die letzten Werte. Sie lädt sich alle 30 Sekunden neu.
+
+Ein Hintergrunddienst prüft jede Minute. Beginnt eine Störung, schickt er eine
+Telegram-Nachricht an `telegramAlertChatId` (leer: `telegramChatId`), und eine
+zweite, wenn sie endet. Dazwischen gibt es keine Erinnerungen. Mehrere
+Änderungen eines Terminals gehen als eine Nachricht raus. Nimmt Telegram eine
+Nachricht nicht an, versucht es die nächste Prüfung erneut.
+
+| Bedingung | Alarm | ab Dauer | Entwarnung |
+|---|---|---|---|
+| Terminal meldet sich nicht | kein Bericht seit > 5 min | – | nächster Bericht |
+| Kiosk-Seite hängt | `uiStatus` `missing`/`not-seen` | 3 min seit letztem Lebenszeichen | `alive` |
+| Offline-Stempel stauen sich | `pending` > 0 | 15 min | `pending` = 0 |
+| Stromversorgung | aktuelle Drosselungsbits (0–3) | 2 min | Bits frei |
+| Temperatur | ≥ 80 °C | 5 min | < 75 °C |
+| Arbeitsspeicher | < 100 MB frei | 5 min | > 150 MB |
+| CPU | > 90 % | 10 min | < 70 % |
+| Speicherplatz | < 500 MB frei | – | > 750 MB |
+
+Zwischen Alarm- und Entwarnungsgrenze bleibt der bisherige Zustand bestehen.
+Fehlt ein Messwert, ändert sich der Zustand dieser Bedingung ebenfalls nicht.
+Solange ein Terminal nicht erreichbar ist, entstehen aus seinen alten Werten
+keine neuen Alarme und keine Entwarnungen. Hat sich ein Terminal seit dem
+API-Start noch nie gemeldet, gilt der Start als letzter Bericht. Die
+Entwarnung „wieder erreichbar“ unterscheidet über die Laufzeit des Pis
+zwischen Neustart und durchgelaufenem Pi (dann eher Netz oder Tailscale).
+
+Grenzen:
+- Vom Server aus sieht ein Netzausfall genauso aus wie ein eingefrorener Pi.
+- Reagiert nur der Touchscreen nicht, während Seite und Lebenszeichen
+  weiterlaufen, ist das von außen nicht erkennbar.
+- Der Zustand liegt nur im Speicher. Nach einem API-Neustart kann eine
+  laufende Störung erneut gemeldet werden, und eine Entwarnung über den
+  Neustart hinweg entfällt.
+- Ohne Telegram-Konfiguration zeigt nur die Statusseite die Störungen.
+
 ## Beim nächsten Hänger
 
 Vor einem Neustart festhalten: Läuft die Sekundenanzeige weiter? Reagieren

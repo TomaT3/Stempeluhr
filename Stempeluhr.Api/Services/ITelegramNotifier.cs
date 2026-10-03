@@ -20,4 +20,10 @@ public interface ITelegramNotifier
 
     /// <summary>Returns true only when Telegram accepted the message.</summary>
     Task<bool> SendMessageAsync(string text);
+
+    /// <summary>
+    /// Technical warning to <see cref="Models.RuntimeSettings.TelegramAlertChat"/>.
+    /// Returns true only when Telegram accepted the message.
+    /// </summary>
+    Task<bool> SendAlertAsync(string text);
 }

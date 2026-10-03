@@ -37,12 +37,17 @@ public sealed class TelegramNotifier(
         }
     }
 
-    public async Task<bool> SendMessageAsync(string text)
+    public Task<bool> SendMessageAsync(string text) => SendAsync(text, settings => settings.TelegramChatId);
+
+    public Task<bool> SendAlertAsync(string text) => SendAsync(text, settings => settings.TelegramAlertChat);
+
+    private async Task<bool> SendAsync(string text, Func<RuntimeSettings, string?> chat)
     {
         try
         {
             var settings = settingsStore.Load();
-            if (!settings.TelegramEnabled)
+            var chatId = chat(settings);
+            if (string.IsNullOrWhiteSpace(settings.TelegramBotToken) || string.IsNullOrWhiteSpace(chatId))
             {
                 return false;
             }
@@ -55,7 +60,7 @@ public sealed class TelegramNotifier(
             // ([0-9A-Za-z:_-]) sind URL-sicher.
             var response = await client.PostAsJsonAsync(
                 $"/bot{settings.TelegramBotToken}/sendMessage",
-                new { chat_id = settings.TelegramChatId, text });
+                new { chat_id = chatId, text });
 
             if (!response.IsSuccessStatusCode)
             {
