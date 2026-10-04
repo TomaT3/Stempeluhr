@@ -288,12 +288,18 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIsNone(maintenance.read_result(folder))
 
     def test_external_newer_version_is_never_downgraded_by_rollback(self):
-        snapshot = {"originals": {"pcscd": [OLD, "arm64"]}, "targetVersion": VERSION, "agentActive": False}
+        snapshot = {"originals": {"pcscd": [OLD, "arm64"]}, "targetVersion": VERSION, "agentActive": True}
         with patch.object(maintenance, "installed", return_value=("2.6.0-1", "arm64")), \
-             patch.object(maintenance, "command") as command:
+             patch.object(maintenance, "command") as command, \
+             patch.object(maintenance.subprocess, "run", return_value=Mock(returncode=0)) as run:
             with self.assertRaisesRegex(ValueError, "kein automatisches Downgrade"):
                 maintenance.rollback(self.root, snapshot)
         command.assert_not_called()
+        self.assertEqual([call.args[0] for call in run.call_args_list], [
+            ["systemctl", "unmask", "--runtime", *maintenance.PCSC_UNITS],
+            ["systemctl", "daemon-reload"],
+            ["systemctl", "start", "pcscd.socket", "pcscd.service"],
+            ["systemctl", "start", maintenance.AGENT_SERVICE]])
 
     def test_package_changes_between_prepare_and_activate_do_not_interrupt_services(self):
         folder = self.root / "activation"
@@ -339,6 +345,17 @@ class MaintenanceTests(unittest.TestCase):
         with patch.object(maintenance, "bundle_version", return_value=VERSION):
             self.assertTrue(maintenance.auto_possible())
             maintenance.record_auto_attempt(VERSION)
+            self.assertFalse(maintenance.auto_possible())
+        with patch.object(maintenance, "bundle_version", return_value="2.5.3-1~stempeluhr13.1"):
+            self.assertTrue(maintenance.auto_possible())
+        # Bundles without packages (plain script builds) never migrate automatically.
+        with patch.object(maintenance, "bundle_version", return_value=None):
+            self.assertFalse(maintenance.auto_possible())
+
+    def test_newer_revision_marker_blocks_retry_after_bundle_rollback(self):
+        with patch.object(maintenance, "bundle_version", return_value=VERSION):
+            with patch.object(maintenance, "MIGRATION_REVISION", maintenance.MIGRATION_REVISION + 1):
+                maintenance.record_auto_attempt(VERSION)
             self.assertFalse(maintenance.auto_possible())
 
     def test_legacy_failed_marker_allows_exactly_one_corrected_attempt(self):
@@ -403,9 +420,29 @@ class MaintenanceTests(unittest.TestCase):
         self.assertFalse(runtime.exists())
         runtime.mkdir()
         (runtime / "unexpected").touch()
-        with self.assertRaises(OSError):
+        (runtime / "pcscd.pid").write_text("preserve until preflight succeeds")
+        with self.assertRaisesRegex(ValueError, "unerwartete Dateien"):
             maintenance.reset_pcsc_runtime()
         self.assertTrue((runtime / "unexpected").exists())
+        self.assertTrue((runtime / "pcscd.pid").exists())
+
+    def test_prepare_rejects_unexpected_runtime_files_without_service_changes(self):
+        runtime = maintenance.PCSC_RUNTIME
+        runtime.mkdir()
+        (runtime / "unexpected").touch()
+        with self.assertRaisesRegex(ValueError, "unerwartete Dateien"):
+            self.prepare()
+        self.assertFalse(maintenance.STATE.exists())
+        self.assertTrue((runtime / "unexpected").exists())
+
+    def test_prepare_rejects_symlinked_runtime_without_service_changes(self):
+        target = self.root / "runtime-target"
+        target.mkdir()
+        maintenance.PCSC_RUNTIME.symlink_to(target, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "Symlink"):
+            self.prepare()
+        self.assertFalse(maintenance.STATE.exists())
+        self.assertTrue(maintenance.PCSC_RUNTIME.is_symlink())
 
     def test_service_transition_masks_socket_and_recreates_runtime_before_start(self):
         with patch.object(maintenance, "command") as command, \
@@ -433,11 +470,6 @@ class MaintenanceTests(unittest.TestCase):
         self.assertNotIn("PUBLIC_PROBE_SOURCE", stderr.getvalue())
         self.assertNotIn("PROBE_COMMAND", stderr.getvalue())
         self.assertNotIn("SECRET", stderr.getvalue())
-        with patch.object(maintenance, "bundle_version", return_value="2.5.3-1~stempeluhr13.1"):
-            self.assertTrue(maintenance.auto_possible())
-        # Bundles without packages (plain script builds) never migrate automatically.
-        with patch.object(maintenance, "bundle_version", return_value=None):
-            self.assertFalse(maintenance.auto_possible())
 
     def test_a_running_migration_is_not_reported_as_needing_manual_action(self):
         maintenance.STATE.mkdir()

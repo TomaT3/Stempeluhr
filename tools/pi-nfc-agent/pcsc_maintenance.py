@@ -120,7 +120,7 @@ def auto_possible():
     try:
         marker = json.loads(auto_marker().read_text())
         return (marker.get("targetVersion") != version
-                or marker.get("migrationRevision", 1) != MIGRATION_REVISION)
+                or marker.get("migrationRevision", 1) < MIGRATION_REVISION)
     except (OSError, ValueError):
         return True
 
@@ -253,6 +253,7 @@ def prepare():
         if held & selected.keys():
             raise ValueError("PC/SC-Pakete sind gehalten; Hold zuerst ausdrücklich klären")
         simulate(selected.values())
+        validate_pcsc_runtime()
         for unit in PCSC_UNITS:
             if command("systemctl", "show", unit, "--property=LoadState", "--value") == "masked":
                 raise ValueError("PC/SC-Dienst oder Socket ist maskiert; manuell prüfen")
@@ -417,11 +418,20 @@ def pause_pcsc():
     command("systemctl", "mask", "--runtime", "--now", *PCSC_UNITS)
 
 
-def reset_pcsc_runtime():
-    # Both units are stopped/masked. Never reuse a PID/socket/directory owned by
-    # the previous service user. Reject unexpected files instead of deleting them.
+def validate_pcsc_runtime():
+    """Read-only preflight, repeated before cleanup in case the state changed."""
     if PCSC_RUNTIME.is_symlink():
         raise ValueError("PC/SC-Laufzeitverzeichnis ist ein Symlink")
+    if PCSC_RUNTIME.exists():
+        if not PCSC_RUNTIME.is_dir() or any(
+                path.name not in ("pcscd.pid", "pcscd.comm") for path in PCSC_RUNTIME.iterdir()):
+            raise ValueError("PC/SC-Laufzeitverzeichnis enthält unerwartete Dateien; manuell prüfen")
+
+
+def reset_pcsc_runtime():
+    # Both units are stopped/masked. Never reuse a PID/socket/directory owned by
+    # the previous service user. Reject unexpected files before deleting anything.
+    validate_pcsc_runtime()
     for name in ("pcscd.pid", "pcscd.comm"):
         (PCSC_RUNTIME / name).unlink(missing_ok=True)
     if PCSC_RUNTIME.exists():
@@ -465,13 +475,21 @@ def resume_pcsc():
     command("systemctl", "start", "pcscd.service")
 
 
+def recover_pcsc_services(snapshot):
+    """Best effort: our runtime masks must not outlive a rejected/failed rollback."""
+    subprocess.run(["systemctl", "unmask", "--runtime", *PCSC_UNITS], check=False)
+    subprocess.run(["systemctl", "daemon-reload"], check=False)
+    subprocess.run(["systemctl", "start", "pcscd.socket", "pcscd.service"], check=False)
+    if snapshot.get("agentActive"):
+        subprocess.run(["systemctl", "start", AGENT_SERVICE], check=False)
+
+
 def rollback(folder, snapshot):
     # A separately started APT update must not be overwritten by our rollback.
     for p, expected in snapshot["originals"].items():
         current = installed(p)
         if current is not None and current[0] not in (expected[0], snapshot.get("targetVersion")):
-            if snapshot["agentActive"]:
-                command("systemctl", "start", AGENT_SERVICE)
+            recover_pcsc_services(snapshot)
             raise ValueError("PC/SC-Version wurde außerhalb der Migration verändert; kein automatisches Downgrade")
     command("systemctl", "stop", AGENT_SERVICE)
     try:
@@ -496,12 +514,7 @@ def rollback(folder, snapshot):
         resume_pcsc()
     except Exception:
         # Even a failed rollback must not leave the terminal without NFC.
-        # Runtime masks created by us must not outlive a failed package restore.
-        subprocess.run(["systemctl", "unmask", "--runtime", *PCSC_UNITS], check=False)
-        subprocess.run(["systemctl", "daemon-reload"], check=False)
-        subprocess.run(["systemctl", "start", "pcscd.socket", "pcscd.service"], check=False)
-        if snapshot.get("agentActive"):
-            subprocess.run(["systemctl", "start", AGENT_SERVICE], check=False)
+        recover_pcsc_services(snapshot)
         raise
     if snapshot["agentActive"]:
         command("systemctl", "start", AGENT_SERVICE)
