@@ -46,10 +46,20 @@ weitergereicht. Die Queue bleibt dabei erhalten.
 - `install.sh` – Ersteinrichtung bzw. Umstellung eines Pis
   (siehe [docs/raspberry-pi-kiosk-nfc.md](../../docs/raspberry-pi-kiosk-nfc.md))
 - `build-bundle.sh` – baut im Docker-Image das Bundle für `/pi/`
+- `pcsc_maintenance.py`, `probe_reader.py`, `pcsc/` – explizite Paketmigration
+  mit Originalsicherung und Rollback; Leserprüfung ohne Scan. Pakete entstehen
+  beim Docker-Build aus `tools/pcsc`; der normale Updater prüft nur den Fixstand.
 - `config.example.json` – Beispielkonfiguration
 - `test_scan_handling.py`, `test_local_scan_server.py` – Selbsttests ohne
   Kartenleser (`python3 <datei>`); Updater-Test:
   `bash tools/testenv/test_pi_update.sh`
+
+Der Agent hält einen Leser und dessen PC/SC-Kontext zwischen Abfragen offen.
+Jeder gelesene Kartenhandle wird geschlossen; ohne Karte entsteht kein neuer
+Kontext pro Abfrage. Bei USB-/Dienstfehlern wird die Sitzung freigegeben und
+neu aufgebaut, ebenso werden Ressourcen bei SIGTERM freigegeben. Das ersetzt
+den Polkit-Fix ab pcsc-lite 2.5.0 nicht: Berechtigungsprüfungen finden weiterhin
+statt. [Bestandsmigration und Rollback](../../docs/raspberry-pi-kiosk-nfc.md#pcsc-paketmigration-bestehender-terminals).
 
 ## Konfiguration
 

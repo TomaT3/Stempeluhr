@@ -37,6 +37,18 @@ fi
 log() { echo "stempeluhr-agent-update: $*"; }
 fail() { log "FEHLER: $*" >&2; exit 1; }
 
+# Serialize agent changes with the explicitly started PC/SC package migration.
+mkdir -p "$BASE_DIR"
+if [ "${STEMPELUHR_AGENT_UPDATE_LOCKED:-}" != 1 ]; then
+  # --close prevents restarted child processes from keeping the lock alive.
+  exec env STEMPELUHR_AGENT_UPDATE_LOCKED=1 flock -x --close "$BASE_DIR/.maintenance.lock" bash "$0" "$@"
+fi
+if [ -f "$BASE_DIR/current/pcsc_maintenance.py" ]; then
+  if ! python3 "$BASE_DIR/current/pcsc_maintenance.py" --check; then
+    log "WARNUNG: PC/SC-Paketmigration erforderlich; Agent-Update bleibt möglich (siehe Pi-Anleitung)." >&2
+  fi
+fi
+
 # Liest einen Wert aus einer JSON-Datei (python3 ist für den Agenten ohnehin da).
 json_value() { # datei schluessel default
   python3 - "$1" "$2" "$3" <<'PY'

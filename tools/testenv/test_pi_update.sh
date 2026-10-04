@@ -126,6 +126,8 @@ if run_update --force; then ok "update.sh --force endet erfolgreich"; else bad "
 [ "$(health_version)" = "1.0.0" ] && ok "/health meldet 1.0.0" || bad "/health meldet $(health_version)"
 [ -f "$WORK/systemd/stempeluhr-nfc-agent-update.timer" ] && ok "systemd-Units installiert" || bad "Units fehlen"
 [ -f "$WORK/opt/current/terminal_diagnostics.py" ] && ok "Diagnosemodul im Bundle" || bad "Diagnosemodul fehlt"
+[ -f "$WORK/opt/current/pcsc_maintenance.py" ] && [ -f "$WORK/opt/current/probe_reader.py" ] \
+  && ok "PC/SC-Migration und Leserprüfung im Bundle" || bad "PC/SC-Hilfsdateien fehlen"
 grep -q '^Storage=persistent' "$WORK/journald/stempeluhr.conf" \
   && ok "Journal überlebt Neustarts" || bad "Persistentes Journal fehlt"
 grep -q "current/stempeluhr_nfc_agent.py" "$WORK/systemd/stempeluhr-nfc-agent.service" \

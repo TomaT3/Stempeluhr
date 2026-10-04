@@ -22,10 +22,12 @@
 # WLAN-Power-Save, unattended-upgrades.
 set -euo pipefail
 
-CONFIG_DIR=/etc/stempeluhr-nfc-agent
+CONFIG_DIR="${STEMPELUHR_CONFIG_DIR:-/etc/stempeluhr-nfc-agent}"
 CONFIG="$CONFIG_DIR/config.json"
-AGENT_DIR=/opt/stempeluhr-nfc-agent
+AGENT_DIR="${STEMPELUHR_AGENT_DIR:-/opt/stempeluhr-nfc-agent}"
 SERVICE_USER=stempeluhr
+CHROMIUM_POLICY_DIR="${STEMPELUHR_CHROMIUM_POLICY_DIR:-/etc/chromium/policies/managed}"
+export STEMPELUHR_AGENT_CONFIG="$CONFIG" STEMPELUHR_AGENT_DIR="$AGENT_DIR"
 
 SERVER=""
 TERMINAL_ID=""
@@ -77,7 +79,7 @@ log "Service-Benutzer '$SERVICE_USER' und PC/SC-Zugriff"
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home /nonexistent --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
-POLKIT_RULE=/etc/polkit-1/rules.d/50-stempeluhr-pcsc.rules
+POLKIT_RULE="${STEMPELUHR_POLKIT_RULE:-/etc/polkit-1/rules.d/50-stempeluhr-pcsc.rules}"
 POLKIT_CONTENT='polkit.addRule(function(action, subject) {
     if ((action.id == "org.debian.pcsc-lite.access_pcsc" ||
          action.id == "org.debian.pcsc-lite.access_card") &&
@@ -138,6 +140,12 @@ curl -fsS --max-time 30 -o "$UPDATER" "$SERVER/pi/update.sh" || fail "$SERVER/pi
 bash "$UPDATER" --force
 [ -f "$AGENT_DIR/current/VERSION" ] || fail "$SERVER liefert kein Agent-Bundle (/pi/agent.json)"
 
+if [ "$SKIP_APT" -eq 0 ]; then
+  [ -f "$AGENT_DIR/current/pcsc_maintenance.py" ] || fail "Agent-Bundle enthält keine PC/SC-Paketprüfung; Server zuerst aktualisieren"
+  log "PC/SC-Fixstand prüfen und bei Bedarf migrieren (kurze NFC-Unterbrechung)"
+  python3 "$AGENT_DIR/current/pcsc_maintenance.py" --apply || fail "PC/SC-Paketmigration fehlgeschlagen; Originalpakete und Dienstjournal prüfen"
+fi
+
 # Dateien des alten, manuell kopierten Agenten (vor dem Release-Layout).
 rm -f "$AGENT_DIR"/*.py "$AGENT_DIR"/*.py.bak-*
 
@@ -151,9 +159,9 @@ systemctl enable --now stempeluhr-nfc-agent-update.timer
 # LoopbackNetworkAllowedForUrls, ältere Versionen ignorieren unbekannte
 # Einträge. Wirkt beim nächsten Chromium-Start.
 log "Chromium-Policy: lokalen Agenten für $SERVER erlauben"
-mkdir -p /etc/chromium/policies/managed
+mkdir -p "$CHROMIUM_POLICY_DIR"
 printf '{\n  "LocalNetworkAccessAllowedForUrls": ["%s"],\n  "LoopbackNetworkAllowedForUrls": ["%s"]\n}\n' "$SERVER" "$SERVER" \
-  > /etc/chromium/policies/managed/stempeluhr.json
+  > "$CHROMIUM_POLICY_DIR/stempeluhr.json"
 
 if [ -n "$KIOSK_USER" ]; then
   id "$KIOSK_USER" >/dev/null 2>&1 || fail "Kiosk-Benutzer '$KIOSK_USER' existiert nicht"

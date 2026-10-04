@@ -1,4 +1,4 @@
-# Raspberry Pi 5 als NFC-Terminal (Bookworm)
+# Raspberry Pi 5 als NFC-Terminal (Trixie, 64-bit)
 
 Ein Terminal besteht aus Chromium im Kioskmodus (`/terminal?terminalId=<id>`)
 und dem NFC-Agenten für den ACR122U. Den Agenten installiert und aktualisiert
@@ -14,6 +14,9 @@ Im Folgenden steht `<host>` für die externe HTTPS-Adresse der Stempeluhr, z. B.
 Im Raspberry Pi Imager:
 
 - Raspberry Pi OS (64-bit) mit Desktop
+- Für die mitgelieferte PC/SC-Paketmigration: Debian / Raspberry Pi OS 13
+  (Trixie), arm64. Bookworm-Bestandsterminals können den Agenten weiter
+  aktualisieren, erhalten aber keinen ungeprüften Trixie-Paketbackport.
 - Hostname z. B. `stempeluhr-02`
 - Benutzer `stempeluhradmin` (Wartung per SSH)
 - SSH aktivieren, WLAN/LAN konfigurieren
@@ -189,3 +192,92 @@ muss `off` melden.
   Hängt ein Kiosk trotzdem auf einer alten App, hilft
   `tools/deploy/pi-deploy.sh kiosk` (Cache-Reset + Reboot).
 - Wartung nur über `stempeluhradmin`; `kiosk` braucht keinen SSH-Zugang.
+
+## PC/SC-Paketmigration bestehender Terminals
+
+Der Installer prüft nach der normalen Einrichtung den PC/SC-Fixstand und
+migriert Trixie/arm64 bei Bedarf auf den mitgelieferten Stand 2.5.2. Ein
+erneuter Installer-Lauf führt dieselbe Prüfung aus. `--skip-apt` überspringt
+Paketinstallation und Migration. Eine bereits geeignete Version >= 2.5.0
+wird nicht ersetzt. Details zu Quelle und Sicherheitsupdates:
+[PC/SC-Paketversorgung](../tools/pcsc/README.md).
+
+**Bestands-Pis erhalten den Paketwechsel ausdrücklich im Wartungsfenster.**
+Das normale Agent-Update liefert Hilfsskripte und Pakete aus und meldet einen
+fehlenden Fixstand; es führt keine Paketmigration aus. Führt zunächst noch
+ein alter Updater das Bundle-Update aus, prüft der nächste Timer-Lauf des
+neuen Updaters den Fixstand auch bei gleicher Agent-Version. Die neue
+Leser-Sitzung funktioniert bis zur Paketmigration weiter mit dem alten Stack.
+
+Nach dem Kunden-Deploy und dem Agent-Update auf dem Pi:
+
+```bash
+sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --check
+# Erst im vereinbarten Wartungsfenster:
+sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --apply
+```
+
+Vor dem Paketwechsel werden Prüfsummen, Paketmetadaten, Distribution und
+Architektur geprüft. Der Paketmanager simuliert Hin- und Rückinstallation;
+weitere Systempakete dürfen dabei weder geändert noch entfernt werden.
+Originalpakete müssen aus den vorhandenen APT-Quellen herunterladbar sein,
+sonst endet die Migration vor jeder Dienstunterbrechung. Falls der lokale
+APT-Index veraltet ist, vorher bewusst `sudo apt-get update` ausführen und
+erneut prüfen. Gehaltene Pakete und fehlende Unterstützung führen zu einem
+verständlichen Fehler. Ein installiertes `libpcsclite-dev` wird zusammen
+mit der exakt passenden Bibliothek aktualisiert.
+
+Originalpakete, PC/SC-Konfigurationsdateien, Agent-Konfiguration und Zustand
+liegen geschützt unter `/var/lib/stempeluhr-pcsc-migration/<lauf>/`. Die
+Aktivierung läuft als eigener systemd-Dienst weiter, wenn SSH abbricht.
+Vorher wird ein Rollback-Timer für fünf Minuten scharf geschaltet. Die
+Aktivierung darf höchstens vier Minuten laufen; bei einem Fehler wird
+sofort die Rückinstallation versucht. Ein abgebrochener Aktivierungslauf
+ohne bestätigten Erfolg wird durch den Timer zurückgerollt. Fehler beim
+Rollback müssen anhand des Dienstjournals behoben werden; ein Timer ist
+kein Ersatz für eine vorab geprüfte Originalsicherung.
+
+Unterbrochen wird nur der NFC-Stack. Agent und PC/SC-Dienst werden kurz
+angehalten beziehungsweise neu gestartet. SSH, Tailscale und Netzwerk
+werden nicht umkonfiguriert; ein Pi-Neustart ist nicht erforderlich.
+Die Prüfung umfasst Paketversion, PC/SC-Leser unter Benutzer `stempeluhr`,
+Dienststatus und bei einem vorher laufenden Agenten dessen `/health` und
+ein frisches Browser-Lebenszeichen. Ein echter Karten-Scan muss anschließend
+vor Ort geprüft werden. Eine geeignete Paketversion allein beweist keine
+behobene Speicherursache.
+
+```bash
+dpkg-query -W pcscd libpcsclite1
+sudo -u stempeluhr python3 /opt/stempeluhr-nfc-agent/current/probe_reader.py ACR122
+systemctl status pcscd stempeluhr-nfc-agent
+curl -fsS http://127.0.0.1:8737/diagnostics
+# <lauf> aus der Ausgabe von --apply übernehmen:
+sudo journalctl -u stempeluhr-pcsc-activate-<lauf>.service
+```
+
+Ein bewusst gewünschter späterer Paket-Rollback nach erfolgreicher
+Aktivierung verwendet die archivierten Originalpakete. Den Erfolgsmerker
+zuerst ausdrücklich entfernen, damit der automatische Rollback nach Erfolg
+weiterhin ein No-op bleibt:
+
+```bash
+sudo mv /var/lib/stempeluhr-pcsc-migration/<lauf>/result.json \
+  /var/lib/stempeluhr-pcsc-migration/<lauf>/result-before-manual-rollback.json
+sudo systemd-run --unit=stempeluhr-pcsc-manual-rollback --collect \
+  /usr/bin/python3 /var/lib/stempeluhr-pcsc-migration/<lauf>/pcsc_maintenance.py \
+  --rollback /var/lib/stempeluhr-pcsc-migration/<lauf>
+```
+
+Eine Rückinstallation stellt Originalpakete und gesicherte
+PC/SC-Konfiguration wieder her und prüft Leser, Dienste und Browser erneut.
+Ein Downgrade des Stempeluhr-Containers selbst rollt PC/SC nicht zurück.
+
+Für den Vergleich mit **unverändertem Agenten** die Wartungsdateien
+(`pcsc_maintenance.py`, `probe_reader.py`, Verzeichnis `pcsc`) aus dem
+geprüften neuen Bundle in ein separates geschütztes Wartungsverzeichnis
+kopieren. Von dort `--apply` ausführen, ohne `current` umzustellen. Während
+dieser Messphase den Agent-Update-Timer vorübergehend anhalten und danach
+wieder starten. Der Paketwechsel startet den bisherigen Agenten erneut;
+sein Anwendungscode bleibt gleich. Erst nach der Paket-Vergleichsmessung
+folgt der neue Agent. Mindestens 24 Stunden gemeinsamen Betrieb sowie
+echtes Entfernen/Wiederauflegen einer Karte und Leser-Wiederverbindung prüfen.

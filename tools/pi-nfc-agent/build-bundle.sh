@@ -19,11 +19,16 @@ esac
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-for f in stempeluhr_nfc_agent.py terminal_diagnostics.py journald-stempeluhr.conf update.sh install.sh config.example.json \
+for f in stempeluhr_nfc_agent.py terminal_diagnostics.py pcsc_maintenance.py probe_reader.py journald-stempeluhr.conf update.sh install.sh config.example.json \
   stempeluhr-nfc-agent.service stempeluhr-nfc-agent-update.service \
   stempeluhr-nfc-agent-update.timer; do
   cp "$SRC/$f" "$STAGE/$f"
 done
+# The Docker build supplies Trixie/arm64 packages; plain script tests may omit
+# them. In that case --apply fails before touching the terminal's packages.
+if [ -d "$SRC/pcsc" ]; then
+  cp -R "$SRC/pcsc" "$STAGE/pcsc"
+fi
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 
 mkdir -p "$OUT"
