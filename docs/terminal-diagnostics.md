@@ -106,8 +106,10 @@ Die Messungen vom 04.10.2026 in
 des anonymen `pcscd`-Speichers einschließlich Swap auf einem Trixie/arm64-Pi
 mit pcsc-lite 2.3.3 und Polkit. Ein plötzlich fallender RSS oder steigender
 `MemAvailable` ist keine Entwarnung: Seiten können nur ausgelagert worden
-sein. Der Upstream-Polkit-Fix ist ab 2.5.0 enthalten; seine Wirksamkeit auf
-dem konkreten Pi bleibt durch den Vergleich zu bestätigen.
+sein. pcscd 2.3.3 verliert bei jeder Polkit-Prüfung (neuer PC/SC-Kontext,
+jede Kartenverbindung) Speicher; der Upstream-Fix ist ab 2.5.0 enthalten.
+Der Agent wartet deshalb ereignisgesteuert auf Karten und verbindet sich nur
+noch einmal pro aufgelegter Karte; die Paketmigration liefert den Fix selbst.
 
 Die Agent-Historie, API-Diagnose und Influx enthalten `pcscdRssKb`,
 `pcscdAnonymousKb`, `pcscdSwapKb` und `pcscdAnonymousAndSwapKb`. Die Summe
@@ -120,14 +122,12 @@ installierte Debian-Paketversion, wird spätestens alle zehn Minuten neu
 abgefragt und beweist allein nicht den Stand eines laufenden alten Binaries.
 Messwerte in KiB werden im Adminbereich in MiB angezeigt.
 
-Den [Paketwechsel](raspberry-pi-kiosk-nfc.md#pcsc-paketmigration-bestehender-terminals)
-zuerst mit unverändertem Agent-Code messen. Vorher-/Nachher-Läufe mit
-niedrigem Ausgangsspeicher, gleichem Leser, vergleichbarer Last,
-Agent-/PCSC-Version und Prozessidentität vergleichen. Anschließend neuen
-Agenten gemeinsam mit dem Paket mindestens 24 Stunden prüfen. Erwartet
-wird ein begrenzter Verlauf nach der Aufwärmphase, ohne fortlaufendes
-Wachstum von anonymem RAM plus Swap. Neustarts während der Messung
-kennzeichnen; sie setzen den Verlauf zurück und sind kein Fixnachweis.
+Nach dem [Paketwechsel](raspberry-pi-kiosk-nfc.md#pcsc-paketmigration-bestehender-terminals)
+den Verlauf von `pcscdAnonymousAndSwapKb` mindestens 24 Stunden beobachten.
+Erwartet wird ein begrenzter Verlauf nach der Aufwärmphase, ohne
+fortlaufendes Wachstum von anonymem RAM plus Swap. Ein neuer `pcscdStartTicks`
+kennzeichnet einen Neustart; er setzt den Verlauf zurück und ist kein
+Fixnachweis.
 Bei weiterem Wachstum Heap-Profil/Allokationsdiagnose des NFC-Stacks
 erstellen und Leck, Retention oder Fragmentierung unterscheiden.
 

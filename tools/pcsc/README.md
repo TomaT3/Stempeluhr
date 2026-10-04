@@ -46,9 +46,9 @@ SHA-256 authentifiziert der bestehende Updater über die Serververbindung.
 Ein bereits installierter Fixstand **>= 2.5.0** wird nicht durch den Backport
 ersetzt. Der Installer installiert zuerst Pakete aus den konfigurierten
 APT-Quellen; liefert APT einen geeigneten Stand, ist kein Backport nötig.
-Die explizite Migration unterstützt zunächst nur Trixie/arm64. Andere
-Systeme ohne geeigneten Fixstand melden einen Fehler vor dem Paketwechsel.
-`--skip-apt` überspringt auch die Migration.
+Die Migration unterstützt zunächst nur Trixie/arm64. Andere Systeme ohne
+geeigneten Fixstand melden einen Fehler vor dem Paketwechsel.
+`--skip-apt` überspringt die Migration im Installer.
 
 Es wird weder `apt-mark hold` noch ein APT-Pin gesetzt. Ein offizielles Paket
 derselben Version ohne `~stempeluhr13.1` oder einer höheren Version löst den
@@ -59,10 +59,11 @@ aus. Sicherheitsupdates für andere Pakete bleiben unabhängig davon möglich.
 Auch der Backport muss gepflegt werden: neuere Upstream-/Debian-Fixes prüfen,
 Quellstand und Prüfsummen aktualisieren, Pakete neu bauen und testen.
 
-Der normale Agent-Updater prüft den installierten Fixstand bei jedem Lauf
-und meldet einen fehlenden Fix. Er installiert keine Betriebssystempakete.
-Eine ältere Container-/Agent-Version rollt PC/SC-Pakete nicht automatisch
-zurück. Der getrennte Paket-Rollback ist in der
+Der Agent-Updater prüft den installierten Fixstand nach jedem erfolgreichen
+Lauf. Fehlt er, startet er die Migration einmal pro mitgelieferter
+Paketversion als eigenen systemd-Dienst; ein gescheiterter Versuch wird
+zurückgerollt und erst nach einem manuellen `--apply` wiederholt. Eine
+ältere Container-/Agent-Version rollt PC/SC-Pakete nicht automatisch zurück. Der getrennte Paket-Rollback ist in der
 [Pi-Anleitung](../../docs/raspberry-pi-kiosk-nfc.md#pcsc-paketmigration-bestehender-terminals)
 beschrieben.
 
@@ -71,4 +72,4 @@ beschrieben.
 Paketbuild, Installierbarkeit, Polkit/libudev, GLib-Fixsymbole und
 Rückinstallation werden in einem wegwerfbaren Trixie/arm64-Container geprüft.
 Das ersetzt weder die Prüfung eines ACR122U am Pi noch einen echten Scan
-oder den mindestens 24-stündigen Speichervergleich für Issue #86.
+oder die mindestens 24-stündige Speicherbeobachtung für Issue #86.

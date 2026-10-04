@@ -26,6 +26,7 @@ done
 cat > "$out" <<'UPDATER'
 mkdir -p "$STEMPELUHR_AGENT_DIR/current"
 echo 1.0.0 > "$STEMPELUHR_AGENT_DIR/current/VERSION"
+echo "${STEMPELUHR_PCSC_AUTO:-unset}" > "$TEST_INSTALL_WORK/updater-auto.log"
 cp "$TEST_INSTALL_WORK/maintenance.py" "$STEMPELUHR_AGENT_DIR/current/pcsc_maintenance.py"
 UPDATER
 EOF
@@ -50,6 +51,8 @@ CONFIG_HASH="$(sha256sum "$WORK/config/config.json")"
 bash "$ROOT/tools/pi-nfc-agent/install.sh" > "$WORK/install.log"
 grep -q 'pcscd pcsc-tools python3-pyscard curl' "$WORK/apt.log"
 [ "$(cat "$WORK/migration.log")" = --apply ]
+# The installer migrates synchronously; the updater must not start a second run.
+[ "$(cat "$WORK/updater-auto.log")" = 0 ]
 [ "$(sha256sum "$WORK/config/config.json")" = "$CONFIG_HASH" ]
 
 touch "$WORK/fail-migration"

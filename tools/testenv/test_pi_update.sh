@@ -43,6 +43,14 @@ exec "$INSTALL_COMMAND" "\$@"
 EOF
 chmod +x "$WORK/bin/install"
 
+# No PC/SC packages installed; systemd-run only records the detached migration.
+printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/dpkg-query"
+cat > "$WORK/bin/systemd-run" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$WORK/systemd-run.log"
+EOF
+chmod +x "$WORK/bin/dpkg-query" "$WORK/bin/systemd-run"
+
 # pyscard-Stub: der Agent importiert smartcard beim Start.
 cat > "$WORK/stub/smartcard/__init__.py" <<'EOF'
 EOF
@@ -108,6 +116,7 @@ run_update() {
   STEMPELUHR_SYSTEMD_DIR="$WORK/systemd" \
   STEMPELUHR_JOURNALD_DIR="${TEST_JOURNALD_DIR:-$WORK/journald}" \
   STEMPELUHR_HEALTH_TIMEOUT=8 \
+  STEMPELUHR_PCSC_STATE="$WORK/pcsc-state" \
   PATH="$WORK/bin:$PATH" \
   SYSTEMCTL="$WORK/systemctl" \
     bash "$AGENT_SRC/update.sh" "$@" > "$WORK/update.log" 2>&1
@@ -233,6 +242,24 @@ say "8: Server zurückgerollt -> Agent folgt"
 publish 1.0.0
 if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
 [ "$(health_version)" = "1.0.0" ] && ok "Agent folgt auf 1.0.0" || bad "/health meldet $(health_version)"
+
+say "9: Fehlender PC/SC-Fix startet die Paketmigration automatisch"
+[ ! -f "$WORK/systemd-run.log" ] && ok "Bundles ohne Pakete starten keine Migration" || bad "Migration ohne Pakete gestartet"
+cp -r "$AGENT_SRC" "$WORK/pcsc-src"
+mkdir -p "$WORK/pcsc-src/pcsc"
+printf '{"version": "2.5.2-1~stempeluhr13.1", "packages": []}\n' > "$WORK/pcsc-src/pcsc/manifest.json"
+publish 1.4.0 "$WORK/pcsc-src"
+if run_update; then ok "Update endet erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
+grep -q -- '--unit=stempeluhr-pcsc-migration .*current/pcsc_maintenance.py --apply --auto' "$WORK/systemd-run.log" 2>/dev/null \
+  && ok "Migration nach dem Update losgelöst gestartet" || bad "Migration nicht gestartet: $(cat "$WORK/systemd-run.log" 2>/dev/null)"
+rm -f "$WORK/systemd-run.log"
+STEMPELUHR_PCSC_AUTO=0 run_update --force || bad "Update ohne Auto-Migration: $(tail -3 "$WORK/update.log")"
+[ ! -f "$WORK/systemd-run.log" ] && ok "Installer-Modus startet keine zweite Migration" || bad "Migration trotz STEMPELUHR_PCSC_AUTO=0"
+mkdir -p "$WORK/pcsc-state"
+printf '{"targetVersion": "2.5.2-1~stempeluhr13.1"}\n' > "$WORK/pcsc-state/auto-attempt.json"
+if run_update; then ok "Update nach Migrationsversuch erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
+[ ! -f "$WORK/systemd-run.log" ] && grep -q 'bereits versucht' "$WORK/update.log" \
+  && ok "Kein zweiter automatischer Versuch, Hinweis im Journal" || bad "Wiederholter Versuch oder Hinweis fehlt"
 
 say "Ergebnis: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" -eq 0 ]

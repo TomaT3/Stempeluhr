@@ -111,31 +111,46 @@ class MaintenanceTests(unittest.TestCase):
              patch.object(maintenance, "packages_from_manifest", return_value=(VERSION, packages)), \
              patch.object(maintenance, "package_info", side_effect=self.info), \
              patch.object(maintenance, "active", return_value=True), \
+             patch.object(maintenance, "browser_alive", return_value=True), \
              patch.object(maintenance, "command", side_effect=command):
             folder = maintenance.prepare()
         jobs = [args for args in calls if args[0] == "systemd-run"]
         self.assertEqual(len(jobs), 2)
-        self.assertIn("--on-active=5m", jobs[0])
+        self.assertIn("--on-active=20m", jobs[0])
         self.assertIn("--rollback", jobs[0])
         self.assertIn("--activate", jobs[1])
         self.assertEqual(len(list((folder / "old").glob("*.deb"))), 2)
         self.assertEqual(len(list((folder / "new").glob("*.deb"))), 2)
         self.assertEqual(folder.stat().st_mode & 0o077, 0)
         self.assertEqual(json.loads((folder / "config.json").read_text())["terminal_token"], "SECRET")
-        self.assertEqual(json.loads((folder / "snapshot.json").read_text())["auto"], ["libpcsclite1"])
+        snapshot = json.loads((folder / "snapshot.json").read_text())
+        self.assertEqual(snapshot["auto"], ["libpcsclite1"])
+        # A manual run also blocks a later automatic repeat of this version.
+        self.assertEqual(json.loads(maintenance.auto_marker().read_text())["targetVersion"], VERSION)
+        self.assertTrue(snapshot["browserAlive"])
 
-    def test_failed_reader_probe_after_activation_rolls_back(self):
+    def test_failed_reader_probe_starts_rollback_in_its_own_unit(self):
         folder = self.root / "activation"
         folder.mkdir()
         (folder / "new").mkdir()
         (folder / "snapshot.json").write_text(json.dumps({"agentActive": True, "auto": [], "rollbackUnit": "test", "originals": {}}))
-        with patch.object(maintenance, "command"), \
+        with patch.object(maintenance, "command") as command, \
              patch.object(maintenance, "verify", side_effect=ValueError("reader missing")), \
              patch.object(maintenance, "rollback") as rollback:
             with self.assertRaisesRegex(ValueError, "reader missing"):
                 maintenance.activate(folder)
-        rollback.assert_called_once()
-        self.assertIsNone(maintenance.read_result(folder))
+        # Not inside the time-limited activation unit: it could be killed mid-dpkg.
+        rollback.assert_not_called()
+        self.assertEqual(maintenance.read_result(folder)["status"], "failed")
+        job = command.call_args_list[-1].args
+        self.assertEqual(job[:2], ("systemd-run", "--unit=test-now"))
+        self.assertFalse(any(arg.startswith("--property=RuntimeMaxSec") for arg in job))
+        self.assertEqual(job[-2:], ("--rollback", str(folder)))
+
+    def test_result_wait_reports_failure_and_waits_for_the_rollback(self):
+        results = [None, {"status": "failed", "detail": "a"}, {"status": "rolled-back", "detail": "b"}]
+        with patch.object(maintenance, "read_result", side_effect=results), patch.object(maintenance.time, "sleep"):
+            self.assertEqual(maintenance.wait_for_result(self.root), 1)
 
     def test_success_is_committed_before_cancelling_the_timer(self):
         folder = self.root / "activation"
@@ -173,7 +188,10 @@ class MaintenanceTests(unittest.TestCase):
             maintenance.rollback(folder, snapshot)
         self.assertEqual(maintenance.read_result(folder)["status"], "rolled-back")
         verify.assert_called_once_with(folder, snapshot, require_fix=False)
-        self.assertTrue(any("--allow-downgrades" in call.args for call in command.call_args_list))
+        calls = [call.args for call in command.call_args_list]
+        install = next(i for i, args in enumerate(calls) if "--allow-downgrades" in args)
+        # An interrupted dpkg run is completed before the originals are reinstalled.
+        self.assertLess(calls.index(("dpkg", "--configure", "-a")), install)
 
     def test_wrong_restored_version_cannot_count_as_a_successful_rollback(self):
         folder = self.root / "rollback"
@@ -205,6 +223,57 @@ class MaintenanceTests(unittest.TestCase):
             maintenance.activate(folder)
         command.assert_not_called()
         self.assertEqual(maintenance.read_result(folder)["status"], "unchanged")
+
+    def verify_with(self, snapshot, ui_status, clock=None):
+        (self.root / "probe_reader.py").write_text("print('probe')")
+        responses = {"/health": {"ok": True}, "/diagnostics": {"uiStatus": ui_status}}
+        with patch.object(maintenance, "suitable", return_value=True), \
+             patch.object(maintenance, "command", return_value=""), \
+             patch.object(maintenance, "active", return_value=True), \
+             patch.object(maintenance, "http_json", side_effect=lambda port, path: responses[path]), \
+             patch.object(maintenance.time, "sleep"), \
+             patch.object(maintenance.time, "monotonic", side_effect=clock or [0, 0]):
+            maintenance.verify(self.root, {"readerFilter": "ACR122", "port": 8737, "agentActive": True, **snapshot})
+
+    def test_browser_heartbeat_is_required_only_if_it_existed_before(self):
+        self.verify_with({"browserAlive": False}, "not-seen")
+        self.verify_with({"browserAlive": True}, "alive")
+        with self.assertRaisesRegex(ValueError, "Browser-Lebenszeichen fehlt"):
+            self.verify_with({"browserAlive": True}, "not-seen", clock=[0, 0, 100])
+
+    def test_browser_detection_waits_for_the_first_heartbeat_after_a_restart(self):
+        with patch.object(maintenance, "http_json", side_effect=[{"uiStatus": "not-seen"}, {"uiStatus": "alive"}]), \
+             patch.object(maintenance.time, "sleep"):
+            self.assertTrue(maintenance.browser_alive(8737))
+        # Fresh install: no kiosk page ever reports.
+        with patch.object(maintenance, "http_json", return_value={"uiStatus": "not-seen"}), \
+             patch.object(maintenance.time, "sleep"), \
+             patch.object(maintenance.time, "monotonic", side_effect=[0, 10, 31]):
+            self.assertFalse(maintenance.browser_alive(8737))
+        with patch.object(maintenance, "http_json", side_effect=OSError("agent down")):
+            self.assertFalse(maintenance.browser_alive(8737))
+
+    def test_automatic_migration_is_attempted_once_per_bundle_version(self):
+        with patch.object(maintenance, "bundle_version", return_value=VERSION):
+            self.assertTrue(maintenance.auto_possible())
+            maintenance.record_auto_attempt(VERSION)
+            self.assertFalse(maintenance.auto_possible())
+        with patch.object(maintenance, "bundle_version", return_value="2.5.3-1~stempeluhr13.1"):
+            self.assertTrue(maintenance.auto_possible())
+        # Bundles without packages (plain script builds) never migrate automatically.
+        with patch.object(maintenance, "bundle_version", return_value=None):
+            self.assertFalse(maintenance.auto_possible())
+
+    def test_a_running_migration_is_not_reported_as_needing_manual_action(self):
+        maintenance.STATE.mkdir()
+        folder = self.root / "running"
+        folder.mkdir()
+        (maintenance.STATE / "pending.json").write_text(json.dumps({"folder": str(folder)}))
+        self.assertTrue(maintenance.migration_running())
+        maintenance.write_result(folder, "failed", "rollback follows")
+        self.assertTrue(maintenance.migration_running())
+        maintenance.write_result(folder, "rolled-back", "done")
+        self.assertFalse(maintenance.migration_running())
 
     def test_health_alone_cannot_pass_verification(self):
         (self.root / "probe_reader.py").write_text("print('probe')")

@@ -137,7 +137,8 @@ mkdir -p "$AGENT_DIR"
 UPDATER="$(mktemp)"
 trap 'rm -f "$UPDATER"' EXIT
 curl -fsS --max-time 30 -o "$UPDATER" "$SERVER/pi/update.sh" || fail "$SERVER/pi/update.sh nicht erreichbar"
-bash "$UPDATER" --force
+# The installer runs the PC/SC migration itself below and reports its result.
+STEMPELUHR_PCSC_AUTO=0 bash "$UPDATER" --force
 [ -f "$AGENT_DIR/current/VERSION" ] || fail "$SERVER liefert kein Agent-Bundle (/pi/agent.json)"
 
 if [ "$SKIP_APT" -eq 0 ]; then

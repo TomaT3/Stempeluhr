@@ -195,27 +195,34 @@ muss `off` melden.
 
 ## PC/SC-Paketmigration bestehender Terminals
 
-Der Installer prüft nach der normalen Einrichtung den PC/SC-Fixstand und
-migriert Trixie/arm64 bei Bedarf auf den mitgelieferten Stand 2.5.2. Ein
-erneuter Installer-Lauf führt dieselbe Prüfung aus. `--skip-apt` überspringt
-Paketinstallation und Migration. Eine bereits geeignete Version >= 2.5.0
-wird nicht ersetzt. Details zu Quelle und Sicherheitsupdates:
+pcscd 2.3.3 (Trixie) verliert bei jeder Polkit-Berechtigungsprüfung Speicher;
+der Upstream-Fix ist ab pcsc-lite 2.5.0 enthalten. Das Agent-Bundle bringt
+2.5.2 für Trixie/arm64 mit. Eine bereits geeignete Version >= 2.5.0 wird nicht
+ersetzt. Details zu Quelle und Sicherheitsupdates:
 [PC/SC-Paketversorgung](../tools/pcsc/README.md).
 
-**Bestands-Pis erhalten den Paketwechsel ausdrücklich im Wartungsfenster.**
-Das normale Agent-Update liefert Hilfsskripte und Pakete aus und meldet einen
-fehlenden Fixstand; es führt keine Paketmigration aus. Führt zunächst noch
-ein alter Updater das Bundle-Update aus, prüft der nächste Timer-Lauf des
-neuen Updaters den Fixstand auch bei gleicher Agent-Version. Die neue
-Leser-Sitzung funktioniert bis zur Paketmigration weiter mit dem alten Stack.
+**Der Paketwechsel läuft automatisch.** Nach jedem erfolgreichen Lauf des
+Agent-Updaters (Timer alle 15 Minuten) prüft das installierte Bundle den
+PC/SC-Stand. Fehlt der Fix, startet der Updater die Migration als eigenen
+systemd-Dienst `stempeluhr-pcsc-migration`; sie beginnt, sobald der Updater
+fertig ist. Nach einem Server-Deploy ist ein Bestands-Pi damit spätestens
+nach zwei Timer-Läufen migriert. Der Installer führt dieselbe Migration
+direkt aus und meldet ihr Ergebnis; `--skip-apt` überspringt sie dort.
 
-Nach dem Kunden-Deploy und dem Agent-Update auf dem Pi:
+Pro mitgelieferter Paketversion gibt es genau einen automatischen Versuch.
+Scheitert er, wird er zurückgerollt und nicht wiederholt; der Updater meldet
+dann bei jedem Lauf „automatische Migration bereits versucht“ im Journal.
+Nach Klärung der Ursache manuell erneut starten:
 
 ```bash
 sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --check
-# Erst im vereinbarten Wartungsfenster:
 sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --apply
 ```
+
+Während des Paketwechsels werden Agent und pcscd angehalten bzw. neu
+gestartet; NFC-Scans sind dabei typischerweise unter einer Minute nicht
+möglich. SSH, Tailscale und Netzwerk werden nicht umkonfiguriert; ein
+Pi-Neustart ist nicht erforderlich.
 
 Vor dem Paketwechsel werden Prüfsummen, Paketmetadaten, Distribution und
 Architektur geprüft. Der Paketmanager simuliert Hin- und Rückinstallation;
@@ -235,28 +242,29 @@ Rollback nicht automatisch überschrieben; dann ist manuelle Prüfung nötig.
 Originalpakete, PC/SC-Konfigurationsdateien, Agent-Konfiguration und Zustand
 liegen geschützt unter `/var/lib/stempeluhr-pcsc-migration/<lauf>/`. Die
 Aktivierung läuft als eigener systemd-Dienst weiter, wenn SSH abbricht.
-Vorher wird ein Rollback-Timer für fünf Minuten scharf geschaltet. Die
-Aktivierung darf höchstens vier Minuten laufen; bei einem Fehler wird
-sofort die Rückinstallation versucht. Ein abgebrochener Aktivierungslauf
-ohne bestätigten Erfolg wird durch den Timer zurückgerollt. Fehler beim
-Rollback müssen anhand des Dienstjournals behoben werden; ein Timer ist
-kein Ersatz für eine vorab geprüfte Originalsicherung.
+Vorher wird ein Rollback-Timer für 20 Minuten scharf geschaltet; die
+Aktivierung darf höchstens 15 Minuten laufen. Schlägt die Prüfung nach der
+Aktivierung fehl, startet sofort ein eigener Rückinstallationsdienst ohne
+Laufzeitgrenze, damit `dpkg` nie mitten in der Installation abgebrochen wird.
+Ein abgebrochener Aktivierungslauf ohne bestätigten Erfolg wird durch den
+Timer zurückgerollt; ein unterbrochener `dpkg`-Lauf wird dabei zuerst mit
+`dpkg --configure -a` abgeschlossen. Fehler beim Rollback müssen anhand des
+Dienstjournals behoben werden.
 
-Unterbrochen wird nur der NFC-Stack. Agent und PC/SC-Dienst werden kurz
-angehalten beziehungsweise neu gestartet. SSH, Tailscale und Netzwerk
-werden nicht umkonfiguriert; ein Pi-Neustart ist nicht erforderlich.
 Die Prüfung umfasst Paketversion, PC/SC-Leser unter Benutzer `stempeluhr`,
-Dienststatus und bei einem vorher laufenden Agenten dessen `/health` und
-ein frisches Browser-Lebenszeichen. Ein echter Karten-Scan muss anschließend
-vor Ort geprüft werden. Eine geeignete Paketversion allein beweist keine
-behobene Speicherursache.
+Dienststatus und bei einem vorher laufenden Agenten dessen `/health`. Ein
+frisches Browser-Lebenszeichen wird nur verlangt, wenn die Kiosk-Seite schon
+vor dem Paketwechsel Lebenszeichen gesendet hat; bei einer Neuinstallation
+läuft der Kiosk noch nicht. Ein echter Karten-Scan muss anschließend vor Ort
+geprüft werden.
 
 ```bash
 dpkg-query -W pcscd libpcsclite1
 sudo -u stempeluhr python3 /opt/stempeluhr-nfc-agent/current/probe_reader.py ACR122
 systemctl status pcscd stempeluhr-nfc-agent
 curl -fsS http://127.0.0.1:8737/diagnostics
-# <lauf> aus der Ausgabe von --apply übernehmen:
+sudo journalctl -u stempeluhr-pcsc-migration
+# <lauf> aus dem Journal bzw. der Ausgabe von --apply übernehmen:
 sudo journalctl -u stempeluhr-pcsc-activate-<lauf>.service
 ```
 
@@ -266,23 +274,12 @@ zuerst ausdrücklich entfernen, damit der automatische Rollback nach Erfolg
 weiterhin ein No-op bleibt:
 
 ```bash
-sudo mv /var/lib/stempeluhr-pcsc-migration/<lauf>/result.json \
-  /var/lib/stempeluhr-pcsc-migration/<lauf>/result-before-manual-rollback.json
-sudo systemd-run --unit=stempeluhr-pcsc-manual-rollback --collect \
-  /usr/bin/python3 /var/lib/stempeluhr-pcsc-migration/<lauf>/pcsc_maintenance.py \
-  --rollback /var/lib/stempeluhr-pcsc-migration/<lauf>
+sudo mv /var/lib/stempeluhr-pcsc-migration/<lauf>/result.json   /var/lib/stempeluhr-pcsc-migration/<lauf>/result-before-manual-rollback.json
+sudo systemd-run --unit=stempeluhr-pcsc-manual-rollback --collect   /usr/bin/python3 /var/lib/stempeluhr-pcsc-migration/<lauf>/pcsc_maintenance.py   --rollback /var/lib/stempeluhr-pcsc-migration/<lauf>
 ```
 
-Eine Rückinstallation stellt Originalpakete und gesicherte
-PC/SC-Konfiguration wieder her und prüft Leser, Dienste und Browser erneut.
-Ein Downgrade des Stempeluhr-Containers selbst rollt PC/SC nicht zurück.
-
-Für den Vergleich mit **unverändertem Agenten** die Wartungsdateien
-(`pcsc_maintenance.py`, `probe_reader.py`, Verzeichnis `pcsc`) aus dem
-geprüften neuen Bundle in ein separates geschütztes Wartungsverzeichnis
-kopieren. Von dort `--apply` ausführen, ohne `current` umzustellen. Während
-dieser Messphase den Agent-Update-Timer vorübergehend anhalten und danach
-wieder starten. Der Paketwechsel startet den bisherigen Agenten erneut;
-sein Anwendungscode bleibt gleich. Erst nach der Paket-Vergleichsmessung
-folgt der neue Agent. Mindestens 24 Stunden gemeinsamen Betrieb sowie
-echtes Entfernen/Wiederauflegen einer Karte und Leser-Wiederverbindung prüfen.
+Nach einem manuellen Rollback versucht der Updater keine erneute
+automatische Migration derselben Paketversion. Eine Rückinstallation stellt
+Originalpakete und gesicherte PC/SC-Konfiguration wieder her und prüft Leser,
+Dienste und Browser erneut. Ein Downgrade des Stempeluhr-Containers selbst
+rollt PC/SC nicht zurück.

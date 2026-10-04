@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Explicit PC/SC package migration, detached activation and timed rollback.
+"""PC/SC package migration, detached activation and timed rollback.
 
-No package operations during --check or ordinary agent updates. --apply uses
-the packages authenticated by the agent bundle's SHA-256. Original packages
-must be downloadable before any service is stopped.
+--check makes no changes. --apply uses the packages authenticated by the agent
+bundle's SHA-256; original packages must be downloadable before any service is
+stopped. The agent updater starts --apply --auto once per bundled package
+version; a failed automatic attempt is not repeated without --apply.
 """
 from __future__ import annotations
 
@@ -24,6 +25,11 @@ from contextlib import contextmanager
 MIN_VERSION = "2.5.0"
 PACKAGES = {"pcscd", "libpcsclite1", "libpcsclite-dev"}
 FINISHED = {"ok", "rolled-back", "unchanged"}
+# "failed" is followed by a rollback; these end a migration run.
+TERMINAL = FINISHED | {"rollback-failed"}
+ROLLBACK_DELAY = "20m"
+ACTIVATION_LIMIT = "15min"
+RESULT_WAIT_SECONDS = 25 * 60
 AGENT_SERVICE = "stempeluhr-nfc-agent.service"
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
 BASE = Path(os.environ.get("STEMPELUHR_AGENT_DIR", "/opt/stempeluhr-nfc-agent"))
@@ -67,6 +73,44 @@ def locked():
     with (BASE / ".maintenance.lock").open("a") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         yield
+
+
+def bundle_version():
+    try:
+        return json.loads((Path(__file__).resolve().parent / "pcsc" / "manifest.json").read_text())["version"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def auto_marker():
+    return STATE / "auto-attempt.json"
+
+
+def auto_possible():
+    """An automatic attempt is made once per bundled package version."""
+    version = bundle_version()
+    if version is None:
+        return False
+    try:
+        return json.loads(auto_marker().read_text()).get("targetVersion") != version
+    except (OSError, ValueError):
+        return True
+
+
+def migration_running():
+    try:
+        folder = Path(json.loads((STATE / "pending.json").read_text())["folder"])
+    except (OSError, ValueError, KeyError):
+        return False
+    result = read_result(folder)
+    return result is None or result["status"] not in TERMINAL
+
+
+def record_auto_attempt(version):
+    # Also written for manual runs: after a failed or manually rolled back
+    # change the updater must not start the same package version again.
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    auto_marker().write_text(json.dumps({"targetVersion": version, "startedAt": time.time()}) + "\n")
 
 
 def package_info(path):
@@ -173,6 +217,7 @@ def prepare():
         if set(verified) != {p for p in selected if old[p] is not None}:
             raise ValueError("Originalpakete für Rückinstallation fehlen")
         simulate(originals)
+        record_auto_attempt(version)
         (folder / "pcsc-config").mkdir()
         conffiles = []
         for p in selected:
@@ -189,8 +234,13 @@ def prepare():
         if CONFIG.exists():
             shutil.copy2(CONFIG, folder / "config.json")
         config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
-        snapshot = {"agentActive": active(AGENT_SERVICE), "pcscActive": active("pcscd.service"),
-                    "port": config.get("local_port", 8737), "readerFilter": config.get("reader_name_contains"),
+        agent_active = active(AGENT_SERVICE)
+        port = config.get("local_port", 8737)
+        snapshot = {"agentActive": agent_active, "pcscActive": active("pcscd.service"),
+                    # A fresh install has no kiosk yet: only a browser seen
+                    # before the change is required afterwards.
+                    "browserAlive": agent_active and browser_alive(port),
+                    "port": port, "readerFilter": config.get("reader_name_contains"),
                     "auto": sorted(set(command("apt-mark", "showauto").splitlines()) & selected.keys()),
                     "rollbackUnit": "stempeluhr-pcsc-rollback-" + folder.name,
                     "originals": {p: list(old[p]) for p in selected if old[p] is not None},
@@ -198,26 +248,40 @@ def prepare():
         (folder / "snapshot.json").write_text(json.dumps(snapshot))
         shutil.copy2(__file__, folder / "pcsc_maintenance.py")
         shutil.copy2(Path(__file__).with_name("probe_reader.py"), folder / "probe_reader.py")
-        invocation = [sys.executable, str(folder / "pcsc_maintenance.py")]
-        environment = ["--setenv=STEMPELUHR_AGENT_DIR=" + str(BASE), "--setenv=STEMPELUHR_PCSC_STATE=" + str(STATE)]
         # Timer is armed before activation; both jobs continue after SSH disconnects.
-        command("systemd-run", "--unit=" + snapshot["rollbackUnit"], "--on-active=5m", "--collect",
-                *environment, *invocation, "--rollback", str(folder))
+        # Without a started activation it remains a harmless safety net.
+        detached(folder, snapshot["rollbackUnit"], "--rollback", "--on-active=" + ROLLBACK_DELAY)
         pending.write_text(json.dumps({"folder": str(folder)}))
-        try:
-            command("systemd-run", "--unit=stempeluhr-pcsc-activate-" + folder.name, "--collect",
-                    "--property=RuntimeMaxSec=4min",
-                    *environment, *invocation, "--activate", str(folder))
-        except Exception:
-            # No activation started: the armed rollback remains a harmless safety net.
-            raise
+        detached(folder, "stempeluhr-pcsc-activate-" + folder.name, "--activate",
+                 "--property=RuntimeMaxSec=" + ACTIVATION_LIMIT)
         print("Paketwechsel gestartet; Protokoll und Originalsicherung:", folder)
         return folder
+
+
+def detached(folder, unit, action, *options):
+    """Runs the archived copy of this script as its own transient unit."""
+    command("systemd-run", "--unit=" + unit, "--collect", *options,
+            "--setenv=STEMPELUHR_AGENT_DIR=" + str(BASE), "--setenv=STEMPELUHR_PCSC_STATE=" + str(STATE),
+            sys.executable, str(folder / "pcsc_maintenance.py"), action, str(folder))
 
 
 def http_json(port, path):
     with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=3) as response:
         return json.load(response)
+
+
+def browser_alive(port, wait_seconds=30):
+    """Whether the kiosk page sends heartbeats; waits out a fresh agent restart."""
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            status = http_json(port, "/diagnostics").get("uiStatus")
+        except (OSError, ValueError):
+            status = None
+        # "not-seen": the agent restarted and the next heartbeat is due within 15 s.
+        if status != "not-seen" or time.monotonic() >= deadline:
+            return status == "alive"
+        time.sleep(2)
 
 
 def verify(folder, snapshot, require_fix=True):
@@ -236,8 +300,10 @@ def verify(folder, snapshot, require_fix=True):
             try:
                 health = http_json(snapshot["port"], "/health")
                 diagnostics = http_json(snapshot["port"], "/diagnostics")
-                if active(AGENT_SERVICE) and health.get("ok") and diagnostics.get("uiStatus") == "alive":
-                    print("Agent, PC/SC-Leser und Browser-Lebenszeichen geprüft. Echter Karten-Scan noch ausstehend.")
+                browser_ok = not snapshot.get("browserAlive") or diagnostics.get("uiStatus") == "alive"
+                if active(AGENT_SERVICE) and health.get("ok") and browser_ok:
+                    checked = "Browser-Lebenszeichen" if snapshot.get("browserAlive") else "Agent-Health (vorher kein Browser)"
+                    print(f"Agent, PC/SC-Leser und {checked} geprüft. Echter Karten-Scan noch ausstehend.")
                     return
             except (OSError, ValueError):
                 pass
@@ -260,6 +326,8 @@ def rollback(folder, snapshot):
                 command("systemctl", "start", AGENT_SERVICE)
             raise ValueError("PC/SC-Version wurde außerhalb der Migration verändert; kein automatisches Downgrade")
     command("systemctl", "stop", AGENT_SERVICE)
+    # Finish a dpkg run interrupted by a killed activation before reinstalling.
+    command("dpkg", "--configure", "-a")
     originals = list((folder / "old").glob("*.deb"))
     if originals:
         command("apt-get", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
@@ -303,10 +371,13 @@ def activate(folder):
             subprocess.run(["systemctl", "stop", snapshot["rollbackUnit"] + ".timer"], check=False)
         except Exception as error:
             print("Aktivierung fehlgeschlagen; Rückinstallation:", type(error).__name__, file=sys.stderr)
+            write_result(folder, "failed", "Aktivierung fehlgeschlagen; Rückinstallation läuft")
+            # A separate unit without the activation's time limit, so it is
+            # never killed mid-dpkg; it starts once this unit releases the lock.
             try:
-                rollback(folder, snapshot)
+                detached(folder, snapshot["rollbackUnit"] + "-now", "--rollback")
             except Exception:
-                write_result(folder, "rollback-failed", "Rückinstallation fehlgeschlagen; Timer versucht erneut; Journal prüfen")
+                print("Sofortige Rückinstallation nicht gestartet; Rollback-Timer übernimmt", file=sys.stderr)
             raise
 
 
@@ -317,11 +388,21 @@ def main():
     actions.add_argument("--apply", action="store_true")
     actions.add_argument("--activate", type=Path, help=argparse.SUPPRESS)
     actions.add_argument("--rollback", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--auto", action="store_true", help="with --apply: skip if already attempted for this bundle")
     args = parser.parse_args()
     if args.check:
-        ok = suitable()
-        print("PC/SC-Fixstand geeignet (>= 2.5.0)." if ok else "PC/SC-Fixstand fehlt; explizite Paketmigration erforderlich (siehe Pi-Anleitung).")
-        return 0 if ok else 1
+        # 0 = suitable, 1 = automatic migration pending or running, 2 = manual action needed.
+        if suitable():
+            print("PC/SC-Fixstand geeignet (>= 2.5.0).")
+            return 0
+        if migration_running():
+            print("PC/SC-Paketmigration läuft.")
+            return 1
+        if auto_possible():
+            print("PC/SC-Fixstand fehlt; automatische Paketmigration steht aus.")
+            return 1
+        print("PC/SC-Fixstand fehlt; automatische Migration bereits versucht oder nicht möglich (siehe Pi-Anleitung).")
+        return 2
     if os.geteuid() != 0:
         raise ValueError("Paketmigration benötigt root")
     if args.activate:
@@ -331,19 +412,37 @@ def main():
             result = read_result(args.rollback)
             if result and result["status"] in FINISHED:
                 return 0
-            rollback(args.rollback, json.loads((args.rollback / "snapshot.json").read_text()))
+            try:
+                rollback(args.rollback, json.loads((args.rollback / "snapshot.json").read_text()))
+            except Exception:
+                write_result(args.rollback, "rollback-failed",
+                             "Rückinstallation fehlgeschlagen; Originalsicherung und Journal prüfen")
+                raise
     else:
+        if args.auto:
+            if suitable() or not auto_possible():
+                print("Keine automatische Paketmigration erforderlich oder bereits versucht.")
+                return 0
+            # Before prepare(): systems it rejects are not retried every run.
+            record_auto_attempt(bundle_version())
         folder = prepare()
         if folder:
-            deadline = time.monotonic() + 240
-            while time.monotonic() < deadline:
-                result = read_result(folder)
-                if result:
-                    print(result["detail"])
-                    return 0 if result["status"] == "ok" else 1
-                time.sleep(2)
-            raise ValueError("Paketwechsel dauert länger; Dienstjournal prüfen; Rollback-Timer bleibt aktiv")
+            return wait_for_result(folder)
     return 0
+
+
+def wait_for_result(folder):
+    reported = None
+    deadline = time.monotonic() + RESULT_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        result = read_result(folder)
+        if result and result["status"] != reported:
+            reported = result["status"]
+            print(result["detail"])
+        if result and result["status"] in TERMINAL:
+            return 0 if result["status"] == "ok" else 1
+        time.sleep(2)
+    raise ValueError("Paketwechsel dauert länger; Dienstjournal prüfen; Rollback-Timer bleibt aktiv")
 
 
 if __name__ == "__main__":
