@@ -202,7 +202,10 @@ jobs:
           image="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}"
           echo "tags=${image}:${version},${image}:${major_minor},${image}:latest" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push
+      - name: Set up ARM emulation for Pi packages
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build and push container
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -250,7 +253,10 @@ jobs:
           image="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}"
           echo "tags=${image}:${version},${image}:${major_minor},${image}:latest" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push (retry)
+      - name: Set up ARM emulation for Pi packages
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build and push container (retry)
         uses: docker/build-push-action@v6
         with:
           context: .

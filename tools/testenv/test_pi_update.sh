@@ -43,6 +43,17 @@ exec "$INSTALL_COMMAND" "\$@"
 EOF
 chmod +x "$WORK/bin/install"
 
+# No PC/SC packages installed; systemd-run only records the detached migration.
+printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/dpkg-query"
+cat > "$WORK/bin/systemd-run" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$WORK/systemd-run.log"
+EOF
+# Platform with bundled packages, independent of the test host.
+printf '#!/bin/sh\n[ "$1" = --print-architecture ] && echo arm64\n' > "$WORK/bin/dpkg"
+printf 'ID=debian\nVERSION_CODENAME=trixie\n' > "$WORK/os-release"
+chmod +x "$WORK/bin/dpkg-query" "$WORK/bin/systemd-run" "$WORK/bin/dpkg"
+
 # pyscard-Stub: der Agent importiert smartcard beim Start.
 cat > "$WORK/stub/smartcard/__init__.py" <<'EOF'
 EOF
@@ -57,6 +68,24 @@ EOF
 cat > "$WORK/stub/smartcard/System.py" <<'EOF'
 def readers():
     return []
+EOF
+# Reader loop: a context without any reader, so the agent idles.
+cat > "$WORK/stub/smartcard/scard.py" <<'EOF'
+SCARD_S_SUCCESS = 0
+SCARD_SCOPE_USER = 0
+SCARD_E_NO_READERS_AVAILABLE = 0x8010002E
+
+
+def SCardEstablishContext(scope):
+    return SCARD_S_SUCCESS, 1
+
+
+def SCardListReaders(context, groups):
+    return SCARD_E_NO_READERS_AVAILABLE, []
+
+
+def SCardReleaseContext(context):
+    return SCARD_S_SUCCESS
 EOF
 
 cat > "$WORK/config.json" <<EOF
@@ -90,6 +119,8 @@ run_update() {
   STEMPELUHR_SYSTEMD_DIR="$WORK/systemd" \
   STEMPELUHR_JOURNALD_DIR="${TEST_JOURNALD_DIR:-$WORK/journald}" \
   STEMPELUHR_HEALTH_TIMEOUT=8 \
+  STEMPELUHR_PCSC_STATE="$WORK/pcsc-state" \
+  STEMPELUHR_OS_RELEASE="$WORK/os-release" \
   PATH="$WORK/bin:$PATH" \
   SYSTEMCTL="$WORK/systemctl" \
     bash "$AGENT_SRC/update.sh" "$@" > "$WORK/update.log" 2>&1
@@ -126,6 +157,8 @@ if run_update --force; then ok "update.sh --force endet erfolgreich"; else bad "
 [ "$(health_version)" = "1.0.0" ] && ok "/health meldet 1.0.0" || bad "/health meldet $(health_version)"
 [ -f "$WORK/systemd/stempeluhr-nfc-agent-update.timer" ] && ok "systemd-Units installiert" || bad "Units fehlen"
 [ -f "$WORK/opt/current/terminal_diagnostics.py" ] && ok "Diagnosemodul im Bundle" || bad "Diagnosemodul fehlt"
+[ -f "$WORK/opt/current/pcsc_maintenance.py" ] && [ -f "$WORK/opt/current/probe_reader.py" ] \
+  && ok "PC/SC-Migration und Leserprüfung im Bundle" || bad "PC/SC-Hilfsdateien fehlen"
 grep -q '^Storage=persistent' "$WORK/journald/stempeluhr.conf" \
   && ok "Journal überlebt Neustarts" || bad "Persistentes Journal fehlt"
 grep -q "current/stempeluhr_nfc_agent.py" "$WORK/systemd/stempeluhr-nfc-agent.service" \
@@ -213,6 +246,45 @@ say "8: Server zurückgerollt -> Agent folgt"
 publish 1.0.0
 if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
 [ "$(health_version)" = "1.0.0" ] && ok "Agent folgt auf 1.0.0" || bad "/health meldet $(health_version)"
+
+say "9: Fehlender PC/SC-Fix startet die Paketmigration automatisch"
+[ ! -f "$WORK/systemd-run.log" ] && ok "Bundles ohne Pakete starten keine Migration" || bad "Migration ohne Pakete gestartet"
+cp -r "$AGENT_SRC" "$WORK/pcsc-src"
+mkdir -p "$WORK/pcsc-src/pcsc"
+printf '{"version": "2.5.2-1~stempeluhr13.1", "packages": []}\n' > "$WORK/pcsc-src/pcsc/manifest.json"
+publish 1.4.0 "$WORK/pcsc-src"
+if run_update; then ok "Update endet erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
+grep -q -- '--unit=stempeluhr-pcsc-migration .*current/pcsc_maintenance.py --apply --auto' "$WORK/systemd-run.log" 2>/dev/null \
+  && ok "Migration nach dem Update losgelöst gestartet" || bad "Migration nicht gestartet: $(cat "$WORK/systemd-run.log" 2>/dev/null)"
+rm -f "$WORK/systemd-run.log"
+STEMPELUHR_PCSC_AUTO=0 run_update --force || bad "Update ohne Auto-Migration: $(tail -3 "$WORK/update.log")"
+[ ! -f "$WORK/systemd-run.log" ] && ok "Installer-Modus startet keine zweite Migration" || bad "Migration trotz STEMPELUHR_PCSC_AUTO=0"
+mkdir -p "$WORK/pcsc-state"
+printf '{"targetVersion": "2.5.2-1~stempeluhr13.1"}\n' > "$WORK/pcsc-state/auto-attempt.json"
+if run_update; then ok "Update nach Migrationsversuch erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
+[ ! -f "$WORK/systemd-run.log" ] && grep -q 'bereits versucht' "$WORK/update.log" \
+  && ok "Kein zweiter automatischer Versuch, Hinweis im Journal" || bad "Wiederholter Versuch oder Hinweis fehlt"
+
+say "10: Bookworm ohne Pakete bleibt still"
+rm -f "$WORK/pcsc-state/auto-attempt.json"
+printf 'ID=debian\nVERSION_CODENAME=bookworm\n' > "$WORK/os-release"
+if run_update; then ok "Update endet erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
+[ ! -f "$WORK/systemd-run.log" ] && ! grep -q 'PC/SC' "$WORK/update.log" \
+  && ok "Keine Migration, keine Warnung" || bad "Migration oder Warnung auf Bookworm: $(grep 'PC/SC' "$WORK/update.log")"
+
+say "11: Unterbrochene Migration wird auch nach fehlgeschlagenem Update zurückgerollt"
+printf 'ID=debian\nVERSION_CODENAME=trixie\n' > "$WORK/os-release"
+mkdir -p "$WORK/pcsc-state/interrupted"
+printf '{"folder": "%s", "bootId": "previous-boot"}\n' "$WORK/pcsc-state/interrupted" > "$WORK/pcsc-state/pending.json"
+cp -r "$WORK/broken-src" "$WORK/broken-pcsc-src"
+cp -r "$WORK/pcsc-src/pcsc" "$WORK/broken-pcsc-src/"
+publish 1.5.0 "$WORK/broken-pcsc-src"
+if run_update; then bad "update.sh meldet Erfolg trotz defektem Agenten"; else ok "update.sh meldet Fehler"; fi
+[ "$(current_version)" = "1.4.0" ] && ok "current zurück auf 1.4.0" || bad "current ist $(current_version)"
+grep -q -- '--unit=stempeluhr-pcsc-migration .*current/pcsc_maintenance.py --recover$' "$WORK/systemd-run.log" 2>/dev/null \
+  && ok "Wiederherstellung trotz Updatefehler gestartet" || bad "Keine Wiederherstellung: $(cat "$WORK/systemd-run.log" 2>/dev/null)"
+! grep -q -- '--apply' "$WORK/systemd-run.log" 2>/dev/null \
+  && ok "Kein neuer Paketwechsel nach Updatefehler" || bad "Paketwechsel nach Updatefehler gestartet"
 
 say "Ergebnis: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" -eq 0 ]

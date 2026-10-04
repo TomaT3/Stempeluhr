@@ -1,4 +1,4 @@
-# Raspberry Pi 5 als NFC-Terminal (Bookworm)
+# Raspberry Pi 5 als NFC-Terminal (Trixie, 64-bit)
 
 Ein Terminal besteht aus Chromium im Kioskmodus (`/terminal?terminalId=<id>`)
 und dem NFC-Agenten für den ACR122U. Den Agenten installiert und aktualisiert
@@ -14,6 +14,10 @@ Im Folgenden steht `<host>` für die externe HTTPS-Adresse der Stempeluhr, z. B.
 Im Raspberry Pi Imager:
 
 - Raspberry Pi OS (64-bit) mit Desktop
+- Für die mitgelieferte PC/SC-Paketmigration: Debian / Raspberry Pi OS 13
+  (Trixie), arm64. Bookworm-Bestandsterminals können den Agenten weiter
+  aktualisieren, erhalten aber keinen ungeprüften Trixie-Paketbackport;
+  Installer und Updater lassen pcscd dort unverändert.
 - Hostname z. B. `stempeluhr-02`
 - Benutzer `stempeluhradmin` (Wartung per SSH)
 - SSH aktivieren, WLAN/LAN konfigurieren
@@ -189,3 +193,110 @@ muss `off` melden.
   Hängt ein Kiosk trotzdem auf einer alten App, hilft
   `tools/deploy/pi-deploy.sh kiosk` (Cache-Reset + Reboot).
 - Wartung nur über `stempeluhradmin`; `kiosk` braucht keinen SSH-Zugang.
+
+## PC/SC-Paketmigration bestehender Terminals
+
+pcscd 2.3.3 (Trixie) verliert bei jeder Polkit-Berechtigungsprüfung Speicher;
+der Upstream-Fix ist ab pcsc-lite 2.5.0 enthalten. Das Agent-Bundle bringt
+2.5.2 für Trixie/arm64 mit. Eine bereits geeignete Version >= 2.5.0 wird nicht
+ersetzt. Details zu Quelle und Sicherheitsupdates:
+[PC/SC-Paketversorgung](../tools/pcsc/README.md).
+
+**Der Paketwechsel läuft automatisch.** Nach jedem erfolgreichen Lauf des
+Agent-Updaters (Timer alle 15 Minuten) prüft das installierte Bundle den
+PC/SC-Stand. Fehlt der Fix, startet der Updater die Migration als eigenen
+systemd-Dienst `stempeluhr-pcsc-migration`; sie beginnt, sobald der Updater
+fertig ist. Nach einem Server-Deploy ist ein Bestands-Pi damit spätestens
+nach zwei Timer-Läufen migriert. Der Installer führt dieselbe Migration
+direkt aus und meldet ihr Ergebnis; `--skip-apt` überspringt sie dort.
+
+Pro mitgelieferter Paketversion gibt es genau einen automatischen Versuch.
+Scheitert er, wird er zurückgerollt und nicht wiederholt; der Updater meldet
+dann bei jedem Lauf „automatische Migration bereits versucht“ im Journal.
+Als Versuch zählen ein gestarteter Paketwechsel und eine Ablehnung in der
+Vorprüfung (z. B. gehaltene Pakete). Fehler beim Herunterladen der
+Originalpakete ändern nichts und werden beim nächsten Updater-Lauf wiederholt.
+Nach Klärung der Ursache manuell erneut starten:
+
+```bash
+sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --check
+sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --apply
+```
+
+Während des Paketwechsels werden Agent und pcscd angehalten bzw. neu
+gestartet; NFC-Scans sind dabei typischerweise unter einer Minute nicht
+möglich. SSH, Tailscale und Netzwerk werden nicht umkonfiguriert; ein
+Pi-Neustart ist nicht erforderlich.
+
+Vor dem Paketwechsel werden Prüfsummen, Paketmetadaten, Distribution und
+Architektur geprüft. Der Paketmanager simuliert die Installation; weitere
+Systempakete dürfen dabei weder geändert noch entfernt werden. Die
+Rückinstallation setzt damit genau die PC/SC-Pakete auf ihren vorherigen,
+lauffähigen Stand zurück.
+Originalpakete müssen aus den vorhandenen APT-Quellen herunterladbar sein,
+sonst endet die Migration vor jeder Dienstunterbrechung. Falls der lokale
+APT-Index veraltet ist, vorher bewusst `sudo apt-get update` ausführen und
+erneut prüfen. Gehaltene Pakete und fehlende Unterstützung führen zu einem
+verständlichen Fehler. Ein installiertes `libpcsclite-dev` wird zusammen
+mit der exakt passenden Bibliothek aktualisiert.
+
+Verändert ein anderer Paketmanager-Lauf die PC/SC-Versionen nach der
+Vorprüfung, bricht die Aktivierung vor der Dienstunterbrechung ab. Eine
+außerhalb der Migration installierte neuere Version wird auch durch den
+Rollback nicht automatisch überschrieben; dann ist manuelle Prüfung nötig.
+
+Originalpakete, PC/SC-Konfigurationsdateien, Agent-Konfiguration und Zustand
+liegen geschützt unter `/var/lib/stempeluhr-pcsc-migration/<lauf>/`. Die
+Aktivierung läuft als eigener systemd-Dienst weiter, wenn SSH abbricht.
+Vorher wird ein Rollback-Timer für 20 Minuten scharf geschaltet; die
+Aktivierung darf höchstens 15 Minuten laufen. Schlägt die Prüfung nach der
+Aktivierung fehl, startet sofort ein eigener Rückinstallationsdienst ohne
+Laufzeitgrenze, damit `dpkg` nie mitten in der Installation abgebrochen wird.
+Ein abgebrochener Aktivierungslauf ohne bestätigten Erfolg wird durch den
+Timer zurückgerollt; ein unterbrochener `dpkg`-Lauf wird dabei zuerst mit
+`dpkg --configure -a` abgeschlossen. Paketwechsel und Rollback warten bis zu
+10 Minuten, falls gerade ein anderer Paketmanager-Lauf (z. B.
+unattended-upgrades) die dpkg-Sperre hält. Ein Rollback startet den Agenten
+auch dann wieder, wenn er scheitert. Fehler beim Rollback müssen anhand des
+Dienstjournals behoben werden.
+
+Aktivierung und Rollback-Timer überstehen keinen Neustart. Unterbricht ein
+Neustart (z. B. der nächtliche Reboot von unattended-upgrades) die Migration,
+erkennt der erste Updater-Lauf nach dem Boot den unvollständigen Lauf und
+rollt ihn zurück (`journalctl -u stempeluhr-pcsc-migration`), auch wenn das
+Agent-Update dieses Laufs fehlschlägt. Ein manuelles
+`--apply` führt diesen Rollback ebenfalls zuerst aus und migriert danach.
+
+Die Prüfung umfasst Paketversion, PC/SC-Leser unter Benutzer `stempeluhr`,
+Dienststatus und bei einem vorher laufenden Agenten dessen `/health`. Ein
+frisches Browser-Lebenszeichen wird nur verlangt, wenn die Kiosk-Seite schon
+vor dem Paketwechsel Lebenszeichen gesendet hat; bei einer Neuinstallation
+läuft der Kiosk noch nicht. Ein echter Karten-Scan muss anschließend vor Ort
+geprüft werden.
+
+```bash
+dpkg-query -W pcscd libpcsclite1
+sudo -u stempeluhr python3 /opt/stempeluhr-nfc-agent/current/probe_reader.py ACR122
+systemctl status pcscd stempeluhr-nfc-agent
+curl -fsS http://127.0.0.1:8737/diagnostics
+sudo journalctl -u stempeluhr-pcsc-migration
+# <lauf> aus dem Journal bzw. der Ausgabe von --apply übernehmen:
+sudo journalctl -u stempeluhr-pcsc-activate-<lauf>.service
+```
+
+Ein bewusst gewünschter späterer Paket-Rollback nach erfolgreicher
+Aktivierung verwendet die archivierten Originalpakete. Den Erfolgsmerker
+zuerst ausdrücklich entfernen, damit der automatische Rollback nach Erfolg
+weiterhin ein No-op bleibt:
+
+```bash
+sudo mv /var/lib/stempeluhr-pcsc-migration/<lauf>/result.json   /var/lib/stempeluhr-pcsc-migration/<lauf>/result-before-manual-rollback.json
+sudo systemd-run --unit=stempeluhr-pcsc-manual-rollback --collect   /usr/bin/python3 /var/lib/stempeluhr-pcsc-migration/<lauf>/pcsc_maintenance.py   --rollback /var/lib/stempeluhr-pcsc-migration/<lauf>
+```
+
+Nach einem manuellen Rollback versucht der Updater keine erneute
+automatische Migration derselben Paketversion. Eine Rückinstallation stellt
+Originalpakete und gesicherte PC/SC-Konfiguration wieder her und prüft Leser
+und Dienste erneut; ein fehlendes Browser-Lebenszeichen lässt sie nicht
+scheitern. Ein Downgrade des Stempeluhr-Containers selbst
+rollt PC/SC nicht zurück.

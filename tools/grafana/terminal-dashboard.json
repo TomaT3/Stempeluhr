@@ -873,6 +873,136 @@
           "query": "import \"experimental/bitwise\"\nfrom(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"terminal\" and r._field == \"throttled_flags\")\n  |> filter(fn: (r) => contains(value: r.terminal, set: ${terminal:json}))\n  |> map(fn: (r) => ({r with _value: bitwise.sand(a: r._value, b: 15)}))\n  |> group(columns: [\"terminal\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)"
         }
       ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "PC/SC: anonymer RAM + Swap",
+      "description": "Gesamte anonyme Speicherbindung. Mit Agent-/PCSC-Version und Prozessidentität vergleichen; RSS allein kann durch Auslagerung fallen.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 47,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kbytes",
+          "displayName": "${__field.labels.terminal}",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"terminal\" and r._field == \"pcscd_anonymous_and_swap_kb\")\n  |> filter(fn: (r) => contains(value: r.terminal, set: ${terminal:json}))\n  |> group(columns: [\"terminal\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "PC/SC: Prozess-Swap",
+      "description": "Ausgelagerte Seiten von pcscd. Ein Anstieg kann fallenden RSS erklären und ist keine Entwarnung.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 47,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kbytes",
+          "displayName": "${__field.labels.terminal}",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"terminal\" and r._field == \"pcscd_swap_kb\")\n  |> filter(fn: (r) => contains(value: r.terminal, set: ${terminal:json}))\n  |> group(columns: [\"terminal\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)"
+        }
+      ]
     }
   ]
 }

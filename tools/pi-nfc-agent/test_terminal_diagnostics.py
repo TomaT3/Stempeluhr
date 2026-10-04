@@ -192,6 +192,43 @@ class DiagnosticsTests(unittest.TestCase):
                 server.server_close()
                 monitor.close()
 
+    def test_pcscd_swap_cannot_hide_growth_and_restarts_have_a_new_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            process = root / "726"
+            process.mkdir()
+            (process / "comm").write_text("pcscd\n")
+            (process / "stat").write_text("726 (pcscd) " + " ".join(["0"] * 19 + ["12345"]))
+            (process / "status").write_text("VmRSS: 800 kB\nRssAnon: 700 kB\nVmSwap: 100 kB\n")
+            sampler = SystemSampler(root)
+            with patch("terminal_diagnostics.subprocess.run", side_effect=OSError()):
+                before = sampler.sample()
+                (process / "status").write_text("VmRSS: 400 kB\nRssAnon: 300 kB\nVmSwap: 600 kB\n")
+                after = sampler.sample()
+                self.assertLess(after["pcscdRssKb"], before["pcscdRssKb"])
+                self.assertGreater(after["pcscdAnonymousAndSwapKb"], before["pcscdAnonymousAndSwapKb"])
+                self.assertEqual(after["pcscdPid"], 726)
+                self.assertEqual(after["pcscdStartTicks"], 12345)
+                (process / "stat").write_text("726 (pcscd) " + " ".join(["0"] * 19 + ["23456"]))
+                self.assertEqual(sampler.sample()["pcscdStartTicks"], 23456)
+                (process / "status").write_text("VmRSS: 400 kB\n")
+                self.assertIsNone(sampler.sample()["pcscdAnonymousAndSwapKb"])
+                (process / "status").unlink()
+                self.assertNotIn("pcscdRssKb", sampler.sample())
+
+    def test_package_version_is_cached_and_failure_is_unknown(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sampler = SystemSampler(Path(folder))
+            result = MagicMock(stdout="2.5.2-1~stempeluhr13.1")
+            with patch("terminal_diagnostics.time.monotonic", return_value=1000), \
+                 patch("terminal_diagnostics.subprocess.run", return_value=result) as run:
+                self.assertEqual(sampler.sample()["pcscdVersion"], result.stdout)
+                sampler.sample()
+                self.assertEqual(sum(call.args[0][0] == "dpkg-query" for call in run.call_args_list), 1)
+            with patch("terminal_diagnostics.time.monotonic", return_value=1600), \
+                 patch("terminal_diagnostics.subprocess.run", side_effect=OSError()):
+                self.assertIsNone(sampler.sample()["pcscdVersion"])
+
 
 if __name__ == "__main__":
     unittest.main()

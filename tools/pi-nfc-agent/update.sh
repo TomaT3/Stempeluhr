@@ -9,6 +9,9 @@
 #   3. Link "current" atomar umsetzen, Agent neu starten
 #   4. Health-Check über http://127.0.0.1:<port>/health - schlägt er fehl,
 #      zurück auf die vorherige Version
+#   5. nach jedem erfolgreichen Lauf: fehlt der PC/SC-Fix, die Paketmigration
+#      des installierten Bundles losgelöst starten (pcsc_maintenance.py);
+#      eine durch Neustart unterbrochene Migration auch nach Fehlern zurückrollen
 #
 # Die Agent-Version folgt der Server-Version, auch nach unten (Rollback des
 # Containers). Ist der Server nicht erreichbar, endet das Skript ohne Fehler:
@@ -24,6 +27,7 @@ BASE_DIR="${STEMPELUHR_AGENT_DIR:-/opt/stempeluhr-nfc-agent}"
 SYSTEMD_DIR="${STEMPELUHR_SYSTEMD_DIR:-/etc/systemd/system}"
 JOURNALD_DIR="${STEMPELUHR_JOURNALD_DIR:-/etc/systemd/journald.conf.d}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+SYSTEMD_RUN="${SYSTEMD_RUN:-systemd-run}"
 HEALTH_TIMEOUT_SECONDS="${STEMPELUHR_HEALTH_TIMEOUT:-30}"
 KEEP_RELEASES=3
 UNITS=(stempeluhr-nfc-agent.service stempeluhr-nfc-agent-update.service stempeluhr-nfc-agent-update.timer)
@@ -36,6 +40,56 @@ fi
 
 log() { echo "stempeluhr-agent-update: $*"; }
 fail() { log "FEHLER: $*" >&2; exit 1; }
+
+# Serialize agent changes with the explicitly started PC/SC package migration.
+mkdir -p "$BASE_DIR"
+if [ "${STEMPELUHR_AGENT_UPDATE_LOCKED:-}" != 1 ]; then
+  # --close prevents restarted child processes from keeping the lock alive.
+  exec env STEMPELUHR_AGENT_UPDATE_LOCKED=1 flock -x --close "$BASE_DIR/.maintenance.lock" bash "$0" "$@"
+fi
+
+# After every run - also offline or without a new version - the installed
+# bundle decides whether the PC/SC packages still need the fix. The job runs
+# detached and waits for the lock, i.e. until this updater has finished. A new
+# package change starts only after a successful run, once per bundled package
+# version. A migration interrupted by a reboot is rolled back regardless of
+# this run's result, so repeated agent update errors cannot block it.
+schedule_pcsc_migration() { # exit status of this updater
+  local script="$BASE_DIR/current/pcsc_maintenance.py" status=0 action=(--apply --auto)
+  [ -f "$script" ] || return 0
+  python3 "$script" --check >/dev/null 2>&1 || status=$?
+  case "$status" in
+    0) return 0 ;;
+    1) ;;
+    # No packages for this platform (e.g. Bookworm): pcscd stays as it is.
+    3) return 0 ;;
+    *) log "WARNUNG: PC/SC-Fixstand fehlt; automatische Migration bereits versucht - manuell prüfen (siehe Pi-Anleitung)." >&2
+       return 0 ;;
+  esac
+  if [ "${STEMPELUHR_PCSC_AUTO:-1}" != 1 ] || ! command -v "$SYSTEMD_RUN" >/dev/null 2>&1; then
+    return 0
+  fi
+  # --recover only rolls back an interrupted migration and is a no-op otherwise.
+  if [ "$1" -ne 0 ]; then action=(--recover); fi
+  if "$SYSTEMD_RUN" --unit=stempeluhr-pcsc-migration --collect --quiet \
+    python3 "$script" "${action[@]}" >/dev/null 2>&1; then
+    if [ "$1" -eq 0 ]; then
+      log "PC/SC-Fixstand fehlt - automatische Paketmigration gestartet (journalctl -u stempeluhr-pcsc-migration)."
+    else
+      log "Prüfung auf eine unterbrochene PC/SC-Paketmigration gestartet (journalctl -u stempeluhr-pcsc-migration)." >&2
+    fi
+  else
+    log "PC/SC-Paketmigration läuft bereits oder ließ sich nicht starten." >&2
+  fi
+}
+
+WORK=""
+on_exit() {
+  local status=$?
+  if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
+  schedule_pcsc_migration "$status"
+}
+trap on_exit EXIT
 
 # Liest einen Wert aus einer JSON-Datei (python3 ist für den Agenten ohnehin da).
 json_value() { # datei schluessel default
@@ -76,7 +130,6 @@ PORT="$(json_value "$CONFIG" local_port 8737)"
 [ -n "$BASE_URL" ] || fail "api_base_url fehlt in $CONFIG"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
 
 if ! curl -fsS --max-time 20 -o "$WORK/agent.json" "$BASE_URL/pi/agent.json"; then
   log "Server nicht erreichbar oder liefert kein Agent-Bundle - nächster Versuch später."

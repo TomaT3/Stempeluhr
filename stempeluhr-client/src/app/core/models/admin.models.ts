@@ -15,6 +15,13 @@ export interface AdminTerminalReport {
   cpuPercent: number | null;
   availableMemoryKb: number | null;
   chromiumRssSumKb: number | null;
+  pcscdRssKb: number | null;
+  pcscdAnonymousKb: number | null;
+  pcscdSwapKb: number | null;
+  pcscdAnonymousAndSwapKb: number | null;
+  pcscdPid: number | null;
+  pcscdStartTicks: number | null;
+  pcscdVersion: string | null;
   temperatureC: number | null;
   throttledFlags: number | null;
   diskFreeMb: number | null;

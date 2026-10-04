@@ -6,6 +6,36 @@ namespace Stempeluhr.Api.Tests;
 
 public sealed class TerminalDiagnosticsTests
 {
+    [Theory]
+    [InlineData("{\"pcscdRssKb\":400,\"pcscdAnonymousKb\":300,\"pcscdSwapKb\":600,\"pcscdAnonymousAndSwapKb\":1,\"pcscdPid\":726,\"pcscdStartTicks\":2000000000,\"pcscdVersion\":\"2.5.2-1~stempeluhr13.1\"}", 900.0)]
+    [InlineData("{\"pcscdAnonymousKb\":300}", null)]
+    [InlineData("{\"pcscdAnonymousKb\":300,\"pcscdSwapKb\":-1}", null)]
+    public void PcscMemoryIsValidatedAndTotalRequiresBothComponents(string system, double? expectedTotal)
+    {
+        using var document = JsonDocument.Parse("{\"system\":" + system + "}");
+        var report = TerminalDiagnostics.Summarize(document.RootElement);
+        var filtered = JsonSerializer.SerializeToElement(TerminalDiagnostics.Filter(document.RootElement));
+        Assert.Equal(expectedTotal, report.PcscdAnonymousAndSwapKb);
+        Assert.Equal(expectedTotal, filtered.GetProperty("pcscdAnonymousAndSwapKb").Deserialize<double?>());
+        if (expectedTotal is not null)
+        {
+            Assert.Equal(2_000_000_000, report.PcscdStartTicks);
+            Assert.Equal("2.5.2-1~stempeluhr13.1", report.PcscdVersion);
+            var line = TerminalMetricsLineProtocol.Format(new("pi", report, DateTimeOffset.UnixEpoch));
+            Assert.Contains("pcscd_anonymous_and_swap_kb=900", line);
+            Assert.Contains("pcscd_version=2.5.2-1~stempeluhr13.1", line);
+        }
+    }
+
+    [Theory]
+    [InlineData("bad version!")]
+    [InlineData("<script>")]
+    public void InvalidPcscPackageVersionIsNotForwarded(string version)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { system = new { pcscdVersion = version } }));
+        Assert.Null(TerminalDiagnostics.Summarize(document.RootElement).PcscdVersion);
+    }
+
     [Fact]
     public void RetainsRequestAgeAndEventTimelineAndStateWithoutSecrets()
     {

@@ -14,6 +14,7 @@ import argparse
 import http.server
 import json
 import logging
+import signal
 import sys
 import threading
 import time
@@ -26,8 +27,7 @@ from pathlib import Path
 from typing import Any
 from terminal_diagnostics import DiagnosticsMonitor, state_directory
 
-from smartcard.Exceptions import CardConnectionException, NoCardException
-from smartcard.System import readers
+from smartcard import scard
 
 
 LOGGER = logging.getLogger("stempeluhr-nfc-agent")
@@ -510,9 +510,11 @@ def main() -> int:
         "Local scan server listening on %s for %s", scan_server.url, scan_server.allowed_origin
     )
 
+    previous_sigterm = signal.signal(signal.SIGTERM, stop_agent)
     try:
         run(config, scan_server)
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
         diagnostics.close()
         scan_server.shutdown()
         scan_thread.join(timeout=5)
@@ -520,47 +522,209 @@ def main() -> int:
     return 0
 
 
+def stop_agent(_signum, _frame) -> None:
+    # systemd sends SIGTERM: unwind finally blocks before exiting.
+    raise SystemExit(0)
+
+
+# Card-level results: the card left, is unreadable or busy. The reader and the
+# PC/SC context stay valid; anything else counts as reader/service failure.
+def _card_unavailable_codes() -> frozenset:
+    return frozenset((
+        scard.SCARD_E_NO_SMARTCARD, scard.SCARD_W_REMOVED_CARD, scard.SCARD_W_RESET_CARD,
+        scard.SCARD_W_UNRESPONSIVE_CARD, scard.SCARD_W_UNPOWERED_CARD, scard.SCARD_E_PROTO_MISMATCH,
+        scard.SCARD_E_SHARING_VIOLATION, scard.SCARD_E_NOT_TRANSACTED,
+    ))
+
+
+# Upper bound for one blocking status wait: SIGTERM is handled between waits.
+STATUS_WAIT_MS = 1000
+# Reads of one held object before waiting for its removal.
+UNREADABLE_CARD_ATTEMPTS = 3
+
+
+class PcscError(Exception):
+    """The reader or pcscd failed; the context must be rebuilt."""
+
+
+class ReaderSession:
+    """One PC/SC context for the agent's lifetime.
+
+    Card presence is awaited with SCardGetStatusChange, which needs no card
+    connection. pcscd runs a Polkit check per new context and per
+    SCardConnect, so a card is connected only once per tap instead of on
+    every poll.
+    """
+
+    def __init__(self, name_filter: str | None):
+        self.name_filter = name_filter
+        self.context = None
+        self.reader: str | None = None
+        self.state = 0
+
+    def open(self) -> bool:
+        if self.context is None:
+            hresult, context = scard.SCardEstablishContext(scard.SCARD_SCOPE_USER)
+            _check(hresult, "SCardEstablishContext")
+            self.context = context
+        if self.reader is None:
+            hresult, names = scard.SCardListReaders(self.context, [])
+            if hresult == scard.SCARD_E_NO_READERS_AVAILABLE:
+                return False
+            _check(hresult, "SCardListReaders")
+            reader = choose_reader(names or [], self.name_filter)
+            if reader is None:
+                return False
+            self.reader, self.state = reader, scard.SCARD_STATE_UNAWARE
+            LOGGER.info("Using PC/SC reader: %s", reader)
+        return True
+
+    def close(self) -> None:
+        context, self.context, self.reader = self.context, None, None
+        if context is None:
+            return
+        hresult = scard.SCardReleaseContext(context)
+        if hresult != scard.SCARD_S_SUCCESS:
+            # Expected after a pcscd restart: the daemon already dropped it.
+            LOGGER.debug("PC/SC context release failed: %s", scard.SCardGetErrorMessage(hresult))
+
+    def card_present(self) -> bool:
+        return bool(self.state & scard.SCARD_STATE_PRESENT)
+
+    def wait_for_card(self, timeout_ms: int = STATUS_WAIT_MS) -> bool:
+        """True when a card is on the reader, waiting up to ``timeout_ms``."""
+        # A card can leave during connect/transmit. Refresh even a cached
+        # PRESENT state before another connection, without blocking a held card.
+        self._wait_for_change(0 if self.card_present() else timeout_ms)
+        return self.card_present()
+
+    def wait_for_removal(self, timeout_s: float | None = None) -> bool:
+        """True once the card left; False if it is still there after ``timeout_s``.
+
+        A changed event counter means the card was removed and a card put
+        back between two waits - that also counts as removal.
+        """
+        events = self.state >> 16
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+        while self.card_present() and self.state >> 16 == events:
+            wait_ms = STATUS_WAIT_MS
+            if deadline is not None:
+                remaining_ms = int((deadline - time.monotonic()) * 1000)
+                if remaining_ms <= 0:
+                    return False
+                wait_ms = min(wait_ms, remaining_ms)
+            self._wait_for_change(wait_ms)
+        return True
+
+    def read_uid(self) -> str | None:
+        hresult, card, protocol = scard.SCardConnect(
+            self.context, self.reader, scard.SCARD_SHARE_SHARED,
+            scard.SCARD_PROTOCOL_T0 | scard.SCARD_PROTOCOL_T1,
+        )
+        if hresult in _card_unavailable_codes():
+            return None
+        _check(hresult, "SCardConnect")
+        try:
+            hresult, response = scard.SCardTransmit(card, protocol, GET_UID_APDU)
+            if hresult in _card_unavailable_codes():
+                return None
+            _check(hresult, "SCardTransmit")
+        finally:
+            # The card may already be gone; the handle is released either way.
+            scard.SCardDisconnect(card, scard.SCARD_UNPOWER_CARD)
+
+        if len(response) < 2 or tuple(response[-2:]) != (0x90, 0x00):
+            LOGGER.warning("Reader returned unexpected status %s", bytes(response[-2:]).hex(" ").upper())
+            return None
+        return "".join(f"{byte:02X}" for byte in response[:-2])
+
+    def _wait_for_change(self, timeout_ms: int) -> None:
+        hresult, states = scard.SCardGetStatusChange(self.context, timeout_ms, [(self.reader, self.state)])
+        if hresult == scard.SCARD_E_TIMEOUT:
+            return
+        _check(hresult, "SCardGetStatusChange")
+        state = states[0][1] & ~scard.SCARD_STATE_CHANGED
+        if state & (scard.SCARD_STATE_UNKNOWN | scard.SCARD_STATE_UNAVAILABLE):
+            raise PcscError(f"reader {self.reader} unavailable")
+        self.state = state
+
+
+def _check(hresult: int, operation: str) -> None:
+    if hresult != scard.SCARD_S_SUCCESS:
+        raise PcscError(f"{operation}: {scard.SCardGetErrorMessage(hresult)}")
+
+
+def choose_reader(names: list[str], name_filter: str | None) -> str | None:
+    if not names:
+        return None
+    if not name_filter:
+        return names[0]
+    lowered_filter = name_filter.lower()
+    for name in names:
+        if lowered_filter in name.lower():
+            return name
+    LOGGER.warning("No reader matching '%s'. Available readers: %s", name_filter, names)
+    return None
+
+
 def run(config: AgentConfig, scan_server: LocalScanServer) -> None:
     last_uid: str | None = None
     last_submit_at = 0.0
-    selected_reader_name: str | None = None
-
-    while True:
-        try:
-            reader = select_reader(config.reader_name_contains)
-            if reader is None:
-                LOGGER.warning("No PC/SC reader found. Waiting for ACR122U...")
-                time.sleep(3)
-                continue
-
-            reader_name = str(reader)
-            if reader_name != selected_reader_name:
-                selected_reader_name = reader_name
-                LOGGER.info("Using PC/SC reader: %s", reader_name)
-
-            uid = read_uid(reader)
-            if uid is None:
-                time.sleep(0.2)
-                continue
-
-            now = time.monotonic()
-            if uid == last_uid and now - last_submit_at < config.debounce_seconds:
-                time.sleep(0.2)
-                continue
-
-            # Book the debounce and wait for the card to leave even if no
-            # ack arrives - another tap of the same card must be a new scan.
+    failed_reads = 0
+    session = ReaderSession(config.reader_name_contains)
+    try:
+        while True:
             try:
-                handle_card_scan(config, uid, scan_server)
-            finally:
+                if not session.open():
+                    LOGGER.warning("No PC/SC reader found. Waiting for ACR122U...")
+                    time.sleep(3)
+                    continue
+                if not session.wait_for_card():
+                    failed_reads = 0
+                    continue
+                uid = session.read_uid()
+                if uid is None:
+                    failed_reads += 1
+                    if failed_reads < UNREADABLE_CARD_ATTEMPTS:
+                        # A card placed slowly can fail its first reads.
+                        time.sleep(0.5)
+                        continue
+                    # Phone, bank card or mute tag: every connect costs pcscd
+                    # a Polkit check, so wait until the object is taken away.
+                    LOGGER.info("Unreadable card on the reader; waiting for its removal")
+                    session.wait_for_removal()
+                    failed_reads = 0
+                    continue
+                failed_reads = 0
+                now = time.monotonic()
+                if uid == last_uid and now - last_submit_at < config.debounce_seconds:
+                    # A tap within the debounce is ignored; a card still held
+                    # after it counts as a new scan, as before.
+                    if session.wait_for_removal(config.debounce_seconds - (now - last_submit_at)):
+                        continue
+                    now = time.monotonic()
+                # Book the debounce and wait for removal even when the UI never
+                # acknowledged the scan or publishing failed: a held card must
+                # not become a second scan.
                 last_uid = uid
                 last_submit_at = now
-                wait_until_card_removed(reader)
-        except KeyboardInterrupt:
-            raise
-        except Exception:
-            LOGGER.exception("Unexpected NFC loop error")
-            time.sleep(2)
+                try:
+                    handle_card_scan(config, uid, scan_server)
+                except Exception:
+                    LOGGER.exception("Handling scan of card %s failed", uid)
+                # SIGTERM during the Ack wait raises SystemExit, which skips
+                # this wait: a held card would delay shutdown indefinitely.
+                session.wait_for_removal()
+            except PcscError as error:
+                session.close()
+                LOGGER.warning("PC/SC reader unavailable (%s); reconnecting", error)
+                time.sleep(2)
+            except Exception:
+                session.close()
+                LOGGER.exception("Unexpected NFC loop error")
+                time.sleep(2)
+    finally:
+        session.close()
 
 
 def beep(status: str) -> None:
@@ -654,43 +818,6 @@ def utc_now_epoch() -> float:
 def iso8601_from_epoch(epoch_seconds: float) -> str:
     """Converts an epoch timestamp to an ISO-8601 string (UTC)."""
     return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
-
-
-def select_reader(name_filter: str | None):
-    available_readers = readers()
-    if not available_readers:
-        return None
-
-    if not name_filter:
-        return available_readers[0]
-
-    lowered_filter = name_filter.lower()
-    for reader in available_readers:
-        if lowered_filter in str(reader).lower():
-            return reader
-
-    LOGGER.warning("No reader matching '%s'. Available readers: %s", name_filter, available_readers)
-    return None
-
-
-def read_uid(reader) -> str | None:
-    try:
-        connection = reader.createConnection()
-        connection.connect()
-        data, sw1, sw2 = connection.transmit(GET_UID_APDU)
-    except (CardConnectionException, NoCardException):
-        return None
-
-    if (sw1, sw2) != (0x90, 0x00):
-        LOGGER.warning("Reader returned unexpected status %02X %02X", sw1, sw2)
-        return None
-
-    return "".join(f"{byte:02X}" for byte in data)
-
-
-def wait_until_card_removed(reader) -> None:
-    while read_uid(reader) is not None:
-        time.sleep(0.2)
 
 
 if __name__ == "__main__":

@@ -116,7 +116,7 @@ export class TerminalStatusPage {
   }
 
   megabytes(kilobytes: number | null): string {
-    return kilobytes === null ? '-' : `${Math.round(kilobytes / 1024)} MB`;
+    return kilobytes == null ? '-' : `${Math.round(kilobytes / 1024)} MiB`;
   }
 
   value(value: number | null, unit: string): string {

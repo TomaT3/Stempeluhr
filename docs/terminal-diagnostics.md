@@ -61,7 +61,8 @@ Bestehende `config.json`-Dateien bleiben gültig.
   je maximal etwa 2 MiB. Die Größe, nicht eine feste Aufbewahrungsdauer, ist
   garantiert begrenzt. `StateDirectory` überlebt Service- und Pi-Neustarts.
 - Ein unabhängiger Agent-Thread misst jede Minute CPU-Auslastung, freien RAM,
-  Chromium-Prozesszahl und summierten RSS, pcscd-RSS, Temperatur,
+  Chromium-Prozesszahl und summierten RSS, pcscd-RSS, anonymen pcscd-RAM
+  (`RssAnon`), Prozess-Swap (`VmSwap`) und deren Summe, Temperatur,
   Unterspannungs-/Drosselungsflags, freien Speicherplatz und Laufzeit.
   Summierter RSS zählt gemeinsam genutzten Speicher mehrfach; er dient als
   Verlauf, nicht als exakte physische Speichernutzung. Nicht verfügbare
@@ -97,6 +98,44 @@ Live-Buchung erlaubt die Zuordnung zum vorhandenen Ablehnungsjournal.
 Das normale NFC-Journal älterer Agenten enthält weiterhin Karten-IDs;
 Logexporte daher vertraulich behandeln und nicht in Git committen.
 Die Diagnose startet keinen Browser neu und führt keine Buchung aus.
+
+## PC/SC-Speicherwachstum prüfen
+
+Die Messungen vom 04.10.2026 in
+[Issue #86](https://github.com/TomaT3/Stempeluhr/issues/86) zeigen Wachstum
+des anonymen `pcscd`-Speichers einschließlich Swap auf einem Trixie/arm64-Pi
+mit pcsc-lite 2.3.3 und Polkit. Ein plötzlich fallender RSS oder steigender
+`MemAvailable` ist keine Entwarnung: Seiten können nur ausgelagert worden
+sein. pcscd 2.3.3 verliert bei jeder Polkit-Prüfung (neuer PC/SC-Kontext,
+jede Kartenverbindung) Speicher; der Upstream-Fix ist ab 2.5.0 enthalten.
+Der Agent wartet deshalb ereignisgesteuert auf Karten und verbindet sich nur
+noch einmal pro aufgelegter Karte; die Paketmigration liefert den Fix selbst.
+
+Die Agent-Historie, API-Diagnose und Influx enthalten `pcscdRssKb`,
+`pcscdAnonymousKb`, `pcscdSwapKb` und `pcscdAnonymousAndSwapKb`. Die Summe
+fehlt bei nicht lesbaren Komponenten; sie wird nicht als Null dargestellt.
+Bei keinem oder mehreren lesbaren `pcscd`-Prozessen wird keine scheinbar
+eindeutige Prozessmessung geliefert. `pcscdPid` und `pcscdStartTicks`
+(Startzeit in Kernel-Clock-Ticks seit Boot) unterscheiden einen Prozess von
+seinem Nachfolger, auch bei PID-Wiederverwendung. `pcscdVersion` ist die
+installierte Debian-Paketversion, wird spätestens alle zehn Minuten neu
+abgefragt und beweist allein nicht den Stand eines laufenden alten Binaries.
+Messwerte in KiB werden im Adminbereich in MiB angezeigt.
+
+Nach dem [Paketwechsel](raspberry-pi-kiosk-nfc.md#pcsc-paketmigration-bestehender-terminals)
+den Verlauf von `pcscdAnonymousAndSwapKb` mindestens 24 Stunden beobachten.
+Erwartet wird ein begrenzter Verlauf nach der Aufwärmphase, ohne
+fortlaufendes Wachstum von anonymem RAM plus Swap. Ein neuer `pcscdStartTicks`
+kennzeichnet einen Neustart; er setzt den Verlauf zurück und ist kein
+Fixnachweis.
+Bei weiterem Wachstum Heap-Profil/Allokationsdiagnose des NFC-Stacks
+erstellen und Leck, Retention oder Fragmentierung unterscheiden.
+
+Ein gezielter `pcscd`-Neustart kann Speicher vorübergehend freigeben,
+unterbricht aber NFC und gilt nur als Übergangslösung. Echte Kartenscans,
+Entfernen/Wiederauflegen sowie Wiederverbindung nach USB-Wechsel und
+Dienstneustart müssen auf Hardware geprüft werden. Die Container- und
+Regressionstests ersetzen diese Abnahme nicht.
 
 ## Überwachung
 
