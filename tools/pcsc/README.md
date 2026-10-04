@@ -36,6 +36,9 @@ Die Pakete werden nicht bei jedem Release kompiliert. `Dockerfile` und
 3. Er prüft Installation und Rollback (`tools/testenv/test_pcsc_packages.sh`)
    und veröffentlicht neu gebaute Pakete erst danach, unverändert als Image
    unter diesem Tag. Ein vorhandener Tag wird nie ersetzt.
+   Läufe mit demselben Eingabe-Hash werden über alle Branches und Auslöser
+   hinweg serialisiert. Nur ein bestätigtes fehlendes Manifest erlaubt einen
+   Neubau; Netzwerk-, Registry- und Authentifizierungsfehler brechen den Lauf ab.
 4. Solange der Pin nicht passt, schlägt der Lauf fehl und nennt in Fehler und
    Zusammenfassung die neue `FROM`-Zeile für das Haupt-`Dockerfile`.
 

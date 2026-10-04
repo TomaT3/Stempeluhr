@@ -11,6 +11,7 @@ on:
       - tools/pcsc/**
       - tools/pi-nfc-agent/pcsc_maintenance.py
       - tools/testenv/test_pcsc_packages.sh
+      - tools/testenv/test_pcsc_image_digest.sh
       - .github/workflows/pcsc-packages.yml
   push:
     branches: [main]
@@ -19,24 +20,39 @@ on:
       - tools/pcsc/**
       - tools/pi-nfc-agent/pcsc_maintenance.py
       - tools/testenv/test_pcsc_packages.sh
+      - tools/testenv/test_pcsc_image_digest.sh
       - .github/workflows/pcsc-packages.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: pcsc-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   IMAGE: ghcr.io/tomat3/stempeluhr/pcsc-packages
 
 jobs:
+  inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      hash: ${{ steps.inputs.outputs.hash }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test registry lookup error handling
+        run: bash tools/testenv/test_pcsc_image_digest.sh
+      - name: Calculate package input hash
+        id: inputs
+        run: echo "hash=$(bash tools/pcsc/inputs-hash.sh)" >> "$GITHUB_OUTPUT"
+
   packages:
     name: PC/SC Trixie arm64 packages + rollback
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
+    needs: inputs
+    # PR, main and manual runs with identical inputs share the entire
+    # lookup/build/test/publish lock. Never cancel a publisher in progress.
+    concurrency:
+      group: pcsc-inputs-${{ needs.inputs.outputs.hash }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -63,10 +79,13 @@ jobs:
           if [[ "$pinned" =~ ^"${ref}"@sha256:[0-9a-f]{64}$ ]]; then
             source=pinned
             export_image "$pinned"
-          elif digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+          elif digest="$(bash tools/pcsc/image-digest.sh "$ref")"; then
             source=published
             export_image "${ref}@${digest}"
           else
+            status=$?
+            # Only a confirmed missing manifest permits a new build.
+            [ "$status" -eq 2 ] || exit "$status"
             source=built
             docker build --platform linux/arm64 --output type=local,dest=artifacts/pcsc tools/pcsc
           fi
@@ -107,11 +126,13 @@ jobs:
         env:
           REF: ${{ steps.packages.outputs.ref }}
         run: |
-          if digest="$(docker buildx imagetools inspect "$REF" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+          if digest="$(bash tools/pcsc/image-digest.sh "$REF")"; then
             line="FROM --platform=linux/arm64 ${REF}@${digest} AS pcsc-packages"
             echo "### PC/SC pin outdated"$'\n\n'"Set in \`Dockerfile\`:"$'\n\n```\n'"$line"$'\n```' >> "$GITHUB_STEP_SUMMARY"
             echo "::error file=Dockerfile::PC/SC build inputs changed. Pin the tested packages: $line"
           else
+            status=$?
+            [ "$status" -eq 2 ] || exit "$status"
             echo "::error file=Dockerfile::PC/SC build inputs changed and ${REF} is not published. Run this workflow on the branch (workflow_dispatch) and pin the reported image."
           fi
           exit 1
