@@ -96,15 +96,31 @@ Quellstand und Prüfsummen aktualisieren, Pakete neu bauen und testen.
 
 Der Agent-Updater prüft den installierten Fixstand nach jedem erfolgreichen
 Lauf. Fehlt er, startet er die Migration einmal pro mitgelieferter
-Paketversion als eigenen systemd-Dienst; ein gescheiterter Versuch wird
-zurückgerollt und erst nach einem manuellen `--apply` wiederholt. Eine
+Paketversion und Migrationsrevision als eigenen systemd-Dienst. Revision 2
+ermöglicht einen neuen Versuch nach dem fehlgeschlagenen Wechsel mit 0.19.0,
+auch bei unveränderter Paketversion und vorhandenem `auto-attempt.json`.
+Weitere Timer-Läufe wiederholen einen gescheiterten Versuch derselben Revision
+nicht; manuelles `--apply` bleibt möglich. Eine
 ältere Container-/Agent-Version rollt PC/SC-Pakete nicht automatisch zurück. Der getrennte Paket-Rollback ist in der
 [Pi-Anleitung](../../docs/raspberry-pi-kiosk-nfc.md#pcsc-paketmigration-bestehender-terminals)
 beschrieben.
 
+Die Migration installiert eine dauerhafte udev-Regel ausschließlich für den
+ACR122U (`072f:2200`, USB-Gerät): `root:pcscd`, Modus `0660`. Sie lädt die
+Regeln neu und aktiviert sie für bereits angeschlossene Leser, bevor der
+unprivilegierte Dienst startet. Neu angeschlossene Leser erhalten dieselben
+Rechte. Dienst und Socket bleiben während des Paketwechsels zur Laufzeit
+maskiert; alte PID-/Socket-Dateien und das Laufzeitverzeichnis werden entfernt
+und anhand der installierten tmpfiles-/systemd-Regeln neu angelegt. Beim
+Rollback wird die vorherige USB-Regel wiederhergestellt bzw. die neue entfernt.
+Die Berechtigung für den Agenten bleibt über Polkit geregelt. Das unveränderte,
+per Digest fixierte Paketimage erhält die Korrektur über das Agent-Bundle;
+ein Paketneubau oder manueller Eingriff am Pi ist nicht erforderlich.
+
 ## Stand der Validierung
 
-Paketbuild, Installierbarkeit, Polkit/libudev, GLib-Fixsymbole und
+Paketbuild, Installierbarkeit, Polkit/libudev, GLib-Fixsymbole, Dienst-/Socket-
+Benutzer, udev-Regelsyntax, Laufzeitverzeichnis und
 Rückinstallation werden in einem wegwerfbaren Trixie/arm64-Container geprüft.
 Das ersetzt weder die Prüfung eines ACR122U am Pi noch einen echten Scan
 oder die mindestens 24-stündige Speicherbeobachtung für Issue #86.

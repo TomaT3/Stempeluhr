@@ -210,9 +210,12 @@ fertig ist. Nach einem Server-Deploy ist ein Bestands-Pi damit spätestens
 nach zwei Timer-Läufen migriert. Der Installer führt dieselbe Migration
 direkt aus und meldet ihr Ergebnis; `--skip-apt` überspringt sie dort.
 
-Pro mitgelieferter Paketversion gibt es genau einen automatischen Versuch.
+Pro mitgelieferter Paketversion und Migrationsrevision gibt es genau einen automatischen Versuch.
 Scheitert er, wird er zurückgerollt und nicht wiederholt; der Updater meldet
 dann bei jedem Lauf „automatische Migration bereits versucht“ im Journal.
+Die korrigierte Revision 2 erlaubt auch nach einem Fehlversuch mit 0.19.0 und
+altem Marker genau einen neuen Versuch bei derselben Paketversion. Bereits
+geeignete Versionen >= 2.5.0 bleiben unverändert.
 Als Versuch zählen ein gestarteter Paketwechsel und eine Ablehnung in der
 Vorprüfung (z. B. gehaltene Pakete). Fehler beim Herunterladen der
 Originalpakete ändern nichts und werden beim nächsten Updater-Lauf wiederholt.
@@ -227,6 +230,12 @@ Während des Paketwechsels werden Agent und pcscd angehalten bzw. neu
 gestartet; NFC-Scans sind dabei typischerweise unter einer Minute nicht
 möglich. SSH, Tailscale und Netzwerk werden nicht umkonfiguriert; ein
 Pi-Neustart ist nicht erforderlich.
+Die Migration richtet USB-Rechte ausschließlich für ACR122U-Leser
+(`072f:2200`) ein und aktiviert sie auch für bereits angeschlossene Geräte.
+Dienst und Socket werden während des Paketwechsels gegen Neustarts gesperrt;
+das Laufzeitverzeichnis wird für den jeweiligen Dienstbenutzer neu angelegt.
+Beim Rollback wird die vorherige USB-Regel wiederhergestellt bzw. die neue
+entfernt. Fehlerausgaben der Leserprüfung stehen im Aktivierungs-/Rollback-Journal.
 
 Vor dem Paketwechsel werden Prüfsummen, Paketmetadaten, Distribution und
 Architektur geprüft. Der Paketmanager simuliert die Installation; weitere

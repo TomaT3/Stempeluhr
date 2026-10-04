@@ -4,6 +4,7 @@ Run on Linux (fcntl/dpkg). Package installation itself is tested separately
 in an arm64 Trixie container by test_pcsc_packages.sh.
 """
 import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
@@ -24,7 +25,9 @@ class MaintenanceTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.addCleanup(self.temp.cleanup)
         for name, value in (("BASE", self.root / "agent"), ("STATE", self.root / "state"),
-                            ("CONFIG", self.root / "config.json")):
+                            ("CONFIG", self.root / "config.json"),
+                            ("USB_RULE", self.root / "udev" / "99-stempeluhr-pcsc.rules"),
+                            ("PCSC_RUNTIME", self.root / "run" / "pcscd")):
             p = patch.object(maintenance, name, value)
             p.start()
             self.addCleanup(p.stop)
@@ -135,6 +138,17 @@ class MaintenanceTests(unittest.TestCase):
         # A manual run also blocks a later automatic repeat of this version.
         self.assertEqual(json.loads(maintenance.auto_marker().read_text())["targetVersion"], VERSION)
         self.assertTrue(snapshot["browserAlive"])
+
+    def test_prepare_backs_up_existing_usb_rule_before_changing_services(self):
+        maintenance.USB_RULE.parent.mkdir()
+        maintenance.USB_RULE.write_text("original custom rule")
+        maintenance.USB_RULE.chmod(0o600)
+        folder, calls = self.prepare()
+        snapshot = json.loads((folder / "snapshot.json").read_text())
+        self.assertEqual((folder / "usb-rule.rules").read_text(), "original custom rule")
+        self.assertEqual(snapshot["usbRule"], {"uid": maintenance.USB_RULE.stat().st_uid,
+                                              "gid": maintenance.USB_RULE.stat().st_gid})
+        self.assertFalse(any(args[:2] == ("systemctl", "mask") for args in calls))
 
     def test_failed_original_download_leaves_no_package_copies(self):
         # The updater retries temporary download errors every run.
@@ -250,6 +264,14 @@ class MaintenanceTests(unittest.TestCase):
                 self.assertIn(("systemctl", "start", maintenance.AGENT_SERVICE), calls)
                 self.assertEqual(maintenance.read_result(folder)["status"],
                                  "ok" if action == "activate" else "rolled-back")
+                mask = ("systemctl", "mask", "--runtime", "--now", *maintenance.PCSC_UNITS)
+                unmask = ("systemctl", "unmask", "--runtime", *maintenance.PCSC_UNITS)
+                install_index = next(i for i, args in enumerate(calls) if args[0] == "apt-get")
+                self.assertLess(calls.index(mask), install_index)
+                self.assertLess(install_index, calls.index(unmask))
+                self.assertLess(calls.index(unmask), calls.index(("systemctl", "start", "pcscd.service")))
+                if action == "activate":
+                    self.assertLess(calls.index(("udevadm", "settle", "--timeout=30")), calls.index(unmask))
 
     def test_wrong_restored_version_cannot_count_as_a_successful_rollback(self):
         folder = self.root / "rollback"
@@ -258,7 +280,8 @@ class MaintenanceTests(unittest.TestCase):
         snapshot = {"auto": [], "originals": {"pcscd": [OLD, "arm64"]}, "conffiles": [],
                     "targetVersion": VERSION}
         with patch.object(maintenance, "command"), \
-             patch.object(maintenance, "installed", return_value=(VERSION, "arm64")):
+             patch.object(maintenance, "installed", return_value=(VERSION, "arm64")), \
+             patch.object(maintenance.subprocess, "run", return_value=Mock(returncode=0)):
             with self.assertRaisesRegex(ValueError, "Originalversion"):
                 maintenance.rollback(folder, snapshot)
         self.assertIsNone(maintenance.read_result(folder))
@@ -316,6 +339,99 @@ class MaintenanceTests(unittest.TestCase):
             self.assertTrue(maintenance.auto_possible())
             maintenance.record_auto_attempt(VERSION)
             self.assertFalse(maintenance.auto_possible())
+
+    def test_legacy_failed_marker_allows_exactly_one_corrected_attempt(self):
+        maintenance.STATE.mkdir()
+        maintenance.auto_marker().write_text(json.dumps({"targetVersion": VERSION, "startedAt": 1}))
+        with patch.object(maintenance, "bundle_version", return_value=VERSION):
+            self.assertTrue(maintenance.auto_possible())
+            maintenance.record_auto_attempt(VERSION)
+            for _ in range(3):
+                self.assertFalse(maintenance.auto_possible())
+            with patch.object(maintenance, "MIGRATION_REVISION", maintenance.MIGRATION_REVISION + 1):
+                self.assertTrue(maintenance.auto_possible())
+
+    def test_corrected_auto_attempt_keeps_suitable_packages_untouched(self):
+        with patch.object(maintenance, "suitable", return_value=True), \
+             patch.object(maintenance, "prepare") as prepare, \
+             patch.object(maintenance, "command") as command:
+            self.assertEqual(self.main("--apply", "--auto"), 0)
+        prepare.assert_not_called()
+        command.assert_not_called()
+        self.assertFalse(maintenance.auto_marker().exists())
+
+    def test_usb_rule_is_scoped_and_activated_for_already_connected_devices(self):
+        with patch.object(maintenance, "command") as command:
+            maintenance.install_usb_rule()
+        rule = maintenance.USB_RULE.read_text()
+        self.assertIn('ENV{DEVTYPE}=="usb_device"', rule)
+        self.assertIn('ATTR{idVendor}=="072f", ATTR{idProduct}=="2200"', rule)
+        self.assertIn('GROUP="pcscd", MODE="0660"', rule)
+        self.assertEqual(maintenance.USB_RULE.stat().st_mode & 0o777, 0o644)
+        calls = [call.args for call in command.call_args_list]
+        self.assertEqual(calls[0], ("udevadm", "control", "--reload-rules"))
+        self.assertIn("--attr-match=idProduct=2200", calls[1])
+        self.assertEqual(calls[2], ("udevadm", "settle", "--timeout=30"))
+
+    def test_rollback_restores_original_usb_rule_or_removes_new_rule(self):
+        for existed in (False, True):
+            with self.subTest(existed=existed):
+                maintenance.USB_RULE.parent.mkdir(exist_ok=True)
+                maintenance.USB_RULE.write_text("new rule")
+                backup = self.root / "usb-rule.rules"
+                backup.write_text("original rule")
+                backup.chmod(0o600)
+                with patch.object(maintenance, "command") as command, \
+                     patch.object(maintenance.os, "chown") as chown:
+                    maintenance.restore_usb_rule(self.root, {"usbRule": {"uid": 12, "gid": 34} if existed else None})
+                self.assertEqual(maintenance.USB_RULE.exists(), existed)
+                if existed:
+                    self.assertEqual(maintenance.USB_RULE.read_text(), "original rule")
+                    self.assertEqual(maintenance.USB_RULE.stat().st_mode & 0o777, 0o600)
+                    chown.assert_called_once_with(maintenance.USB_RULE, 12, 34)
+                else:
+                    chown.assert_not_called()
+                self.assertEqual(command.call_count, 3)
+
+    def test_runtime_reset_removes_old_user_artifacts_but_rejects_unknown_files(self):
+        runtime = maintenance.PCSC_RUNTIME
+        runtime.mkdir(parents=True)
+        (runtime / "pcscd.pid").write_text("123")
+        (runtime / "pcscd.comm").touch()
+        maintenance.reset_pcsc_runtime()
+        self.assertFalse(runtime.exists())
+        runtime.mkdir()
+        (runtime / "unexpected").touch()
+        with self.assertRaises(OSError):
+            maintenance.reset_pcsc_runtime()
+        self.assertTrue((runtime / "unexpected").exists())
+
+    def test_service_transition_masks_socket_and_recreates_runtime_before_start(self):
+        with patch.object(maintenance, "command") as command, \
+             patch.object(maintenance, "reset_pcsc_runtime") as reset:
+            maintenance.pause_pcsc()
+            maintenance.resume_pcsc()
+        calls = [call.args for call in command.call_args_list]
+        self.assertEqual(calls, [
+            ("systemctl", "mask", "--runtime", "--now", "pcscd.socket", "pcscd.service"),
+            ("systemctl", "daemon-reload"),
+            ("systemd-tmpfiles", "--create", "--prefix=/run/pcscd"),
+            ("systemctl", "unmask", "--runtime", "pcscd.socket", "pcscd.service"),
+            ("systemctl", "start", "pcscd.service")])
+        reset.assert_called_once()
+
+    def test_probe_stderr_is_logged_without_config_or_probe_command(self):
+        (self.root / "probe_reader.py").write_text("PUBLIC_PROBE_SOURCE")
+        error = subprocess.CalledProcessError(1, "PROBE_COMMAND", stderr="No readers: LIBUSB_ERROR_ACCESS")
+        with patch.object(maintenance, "suitable", return_value=True), \
+             patch.object(maintenance, "command", side_effect=error), \
+             patch.object(maintenance.sys, "stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaises(subprocess.CalledProcessError):
+                maintenance.verify(self.root, {"readerFilter": "ACR122"})
+        self.assertIn("LIBUSB_ERROR_ACCESS", stderr.getvalue())
+        self.assertNotIn("PUBLIC_PROBE_SOURCE", stderr.getvalue())
+        self.assertNotIn("PROBE_COMMAND", stderr.getvalue())
+        self.assertNotIn("SECRET", stderr.getvalue())
         with patch.object(maintenance, "bundle_version", return_value="2.5.3-1~stempeluhr13.1"):
             self.assertTrue(maintenance.auto_possible())
         # Bundles without packages (plain script builds) never migrate automatically.
@@ -433,7 +549,10 @@ class MaintenanceTests(unittest.TestCase):
              patch.object(maintenance.subprocess, "run", return_value=Mock(returncode=0)) as run:
             with self.assertRaises(subprocess.CalledProcessError):
                 maintenance.rollback(folder, snapshot)
-        run.assert_called_once_with(["systemctl", "start", maintenance.AGENT_SERVICE], check=False)
+        self.assertIn(unittest.mock.call(["systemctl", "unmask", "--runtime", *maintenance.PCSC_UNITS], check=False),
+                      run.call_args_list)
+        self.assertEqual(run.call_args_list[-1],
+                         unittest.mock.call(["systemctl", "start", maintenance.AGENT_SERVICE], check=False))
 
     def test_dpkg_lock_of_another_apt_run_is_waited_for(self):
         locked = subprocess.CalledProcessError(2, "dpkg", stderr="dpkg: error: dpkg frontend lock was locked by another process")

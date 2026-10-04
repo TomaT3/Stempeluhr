@@ -4,7 +4,7 @@
 --check makes no changes. --apply uses the packages authenticated by the agent
 bundle's SHA-256; original packages must be downloadable before any service is
 stopped. The agent updater starts --apply --auto once per bundled package
-version; a failed automatic attempt is not repeated without --apply. A
+version and migration revision; a failed attempt needs a new revision or --apply. A
 migration interrupted by a reboot is rolled back by the next --apply or
 --recover; the updater starts the latter even after a failed agent update.
 """
@@ -25,6 +25,14 @@ import urllib.request
 from contextlib import contextmanager
 
 MIN_VERSION = "2.5.0"
+MIGRATION_REVISION = 2  # v1 markers had only targetVersion (before USB/service transition fix).
+PCSC_UNITS = ("pcscd.socket", "pcscd.service")
+PCSC_RUNTIME = Path("/run/pcscd")
+USB_RULE = Path("/etc/udev/rules.d/99-stempeluhr-pcsc.rules")
+# Only the deployed ACR122U, never all USB devices or all ACS products.
+USB_RULE_CONTENT = ('SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", '
+                    'ATTR{idVendor}=="072f", ATTR{idProduct}=="2200", '
+                    'OWNER="root", GROUP="pcscd", MODE="0660"\n')
 PACKAGES = {"pcscd", "libpcsclite1", "libpcsclite-dev"}
 FINISHED = {"ok", "rolled-back", "unchanged"}
 # "failed" is followed by a rollback; these end a migration run.
@@ -105,12 +113,14 @@ def auto_marker():
 
 
 def auto_possible():
-    """An automatic attempt is made once per bundled package version."""
+    """One attempt per package version/revision, including legacy v1 markers."""
     version = bundle_version()
     if version is None:
         return False
     try:
-        return json.loads(auto_marker().read_text()).get("targetVersion") != version
+        marker = json.loads(auto_marker().read_text())
+        return (marker.get("targetVersion") != version
+                or marker.get("migrationRevision", 1) != MIGRATION_REVISION)
     except (OSError, ValueError):
         return True
 
@@ -154,9 +164,10 @@ def migration_running():
 
 def record_auto_attempt(version):
     # Also written for manual runs: after a failed or manually rolled back
-    # change the updater must not start the same package version again.
+    # change the updater must not start the same package/revision again.
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    auto_marker().write_text(json.dumps({"targetVersion": version, "startedAt": time.time()}) + "\n")
+    auto_marker().write_text(json.dumps({"targetVersion": version, "migrationRevision": MIGRATION_REVISION,
+                                        "startedAt": time.time()}) + "\n")
 
 
 def package_info(path):
@@ -242,6 +253,11 @@ def prepare():
         if held & selected.keys():
             raise ValueError("PC/SC-Pakete sind gehalten; Hold zuerst ausdrücklich klären")
         simulate(selected.values())
+        for unit in PCSC_UNITS:
+            if command("systemctl", "show", unit, "--property=LoadState", "--value") == "masked":
+                raise ValueError("PC/SC-Dienst oder Socket ist maskiert; manuell prüfen")
+        if USB_RULE.is_symlink():
+            raise ValueError("PC/SC-USB-Regel ist ein Symlink; manuell prüfen")
         STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
         folder = STATE / f"{time.time_ns()}"
         folder.mkdir(mode=0o700)
@@ -283,6 +299,11 @@ def prepare():
             if CONFIG.exists():
                 shutil.copy2(CONFIG, folder / "config.json")
             config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+            usb_rule = None
+            if USB_RULE.exists():
+                shutil.copy2(USB_RULE, folder / "usb-rule.rules")
+                stat = USB_RULE.stat()
+                usb_rule = {"uid": stat.st_uid, "gid": stat.st_gid}
             agent_active = active(AGENT_SERVICE)
             port = config.get("local_port", 8737)
             snapshot = {"agentActive": agent_active, "pcscActive": active("pcscd.service"),
@@ -293,7 +314,8 @@ def prepare():
                         "auto": sorted(set(command("apt-mark", "showauto").splitlines()) & selected.keys()),
                         "rollbackUnit": "stempeluhr-pcsc-rollback-" + folder.name,
                         "originals": {p: list(old[p]) for p in selected if old[p] is not None},
-                        "conffiles": conffiles, "targetVersion": version}
+                        "conffiles": conffiles, "targetVersion": version,
+                        "usbRule": usb_rule, "socketActive": active("pcscd.socket")}
             (folder / "snapshot.json").write_text(json.dumps(snapshot))
             shutil.copy2(__file__, folder / "pcsc_maintenance.py")
             shutil.copy2(Path(__file__).with_name("probe_reader.py"), folder / "probe_reader.py")
@@ -344,8 +366,13 @@ def verify(folder, snapshot, require_fix=True):
     # runuser exercises the actual Polkit permissions of the service account.
     # The snapshot directory is root-only. Pass public probe code as an argument
     # so the service user never needs access to backed-up credentials/packages.
-    command("runuser", "-u", "stempeluhr", "--", sys.executable, "-c", (folder / "probe_reader.py").read_text(),
-            snapshot["readerFilter"] or "")
+    try:
+        command("runuser", "-u", "stempeluhr", "--", sys.executable, "-c", (folder / "probe_reader.py").read_text(),
+                snapshot["readerFilter"] or "")
+    except subprocess.CalledProcessError as error:
+        # Only this public probe's stderr, never command arguments/config or APT output.
+        print("PC/SC-Leserprüfung fehlgeschlagen:", error.stderr or "(kein stderr)", file=sys.stderr)
+        raise
     if not active("pcscd.service"):
         raise ValueError("pcscd ist nach der Leserprüfung nicht aktiv")
     if snapshot["agentActive"]:
@@ -385,6 +412,57 @@ def restore_auto(snapshot):
         command("apt-mark", "auto", *snapshot["auto"])
 
 
+def pause_pcsc():
+    """Prevent socket activation and maintainer-script starts during user changes."""
+    command("systemctl", "mask", "--runtime", "--now", *PCSC_UNITS)
+
+
+def reset_pcsc_runtime():
+    # Both units are stopped/masked. Never reuse a PID/socket/directory owned by
+    # the previous service user. Reject unexpected files instead of deleting them.
+    if PCSC_RUNTIME.is_symlink():
+        raise ValueError("PC/SC-Laufzeitverzeichnis ist ein Symlink")
+    for name in ("pcscd.pid", "pcscd.comm"):
+        (PCSC_RUNTIME / name).unlink(missing_ok=True)
+    if PCSC_RUNTIME.exists():
+        PCSC_RUNTIME.rmdir()
+
+
+def refresh_usb_rule():
+    command("udevadm", "control", "--reload-rules")
+    command("udevadm", "trigger", "--action=add", "--subsystem-match=usb",
+            "--attr-match=idVendor=072f", "--attr-match=idProduct=2200")
+    command("udevadm", "settle", "--timeout=30")
+
+
+def install_usb_rule():
+    USB_RULE.parent.mkdir(parents=True, exist_ok=True)
+    USB_RULE.write_text(USB_RULE_CONTENT)
+    USB_RULE.chmod(0o644)
+    refresh_usb_rule()
+
+
+def restore_usb_rule(folder, snapshot):
+    if "usbRule" not in snapshot:
+        return  # Old archived migrations never installed our rule.
+    if snapshot["usbRule"] is None:
+        USB_RULE.unlink(missing_ok=True)
+    else:
+        shutil.copy2(folder / "usb-rule.rules", USB_RULE)
+        os.chown(USB_RULE, snapshot["usbRule"]["uid"], snapshot["usbRule"]["gid"])
+    refresh_usb_rule()
+
+
+def resume_pcsc():
+    reset_pcsc_runtime()
+    command("systemctl", "daemon-reload")
+    # Old pcscd uses tmpfiles; new pcscd uses RuntimeDirectory. Respect whichever
+    # package was just installed before systemd creates the activation socket.
+    command("systemd-tmpfiles", "--create", "--prefix=/run/pcscd")
+    command("systemctl", "unmask", "--runtime", *PCSC_UNITS)
+    command("systemctl", "start", "pcscd.service")
+
+
 def rollback(folder, snapshot):
     # A separately started APT update must not be overwritten by our rollback.
     for p, expected in snapshot["originals"].items():
@@ -395,6 +473,8 @@ def rollback(folder, snapshot):
             raise ValueError("PC/SC-Version wurde außerhalb der Migration verändert; kein automatisches Downgrade")
     command("systemctl", "stop", AGENT_SERVICE)
     try:
+        pause_pcsc()
+        reset_pcsc_runtime()
         # Finish a dpkg run interrupted by a killed activation before reinstalling.
         # This rollback unit intentionally has no systemd runtime limit.
         configure_interrupted_packages()
@@ -410,9 +490,14 @@ def rollback(folder, snapshot):
         for p, expected in snapshot["originals"].items():
             if installed(p) != tuple(expected):
                 raise ValueError("Originalversion nach Rückinstallation nicht wiederhergestellt")
-        command("systemctl", "restart", "pcscd.service")
+        restore_usb_rule(folder, snapshot)
+        resume_pcsc()
     except Exception:
         # Even a failed rollback must not leave the terminal without NFC.
+        # Runtime masks created by us must not outlive a failed package restore.
+        subprocess.run(["systemctl", "unmask", "--runtime", *PCSC_UNITS], check=False)
+        subprocess.run(["systemctl", "daemon-reload"], check=False)
+        subprocess.run(["systemctl", "start", "pcscd.socket", "pcscd.service"], check=False)
         if snapshot.get("agentActive"):
             subprocess.run(["systemctl", "start", AGENT_SERVICE], check=False)
         raise
@@ -423,6 +508,8 @@ def rollback(folder, snapshot):
     verify(folder, {**snapshot, "browserAlive": False}, require_fix=False)
     if not snapshot["pcscActive"] and not snapshot["agentActive"]:
         command("systemctl", "stop", "pcscd.service")
+        if not snapshot.get("socketActive", True):
+            command("systemctl", "stop", "pcscd.socket")
     write_result(folder, "rolled-back", "Originalpakete wiederhergestellt; Funktionsprüfung vor Ort weiterhin erforderlich")
 
 
@@ -435,11 +522,14 @@ def activate(folder):
             return
         try:
             command("systemctl", "stop", AGENT_SERVICE)
+            pause_pcsc()
+            reset_pcsc_runtime()
             # The activation unit supplies its own outer deadline and rollback;
             # do not interrupt dpkg early with the timeout for read-only checks.
             command(*APT_INSTALL, "install", *(str(p) for p in (folder / "new").glob("*.deb")), timeout=None)
             restore_auto(snapshot)
-            command("systemctl", "restart", "pcscd.service")
+            install_usb_rule()
+            resume_pcsc()
             if snapshot["agentActive"]:
                 command("systemctl", "start", AGENT_SERVICE)
             verify(folder, snapshot)
