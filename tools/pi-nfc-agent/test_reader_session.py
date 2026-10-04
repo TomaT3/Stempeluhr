@@ -85,6 +85,19 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(exit.exception.code, 0)
         connection.release.assert_called_once()
 
+    def test_sigterm_during_ack_does_not_wait_for_a_held_card(self):
+        connection, reader = Mock(), Mock()
+        reader.createConnection.return_value = connection
+        config = agent.AgentConfig("https://kiosk.test", "test", 3, None)
+        with patch.object(agent, "select_reader", return_value=reader), \
+             patch.object(agent, "read_uid", return_value="A"), \
+             patch.object(agent, "handle_card_scan", side_effect=lambda *args: agent.stop_agent(None, None)), \
+             patch.object(agent, "wait_until_card_removed") as wait:
+            with self.assertRaises(SystemExit):
+                agent.run(config, Mock())
+        wait.assert_not_called()
+        connection.release.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

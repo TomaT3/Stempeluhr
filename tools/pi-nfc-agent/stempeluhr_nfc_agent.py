@@ -582,7 +582,9 @@ def run(config: AgentConfig, scan_server: LocalScanServer) -> None:
                 finally:
                     last_uid = uid
                     last_submit_at = now
-                    wait_until_card_removed(session.connection)
+                # A shutdown during the Ack wait must unwind immediately;
+                # waiting for a held card here would delay SIGTERM indefinitely.
+                wait_until_card_removed(session.connection)
             except Exception:
                 # Reader/service errors invalidate the context; no-card does not.
                 session.close()
