@@ -27,7 +27,10 @@ if "smartcard" not in sys.modules:
             pass
 
         exc.CardConnectionException = _CardError
-        exc.NoCardException = _CardError
+        class _NoCardError(_CardError):
+            pass
+
+        exc.NoCardException = _NoCardError
         sysm.readers = lambda: []
         sc.Exceptions = exc
         sc.System = sysm

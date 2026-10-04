@@ -14,6 +14,7 @@ import argparse
 import http.server
 import json
 import logging
+import signal
 import sys
 import threading
 import time
@@ -510,9 +511,11 @@ def main() -> int:
         "Local scan server listening on %s for %s", scan_server.url, scan_server.allowed_origin
     )
 
+    previous_sigterm = signal.signal(signal.SIGTERM, stop_agent)
     try:
         run(config, scan_server)
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
         diagnostics.close()
         scan_server.shutdown()
         scan_thread.join(timeout=5)
@@ -520,47 +523,73 @@ def main() -> int:
     return 0
 
 
+def stop_agent(_signum, _frame) -> None:
+    # systemd sends SIGTERM: unwind finally blocks before exiting.
+    raise SystemExit(0)
+
+
+class ReaderSession:
+    """One connection/context per reader, also while no card is present."""
+
+    def __init__(self, name_filter: str | None):
+        self.name_filter = name_filter
+        self.connection = None
+
+    def open(self) -> bool:
+        if self.connection is not None:
+            return True
+        reader = select_reader(self.name_filter)
+        if reader is None:
+            return False
+        self.connection = reader.createConnection()
+        LOGGER.info("Using PC/SC reader: %s", reader)
+        return True
+
+    def close(self) -> None:
+        connection, self.connection = self.connection, None
+        if connection is None:
+            return
+        # Attempt release even if disconnect failed (e.g. daemon restarted).
+        for operation in (connection.disconnect, connection.release):
+            try:
+                operation()
+            except Exception:
+                LOGGER.warning("PC/SC resource cleanup failed; reconnecting requires a new context")
+
+
 def run(config: AgentConfig, scan_server: LocalScanServer) -> None:
     last_uid: str | None = None
     last_submit_at = 0.0
-    selected_reader_name: str | None = None
-
-    while True:
-        try:
-            reader = select_reader(config.reader_name_contains)
-            if reader is None:
-                LOGGER.warning("No PC/SC reader found. Waiting for ACR122U...")
-                time.sleep(3)
-                continue
-
-            reader_name = str(reader)
-            if reader_name != selected_reader_name:
-                selected_reader_name = reader_name
-                LOGGER.info("Using PC/SC reader: %s", reader_name)
-
-            uid = read_uid(reader)
-            if uid is None:
-                time.sleep(0.2)
-                continue
-
-            now = time.monotonic()
-            if uid == last_uid and now - last_submit_at < config.debounce_seconds:
-                time.sleep(0.2)
-                continue
-
-            # Book the debounce and wait for the card to leave even if no
-            # ack arrives - another tap of the same card must be a new scan.
+    session = ReaderSession(config.reader_name_contains)
+    try:
+        while True:
             try:
-                handle_card_scan(config, uid, scan_server)
-            finally:
-                last_uid = uid
-                last_submit_at = now
-                wait_until_card_removed(reader)
-        except KeyboardInterrupt:
-            raise
-        except Exception:
-            LOGGER.exception("Unexpected NFC loop error")
-            time.sleep(2)
+                if not session.open():
+                    LOGGER.warning("No PC/SC reader found. Waiting for ACR122U...")
+                    time.sleep(3)
+                    continue
+                uid = read_uid(session.connection)
+                if uid is None:
+                    time.sleep(0.2)
+                    continue
+                now = time.monotonic()
+                if uid == last_uid and now - last_submit_at < config.debounce_seconds:
+                    time.sleep(0.2)
+                    continue
+                # Wait for removal even when the UI never acknowledged the scan.
+                try:
+                    handle_card_scan(config, uid, scan_server)
+                finally:
+                    last_uid = uid
+                    last_submit_at = now
+                    wait_until_card_removed(session.connection)
+            except Exception:
+                # Reader/service errors invalidate the context; no-card does not.
+                session.close()
+                LOGGER.exception("NFC reader unavailable; retrying")
+                time.sleep(2)
+    finally:
+        session.close()
 
 
 def beep(status: str) -> None:
@@ -673,13 +702,18 @@ def select_reader(name_filter: str | None):
     return None
 
 
-def read_uid(reader) -> str | None:
+def read_uid(connection) -> str | None:
+    connected = False
     try:
-        connection = reader.createConnection()
         connection.connect()
+        connected = True
         data, sw1, sw2 = connection.transmit(GET_UID_APDU)
-    except (CardConnectionException, NoCardException):
+    except NoCardException:
         return None
+    finally:
+        if connected:
+            # Close the card handle but retain the PC/SC context for the next poll.
+            connection.disconnect()
 
     if (sw1, sw2) != (0x90, 0x00):
         LOGGER.warning("Reader returned unexpected status %02X %02X", sw1, sw2)
@@ -688,8 +722,8 @@ def read_uid(reader) -> str | None:
     return "".join(f"{byte:02X}" for byte in data)
 
 
-def wait_until_card_removed(reader) -> None:
-    while read_uid(reader) is not None:
+def wait_until_card_removed(connection) -> None:
+    while read_uid(connection) is not None:
         time.sleep(0.2)
 
 
