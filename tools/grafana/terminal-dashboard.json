@@ -753,11 +753,9 @@
               }
             },
             {
-              "type": "range",
+              "type": "value",
               "options": {
-                "from": 1,
-                "to": null,
-                "result": {
+                "1": {
                   "text": "offline",
                   "color": "red",
                   "index": 1
@@ -839,7 +837,7 @@
               "type": "range",
               "options": {
                 "from": 1,
-                "to": null,
+                "to": 15,
                 "result": {
                   "text": "gedrosselt",
                   "color": "red",
