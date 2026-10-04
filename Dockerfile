@@ -26,13 +26,13 @@ RUN dotnet publish Stempeluhr.Api/Stempeluhr.Api.csproj \
     /p:InformationalVersion=${VERSION} \
     --no-restore
 
-# Agent-Bundle für die Pi-Terminals. Der Server liefert es unter /pi/ aus,
-# die Pis holen es sich per update.sh selbst - Agent-Version = Server-Version.
 # PC/SC packages are built once from tools/pcsc and pinned by digest; the tag
 # ends with tools/pcsc/inputs-hash.sh (tools/pcsc/README.md). Export them with:
 # docker build --target pcsc-packages --output type=local,dest=artifacts/pcsc .
-FROM --platform=linux/arm64 ghcr.io/tomat3/stempeluhr/pcsc-packages:unpublished AS pcsc-packages
+FROM --platform=linux/arm64 ghcr.io/tomat3/stempeluhr/pcsc-packages:inputs-dae07035912a@sha256:09b72b6faeb0f9906cadd12137fedcd9abb4d8ecded6ae3b19eb88d96c689474 AS pcsc-packages
 
+# Agent-Bundle für die Pi-Terminals. Der Server liefert es unter /pi/ aus,
+# die Pis holen es sich per update.sh selbst - Agent-Version = Server-Version.
 FROM alpine:3.22 AS pi-bundle
 ARG VERSION=0.0.0-local
 COPY tools/pi-nfc-agent/ /src/pi-nfc-agent/
