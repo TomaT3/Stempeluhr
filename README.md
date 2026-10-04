@@ -376,7 +376,9 @@ bash tools/testenv/run_e2e_test.sh       # Linux: Fake-Kimai + echte API
 
 `Stempeluhr.slnx` enthält das Testprojekt nicht; API-Tests daher über das
 Test-`csproj` starten. Alle Tests laufen auch in der CI
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)); den PC/SC-Pakettest
+startet [`pcsc-packages.yml`](.github/workflows/pcsc-packages.yml) nur bei
+PC/SC-Änderungen (siehe [tools/pcsc](tools/pcsc/README.md)).
 
 ## Release
 
@@ -392,6 +394,14 @@ Er erstellt Tag und GitHub Release und veröffentlicht das Image
 `ghcr.io/tomat3/stempeluhr` mit den Tags `X.Y.Z`, `X.Y` und `latest`. Die
 Version landet in API, Client und Pi-Bundle. Der Kunden-Deploy ist ein
 separater Schritt (siehe [Update](#update)).
+
+Änderungen am Workflow oder Image-Build vorab ohne Release prüfen; der
+Probelauf baut das Image, erstellt aber weder Tag noch Release und pusht
+nichts:
+
+```bash
+gh workflow run release.yml --ref <branch> -f dry_run=true
+```
 
 ## Sicherheit
 

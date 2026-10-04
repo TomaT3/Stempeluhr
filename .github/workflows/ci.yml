@@ -18,23 +18,8 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# PC/SC packages: pcsc-packages.yml, only when their inputs or the pin change.
 jobs:
-  pcsc-packages:
-    name: PC/SC Trixie arm64 packages + rollback
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build packages from pinned Debian source
-        # Same stage as the release image, so CI tests the shipped packages' build.
-        run: docker build --target pcsc-packages --output type=local,dest=artifacts/pcsc .
-      - name: Verify install and rollback in disposable Trixie container
-        run: >-
-          docker run --rm
-          --mount type=bind,source=${{ github.workspace }},target=/work,readonly
-          --workdir /work debian:trixie-slim
-          bash tools/testenv/test_pcsc_packages.sh /work/artifacts/pcsc
-
   api-tests:
     name: API build + unit tests
     runs-on: ubuntu-latest
