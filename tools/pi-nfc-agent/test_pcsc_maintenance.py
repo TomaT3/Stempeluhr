@@ -193,6 +193,47 @@ class MaintenanceTests(unittest.TestCase):
         # An interrupted dpkg run is completed before the originals are reinstalled.
         self.assertLess(calls.index(("dpkg", "--configure", "-a")), install)
 
+    def test_slow_package_mutations_complete_and_restart_the_agent(self):
+        for action in ("activate", "rollback"):
+            with self.subTest(action=action):
+                folder = self.root / action
+                folder.mkdir()
+                for name in ("new", "old"):
+                    (folder / name).mkdir()
+                    (folder / name / "pcscd.deb").write_bytes(b"package")
+                snapshot = {"agentActive": True, "pcscActive": True, "auto": [],
+                            "originals": {"pcscd": [OLD, "arm64"]}, "conffiles": [],
+                            "targetVersion": VERSION, "rollbackUnit": "test"}
+                (folder / "snapshot.json").write_text(json.dumps(snapshot))
+                current = OLD if action == "activate" else VERSION
+                mutations = []
+                calls = []
+
+                def run(args, **kwargs):
+                    nonlocal current
+                    calls.append(tuple(args))
+                    if args[0] == "apt-get" or tuple(args) == ("dpkg", "--configure", "-a"):
+                        # Simulate three minutes of package work, without sleeping.
+                        timeout = kwargs.get("timeout")
+                        if timeout is not None and timeout < 180:
+                            raise subprocess.TimeoutExpired(args, timeout)
+                        mutations.append(args[0])
+                        if args[0] == "apt-get":
+                            current = VERSION if action == "activate" else OLD
+                    stdout = f"installed {current} arm64" if args[0] == "dpkg-query" else ""
+                    return Mock(stdout=stdout, returncode=0)
+
+                with patch.object(maintenance.subprocess, "run", side_effect=run), \
+                     patch.object(maintenance, "verify"):
+                    if action == "activate":
+                        maintenance.activate(folder)
+                    else:
+                        maintenance.rollback(folder, snapshot)
+                self.assertEqual(mutations, ["apt-get"] if action == "activate" else ["dpkg", "apt-get"])
+                self.assertIn(("systemctl", "start", maintenance.AGENT_SERVICE), calls)
+                self.assertEqual(maintenance.read_result(folder)["status"],
+                                 "ok" if action == "activate" else "rolled-back")
+
     def test_wrong_restored_version_cannot_count_as_a_successful_rollback(self):
         folder = self.root / "rollback"
         folder.mkdir()

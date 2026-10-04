@@ -36,8 +36,8 @@ BASE = Path(os.environ.get("STEMPELUHR_AGENT_DIR", "/opt/stempeluhr-nfc-agent"))
 STATE = Path(os.environ.get("STEMPELUHR_PCSC_STATE", "/var/lib/stempeluhr-pcsc-migration"))
 
 
-def command(*args, **kwargs):
-    return subprocess.run(args, text=True, capture_output=True, check=True, timeout=120, **kwargs).stdout.strip()
+def command(*args, timeout=120, **kwargs):
+    return subprocess.run(args, text=True, capture_output=True, check=True, timeout=timeout, **kwargs).stdout.strip()
 
 
 def installed(package):
@@ -327,11 +327,13 @@ def rollback(folder, snapshot):
             raise ValueError("PC/SC-Version wurde außerhalb der Migration verändert; kein automatisches Downgrade")
     command("systemctl", "stop", AGENT_SERVICE)
     # Finish a dpkg run interrupted by a killed activation before reinstalling.
-    command("dpkg", "--configure", "-a")
+    # Package mutations must finish without a subprocess timeout, particularly
+    # in this rollback unit, which intentionally has no systemd runtime limit.
+    command("dpkg", "--configure", "-a", timeout=None)
     originals = list((folder / "old").glob("*.deb"))
     if originals:
         command("apt-get", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
-                "--no-install-recommends", "--allow-downgrades", "install", *(str(p) for p in originals))
+                "--no-install-recommends", "--allow-downgrades", "install", *(str(p) for p in originals), timeout=None)
     for name in snapshot["conffiles"]:
         relative = Path(name)
         if relative.is_absolute() or ".." in relative.parts:
@@ -359,8 +361,10 @@ def activate(folder):
             return
         try:
             command("systemctl", "stop", AGENT_SERVICE)
+            # The activation unit supplies its own outer deadline and rollback;
+            # do not interrupt dpkg early with the timeout for read-only checks.
             command("apt-get", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
-                    "--no-install-recommends", "install", *(str(p) for p in (folder / "new").glob("*.deb")))
+                    "--no-install-recommends", "install", *(str(p) for p in (folder / "new").glob("*.deb")), timeout=None)
             restore_auto(snapshot)
             command("systemctl", "restart", "pcscd.service")
             if snapshot["agentActive"]:

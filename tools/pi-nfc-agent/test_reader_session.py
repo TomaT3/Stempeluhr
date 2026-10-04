@@ -178,6 +178,7 @@ class ReaderTests(unittest.TestCase):
             self.assertTrue(session.wait_for_card())
             fake.steps = [lambda f: f.remove() and f.insert()]
             self.assertTrue(session.wait_for_removal())
+            fake.steps = [idle]
             self.assertTrue(session.wait_for_card())
 
     def test_card_level_errors_keep_the_context(self):
@@ -196,7 +197,7 @@ class ReaderTests(unittest.TestCase):
                 self.assertEqual(fake.released, 0)
 
     def test_unreadable_held_card_is_retried_without_publishing(self):
-        fake = FakePcsc(FakePcsc.insert)
+        fake = FakePcsc(FakePcsc.insert, idle, idle)
         fake.transmit_result = (FakePcsc.SCARD_W_UNRESPONSIVE_CARD, [])
         with patch.object(agent, "scard", fake), \
              patch.object(agent.time, "sleep", side_effect=[None, None, KeyboardInterrupt()]), \
@@ -205,6 +206,39 @@ class ReaderTests(unittest.TestCase):
                 agent.run(self.config, Mock())
         publish.assert_not_called()
         self.assertEqual((fake.connects, fake.contexts), (3, 1))
+
+    def test_card_removed_before_connect_or_during_transmit_returns_to_idle(self):
+        for operation in ("connect", "transmit"):
+            with self.subTest(operation=operation):
+                fake = FakePcsc(FakePcsc.insert, *([idle] * 1000),
+                                FakePcsc.insert, FakePcsc.remove)
+                connect = fake.SCardConnect
+                transmit = fake.SCardTransmit
+
+                def guarded_connect(*args):
+                    if not fake.present:
+                        # End a regressed loop instead of retrying forever.
+                        fake.connects += 1
+                        raise KeyboardInterrupt
+                    if operation == "connect" and fake.connects == 0:
+                        fake.remove()
+                    return connect(*args)
+
+                def remove_during_transmit(*args):
+                    if fake.connects == 1:
+                        fake.remove()
+                        return fake.SCARD_W_REMOVED_CARD, []
+                    return transmit(*args)
+
+                fake.SCardConnect = guarded_connect
+                if operation == "transmit":
+                    fake.SCardTransmit = remove_during_transmit
+                publish = self.run_agent(fake)
+                # One failed read, no connections through the long idle period,
+                # then the next tap succeeds on the same context.
+                self.assertEqual(publish.call_count, 1)
+                self.assertEqual((fake.connects, fake.contexts, fake.released), (2, 1, 1))
+                self.assertEqual(fake.disconnects, 1 if operation == "connect" else 2)
 
     def test_service_restart_rebuilds_the_context(self):
         fake = FakePcsc(idle, fail_with(FakePcsc.SCARD_E_NO_SERVICE), recover, idle)

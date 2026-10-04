@@ -591,8 +591,9 @@ class ReaderSession:
 
     def wait_for_card(self, timeout_ms: int = STATUS_WAIT_MS) -> bool:
         """True when a card is on the reader, waiting up to ``timeout_ms``."""
-        if not self.card_present():
-            self._wait_for_change(timeout_ms)
+        # A card can leave during connect/transmit. Refresh even a cached
+        # PRESENT state before another connection, without blocking a held card.
+        self._wait_for_change(0 if self.card_present() else timeout_ms)
         return self.card_present()
 
     def wait_for_removal(self, timeout_s: float | None = None) -> bool:
