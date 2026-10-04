@@ -32,6 +32,7 @@ class MaintenanceTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         maintenance.CONFIG.write_text(json.dumps({"local_port": 8737, "terminal_token": "SECRET"}))
+        maintenance.PCSC_RUNTIME.parent.mkdir()
 
     def manifest(self):
         directory = self.root / "packages"

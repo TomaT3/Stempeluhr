@@ -78,8 +78,12 @@ import pcsc_maintenance as maintenance
 with patch.object(maintenance, 'refresh_usb_rule'):
     maintenance.restore_usb_rule(Path('.'), {'usbRule': None})
 assert not maintenance.USB_RULE.exists()
-maintenance.reset_pcsc_runtime()
-maintenance.command('systemd-tmpfiles', '--create', '--prefix=/run/pcscd')
+real_command = maintenance.command
+def without_systemctl(*args, **kwargs):
+    if args[0] != 'systemctl':
+        return real_command(*args, **kwargs)
+with patch.object(maintenance, 'command', side_effect=without_systemctl):
+    maintenance.resume_pcsc()
 runtime = maintenance.PCSC_RUNTIME.stat()
 assert runtime.st_uid == 0 and runtime.st_gid == 0
 service = Path('/usr/lib/systemd/system/pcscd.service').read_text()

@@ -456,9 +456,11 @@ def restore_usb_rule(folder, snapshot):
 def resume_pcsc():
     reset_pcsc_runtime()
     command("systemctl", "daemon-reload")
-    # Old pcscd uses tmpfiles; new pcscd uses RuntimeDirectory. Respect whichever
-    # package was just installed before systemd creates the activation socket.
+    # Honor installed tmpfiles rules when present. Trixie 2.3.3 has none:
+    # prepare the root-owned parent for its socket/root service. The new
+    # service's RuntimeDirectory changes ownership to pcscd on startup.
     command("systemd-tmpfiles", "--create", "--prefix=/run/pcscd")
+    PCSC_RUNTIME.mkdir(mode=0o755, exist_ok=True)
     command("systemctl", "unmask", "--runtime", *PCSC_UNITS)
     command("systemctl", "start", "pcscd.service")
 
