@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # runs on machines without PC/SC installed.
 if "smartcard" not in sys.modules:
     try:
-        import smartcard.System  # noqa: F401
+        import smartcard.scard  # noqa: F401
     except ImportError:
         import types
 
@@ -36,6 +36,9 @@ if "smartcard" not in sys.modules:
         sys.modules["smartcard"] = sc
         sys.modules["smartcard.Exceptions"] = exc
         sys.modules["smartcard.System"] = sysm
+        # Tests replace the agent's scard module with a fake where needed.
+        sc.scard = types.ModuleType("smartcard.scard")
+        sys.modules["smartcard.scard"] = sc.scard
 
 
 from stempeluhr_nfc_agent import (  # noqa: E402

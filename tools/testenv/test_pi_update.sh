@@ -58,6 +58,24 @@ cat > "$WORK/stub/smartcard/System.py" <<'EOF'
 def readers():
     return []
 EOF
+# Reader loop: a context without any reader, so the agent idles.
+cat > "$WORK/stub/smartcard/scard.py" <<'EOF'
+SCARD_S_SUCCESS = 0
+SCARD_SCOPE_USER = 0
+SCARD_E_NO_READERS_AVAILABLE = 0x8010002E
+
+
+def SCardEstablishContext(scope):
+    return SCARD_S_SUCCESS, 1
+
+
+def SCardListReaders(context, groups):
+    return SCARD_E_NO_READERS_AVAILABLE, []
+
+
+def SCardReleaseContext(context):
+    return SCARD_S_SUCCESS
+EOF
 
 cat > "$WORK/config.json" <<EOF
 {"api_base_url": "http://127.0.0.1:$SERVER_PORT/", "terminal_id": "test", "local_port": $AGENT_PORT}

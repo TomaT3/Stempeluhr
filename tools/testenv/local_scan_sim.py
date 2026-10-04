@@ -54,6 +54,8 @@ def _stub_smartcard() -> None:
     sys.modules["smartcard"] = sc
     sys.modules["smartcard.Exceptions"] = exceptions
     sys.modules["smartcard.System"] = system
+    sc.scard = types.ModuleType("smartcard.scard")  # reader loop not used here
+    sys.modules["smartcard.scard"] = sc.scard
 
 
 def main() -> int:
