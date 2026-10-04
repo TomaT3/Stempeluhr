@@ -263,7 +263,8 @@ Dienstjournals behoben werden.
 Aktivierung und Rollback-Timer überstehen keinen Neustart. Unterbricht ein
 Neustart (z. B. der nächtliche Reboot von unattended-upgrades) die Migration,
 erkennt der erste Updater-Lauf nach dem Boot den unvollständigen Lauf und
-rollt ihn zurück (`journalctl -u stempeluhr-pcsc-migration`). Ein manuelles
+rollt ihn zurück (`journalctl -u stempeluhr-pcsc-migration`), auch wenn das
+Agent-Update dieses Laufs fehlschlägt. Ein manuelles
 `--apply` führt diesen Rollback ebenfalls zuerst aus und migriert danach.
 
 Die Prüfung umfasst Paketversion, PC/SC-Leser unter Benutzer `stempeluhr`,

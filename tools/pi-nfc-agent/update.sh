@@ -10,7 +10,8 @@
 #   4. Health-Check über http://127.0.0.1:<port>/health - schlägt er fehl,
 #      zurück auf die vorherige Version
 #   5. nach jedem erfolgreichen Lauf: fehlt der PC/SC-Fix, die Paketmigration
-#      des installierten Bundles losgelöst starten (pcsc_maintenance.py)
+#      des installierten Bundles losgelöst starten (pcsc_maintenance.py);
+#      eine durch Neustart unterbrochene Migration auch nach Fehlern zurückrollen
 #
 # Die Agent-Version folgt der Server-Version, auch nach unten (Rollback des
 # Containers). Ist der Server nicht erreichbar, endet das Skript ohne Fehler:
@@ -47,12 +48,14 @@ if [ "${STEMPELUHR_AGENT_UPDATE_LOCKED:-}" != 1 ]; then
   exec env STEMPELUHR_AGENT_UPDATE_LOCKED=1 flock -x --close "$BASE_DIR/.maintenance.lock" bash "$0" "$@"
 fi
 
-# After every successful run - also offline or without a new version - the
-# installed bundle decides whether the PC/SC packages still need the fix.
-# The migration runs detached and waits for the lock, i.e. until this updater
-# has finished; it is attempted once per bundled package version.
-schedule_pcsc_migration() {
-  local script="$BASE_DIR/current/pcsc_maintenance.py" status=0
+# After every run - also offline or without a new version - the installed
+# bundle decides whether the PC/SC packages still need the fix. The job runs
+# detached and waits for the lock, i.e. until this updater has finished. A new
+# package change starts only after a successful run, once per bundled package
+# version. A migration interrupted by a reboot is rolled back regardless of
+# this run's result, so repeated agent update errors cannot block it.
+schedule_pcsc_migration() { # exit status of this updater
+  local script="$BASE_DIR/current/pcsc_maintenance.py" status=0 action=(--apply --auto)
   [ -f "$script" ] || return 0
   python3 "$script" --check >/dev/null 2>&1 || status=$?
   case "$status" in
@@ -66,9 +69,15 @@ schedule_pcsc_migration() {
   if [ "${STEMPELUHR_PCSC_AUTO:-1}" != 1 ] || ! command -v "$SYSTEMD_RUN" >/dev/null 2>&1; then
     return 0
   fi
+  # --recover only rolls back an interrupted migration and is a no-op otherwise.
+  if [ "$1" -ne 0 ]; then action=(--recover); fi
   if "$SYSTEMD_RUN" --unit=stempeluhr-pcsc-migration --collect --quiet \
-    python3 "$script" --apply --auto >/dev/null 2>&1; then
-    log "PC/SC-Fixstand fehlt - automatische Paketmigration gestartet (journalctl -u stempeluhr-pcsc-migration)."
+    python3 "$script" "${action[@]}" >/dev/null 2>&1; then
+    if [ "$1" -eq 0 ]; then
+      log "PC/SC-Fixstand fehlt - automatische Paketmigration gestartet (journalctl -u stempeluhr-pcsc-migration)."
+    else
+      log "Prüfung auf eine unterbrochene PC/SC-Paketmigration gestartet (journalctl -u stempeluhr-pcsc-migration)." >&2
+    fi
   else
     log "PC/SC-Paketmigration läuft bereits oder ließ sich nicht starten." >&2
   fi
@@ -78,7 +87,7 @@ WORK=""
 on_exit() {
   local status=$?
   if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
-  if [ "$status" -eq 0 ]; then schedule_pcsc_migration; fi
+  schedule_pcsc_migration "$status"
 }
 trap on_exit EXIT
 

@@ -5,7 +5,8 @@
 bundle's SHA-256; original packages must be downloadable before any service is
 stopped. The agent updater starts --apply --auto once per bundled package
 version; a failed automatic attempt is not repeated without --apply. A
-migration interrupted by a reboot is rolled back by the next --apply.
+migration interrupted by a reboot is rolled back by the next --apply or
+--recover; the updater starts the latter even after a failed agent update.
 """
 from __future__ import annotations
 
@@ -244,60 +245,66 @@ def prepare():
         STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
         folder = STATE / f"{time.time_ns()}"
         folder.mkdir(mode=0o700)
-        (folder / "old").mkdir()
-        (folder / "new").mkdir()
-        for p, path in selected.items():
-            shutil.copy2(path, folder / "new" / path.name)
-            if old[p] is not None:
-                command("apt-get", "download", f"{p}={old[p][0]}", cwd=folder / "old")
-        # Verify that the downloaded rollback packages really match installed versions.
-        originals = list((folder / "old").glob("*.deb"))
-        verified = {}
-        for path in originals:
-            fields = dict(line.split(": ", 1) for line in package_info(path))
-            p = fields["Package"]
-            if p not in selected or old[p] != (fields["Version"], fields["Architecture"]):
-                raise ValueError("Rückinstallationspaket passt nicht zum installierten Original")
-            verified[p] = path
-        if set(verified) != {p for p in selected if old[p] is not None}:
-            raise ValueError("Originalpakete für Rückinstallation fehlen")
-        # No separate rollback simulation: before the change it would only
-        # reinstall the same versions. The forward simulation already rejects
-        # any change to other packages, so the rollback is its exact inverse.
-        record_auto_attempt(version)
-        (folder / "pcsc-config").mkdir()
-        conffiles = []
-        for p in selected:
-            if old[p] is None:
-                continue
-            for line in command("dpkg-query", "-W", "-f=${Conffiles}", p).splitlines():
-                path = Path(line.split()[0]) if line.split() else None
-                if path and path.is_file() and str(path).startswith("/etc/") and ".." not in path.parts:
-                    relative = path.relative_to("/etc")
-                    target = folder / "pcsc-config" / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(path, target)
-                    conffiles.append(str(relative))
-        if CONFIG.exists():
-            shutil.copy2(CONFIG, folder / "config.json")
-        config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
-        agent_active = active(AGENT_SERVICE)
-        port = config.get("local_port", 8737)
-        snapshot = {"agentActive": agent_active, "pcscActive": active("pcscd.service"),
-                    # A fresh install has no kiosk yet: only a browser seen
-                    # before the change is required afterwards.
-                    "browserAlive": agent_active and browser_alive(port),
-                    "port": port, "readerFilter": config.get("reader_name_contains"),
-                    "auto": sorted(set(command("apt-mark", "showauto").splitlines()) & selected.keys()),
-                    "rollbackUnit": "stempeluhr-pcsc-rollback-" + folder.name,
-                    "originals": {p: list(old[p]) for p in selected if old[p] is not None},
-                    "conffiles": conffiles, "targetVersion": version}
-        (folder / "snapshot.json").write_text(json.dumps(snapshot))
-        shutil.copy2(__file__, folder / "pcsc_maintenance.py")
-        shutil.copy2(Path(__file__).with_name("probe_reader.py"), folder / "probe_reader.py")
-        # Timer is armed before activation; both jobs continue after SSH disconnects.
-        # Without a started activation it remains a harmless safety net.
-        detached(folder, snapshot["rollbackUnit"], "--rollback", "--on-active=" + ROLLBACK_DELAY)
+        try:
+            (folder / "old").mkdir()
+            (folder / "new").mkdir()
+            for p, path in selected.items():
+                shutil.copy2(path, folder / "new" / path.name)
+                if old[p] is not None:
+                    command("apt-get", "download", f"{p}={old[p][0]}", cwd=folder / "old")
+            # Verify that the downloaded rollback packages really match installed versions.
+            originals = list((folder / "old").glob("*.deb"))
+            verified = {}
+            for path in originals:
+                fields = dict(line.split(": ", 1) for line in package_info(path))
+                p = fields["Package"]
+                if p not in selected or old[p] != (fields["Version"], fields["Architecture"]):
+                    raise ValueError("Rückinstallationspaket passt nicht zum installierten Original")
+                verified[p] = path
+            if set(verified) != {p for p in selected if old[p] is not None}:
+                raise ValueError("Originalpakete für Rückinstallation fehlen")
+            # No separate rollback simulation: before the change it would only
+            # reinstall the same versions. The forward simulation already rejects
+            # any change to other packages, so the rollback is its exact inverse.
+            record_auto_attempt(version)
+            (folder / "pcsc-config").mkdir()
+            conffiles = []
+            for p in selected:
+                if old[p] is None:
+                    continue
+                for line in command("dpkg-query", "-W", "-f=${Conffiles}", p).splitlines():
+                    path = Path(line.split()[0]) if line.split() else None
+                    if path and path.is_file() and str(path).startswith("/etc/") and ".." not in path.parts:
+                        relative = path.relative_to("/etc")
+                        target = folder / "pcsc-config" / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(path, target)
+                        conffiles.append(str(relative))
+            if CONFIG.exists():
+                shutil.copy2(CONFIG, folder / "config.json")
+            config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+            agent_active = active(AGENT_SERVICE)
+            port = config.get("local_port", 8737)
+            snapshot = {"agentActive": agent_active, "pcscActive": active("pcscd.service"),
+                        # A fresh install has no kiosk yet: only a browser seen
+                        # before the change is required afterwards.
+                        "browserAlive": agent_active and browser_alive(port),
+                        "port": port, "readerFilter": config.get("reader_name_contains"),
+                        "auto": sorted(set(command("apt-mark", "showauto").splitlines()) & selected.keys()),
+                        "rollbackUnit": "stempeluhr-pcsc-rollback-" + folder.name,
+                        "originals": {p: list(old[p]) for p in selected if old[p] is not None},
+                        "conffiles": conffiles, "targetVersion": version}
+            (folder / "snapshot.json").write_text(json.dumps(snapshot))
+            shutil.copy2(__file__, folder / "pcsc_maintenance.py")
+            shutil.copy2(Path(__file__).with_name("probe_reader.py"), folder / "probe_reader.py")
+            # Timer is armed before activation; both jobs continue after SSH disconnects.
+            # Without a started activation it remains a harmless safety net.
+            detached(folder, snapshot["rollbackUnit"], "--rollback", "--on-active=" + ROLLBACK_DELAY)
+        except BaseException:
+            # Nothing changed yet and a retry starts over. The updater retries
+            # temporary errors every run; kept package copies would fill the disk.
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
         pending.write_text(json.dumps({"folder": str(folder), "bootId": current_boot()}))
         detached(folder, "stempeluhr-pcsc-activate-" + folder.name, "--activate",
                  "--property=RuntimeMaxSec=" + ACTIVATION_LIMIT)
@@ -456,6 +463,7 @@ def main():
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--check", action="store_true")
     actions.add_argument("--apply", action="store_true")
+    actions.add_argument("--recover", action="store_true", help="only roll back a migration interrupted by a reboot")
     actions.add_argument("--activate", type=Path, help=argparse.SUPPRESS)
     actions.add_argument("--rollback", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--auto", action="store_true", help="with --apply: skip if already attempted for this bundle")
@@ -482,7 +490,9 @@ def main():
         return 2
     if os.geteuid() != 0:
         raise ValueError("Paketmigration benötigt root")
-    if args.activate:
+    if args.recover:
+        recover_interrupted()
+    elif args.activate:
         activate(args.activate.resolve())
     elif args.rollback:
         with locked():

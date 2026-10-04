@@ -6,6 +6,7 @@ in an arm64 Trixie container by test_pcsc_packages.sh.
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -90,7 +91,8 @@ class MaintenanceTests(unittest.TestCase):
                 maintenance.prepare()
         command.assert_not_called()
 
-    def test_prepare_saves_originals_and_arms_rollback_before_detached_activation(self):
+    def prepare(self, download_error=None):
+        """prepare() on a stubbed Trixie system; returns (folder, commands)."""
         directory = self.manifest()
         with patch.object(maintenance, "package_info", side_effect=self.info):
             _, packages = maintenance.packages_from_manifest(directory, "arm64")
@@ -102,6 +104,8 @@ class MaintenanceTests(unittest.TestCase):
             if args == ("apt-mark", "showauto"):
                 return "libpcsclite1"
             if args[:2] == ("apt-get", "download"):
+                if download_error:
+                    raise download_error
                 p, version = args[2].split("=")
                 (kwargs["cwd"] / f"{p}_{version}_arm64.deb").write_bytes(b"original")
             return ""
@@ -113,7 +117,10 @@ class MaintenanceTests(unittest.TestCase):
              patch.object(maintenance, "active", return_value=True), \
              patch.object(maintenance, "browser_alive", return_value=True), \
              patch.object(maintenance, "command", side_effect=command):
-            folder = maintenance.prepare()
+            return maintenance.prepare(), calls
+
+    def test_prepare_saves_originals_and_arms_rollback_before_detached_activation(self):
+        folder, calls = self.prepare()
         jobs = [args for args in calls if args[0] == "systemd-run"]
         self.assertEqual(len(jobs), 2)
         self.assertIn("--on-active=20m", jobs[0])
@@ -128,6 +135,15 @@ class MaintenanceTests(unittest.TestCase):
         # A manual run also blocks a later automatic repeat of this version.
         self.assertEqual(json.loads(maintenance.auto_marker().read_text())["targetVersion"], VERSION)
         self.assertTrue(snapshot["browserAlive"])
+
+    def test_failed_original_download_leaves_no_package_copies(self):
+        # The updater retries temporary download errors every run.
+        for attempt in range(3):
+            with self.subTest(attempt=attempt):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    self.prepare(subprocess.CalledProcessError(100, "apt-get download"))
+                self.assertEqual(list(maintenance.STATE.iterdir()), [])
+                shutil.rmtree(self.root / "packages")
 
     def test_failed_reader_probe_starts_rollback_in_its_own_unit(self):
         folder = self.root / "activation"
@@ -355,6 +371,22 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual(job[-2:], ("--rollback", str(folder)))
             prepare.assert_not_called()
             self.assertIsNone(maintenance.interrupted_migration())
+
+    def test_recover_only_rolls_back_an_interrupted_migration(self):
+        # The updater starts --recover even after a failed agent update.
+        with patch.object(maintenance, "command") as command, \
+             patch.object(maintenance, "suitable", return_value=False), \
+             patch.object(maintenance, "platform_supported", return_value=True), \
+             patch.object(maintenance, "bundle_version", return_value=VERSION), \
+             patch.object(maintenance, "prepare") as prepare:
+            self.assertEqual(self.main("--recover"), 0)
+            command.assert_not_called()
+            folder = self.pending("boot-1")
+            command.side_effect = lambda *args, **kwargs: maintenance.write_result(folder, "rolled-back", "restored")
+            with patch.object(maintenance, "current_boot", return_value="boot-2"):
+                self.assertEqual(self.main("--recover"), 0)
+        self.assertEqual(command.call_args.args[-2:], ("--rollback", str(folder)))
+        prepare.assert_not_called()
 
     def test_finished_migrations_are_not_recovered_after_a_reboot(self):
         for status in sorted(maintenance.TERMINAL):

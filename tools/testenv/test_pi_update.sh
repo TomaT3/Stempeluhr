@@ -272,5 +272,19 @@ if run_update; then ok "Update endet erfolgreich"; else bad "Update: $(tail -3 "
 [ ! -f "$WORK/systemd-run.log" ] && ! grep -q 'PC/SC' "$WORK/update.log" \
   && ok "Keine Migration, keine Warnung" || bad "Migration oder Warnung auf Bookworm: $(grep 'PC/SC' "$WORK/update.log")"
 
+say "11: Unterbrochene Migration wird auch nach fehlgeschlagenem Update zurückgerollt"
+printf 'ID=debian\nVERSION_CODENAME=trixie\n' > "$WORK/os-release"
+mkdir -p "$WORK/pcsc-state/interrupted"
+printf '{"folder": "%s", "bootId": "previous-boot"}\n' "$WORK/pcsc-state/interrupted" > "$WORK/pcsc-state/pending.json"
+cp -r "$WORK/broken-src" "$WORK/broken-pcsc-src"
+cp -r "$WORK/pcsc-src/pcsc" "$WORK/broken-pcsc-src/"
+publish 1.5.0 "$WORK/broken-pcsc-src"
+if run_update; then bad "update.sh meldet Erfolg trotz defektem Agenten"; else ok "update.sh meldet Fehler"; fi
+[ "$(current_version)" = "1.4.0" ] && ok "current zurück auf 1.4.0" || bad "current ist $(current_version)"
+grep -q -- '--unit=stempeluhr-pcsc-migration .*current/pcsc_maintenance.py --recover$' "$WORK/systemd-run.log" 2>/dev/null \
+  && ok "Wiederherstellung trotz Updatefehler gestartet" || bad "Keine Wiederherstellung: $(cat "$WORK/systemd-run.log" 2>/dev/null)"
+! grep -q -- '--apply' "$WORK/systemd-run.log" 2>/dev/null \
+  && ok "Kein neuer Paketwechsel nach Updatefehler" || bad "Paketwechsel nach Updatefehler gestartet"
+
 say "Ergebnis: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" -eq 0 ]
