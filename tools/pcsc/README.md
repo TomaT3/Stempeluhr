@@ -21,7 +21,7 @@ Entwicklungspakete `libpcsclite-dev` gebaut. Der Build läuft in einer
 Trixie/arm64-Umgebung, nicht gegen Bibliotheken aus Sid auf dem Pi.
 
 ```bash
-docker build -f tools/pcsc/Dockerfile --output type=local,dest=artifacts/pcsc .
+docker build --target pcsc-packages --output type=local,dest=artifacts/pcsc .
 docker run --rm --platform linux/arm64 \
   --mount type=bind,source="$PWD",target=/work,readonly \
   --workdir /work debian:trixie-slim \
@@ -46,8 +46,9 @@ SHA-256 authentifiziert der bestehende Updater über die Serververbindung.
 Ein bereits installierter Fixstand **>= 2.5.0** wird nicht durch den Backport
 ersetzt. Der Installer installiert zuerst Pakete aus den konfigurierten
 APT-Quellen; liefert APT einen geeigneten Stand, ist kein Backport nötig.
-Die Migration unterstützt zunächst nur Trixie/arm64. Andere Systeme ohne
-geeigneten Fixstand melden einen Fehler vor dem Paketwechsel.
+Die Migration unterstützt zunächst nur Trixie/arm64. Auf anderen Systemen
+lassen Installer und Updater pcscd unverändert; ein manuelles `--apply` meldet
+dort einen Fehler vor dem Paketwechsel.
 `--skip-apt` überspringt die Migration im Installer.
 
 Es wird weder `apt-mark hold` noch ein APT-Pin gesetzt. Ein offizielles Paket

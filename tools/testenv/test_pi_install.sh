@@ -33,7 +33,12 @@ EOF
 cat > "$WORK/maintenance.py" <<'EOF'
 import os, pathlib, sys
 folder = pathlib.Path(os.environ['TEST_INSTALL_WORK'])
-(folder / 'migration.log').write_text(' '.join(sys.argv[1:]))
+with (folder / 'migration.log').open('a') as log:
+    log.write(' '.join(sys.argv[1:]) + '\n')
+if sys.argv[1:] == ['--check']:
+    # Default: fix missing, migration possible.
+    status = folder / 'check-status'
+    sys.exit(int(status.read_text()) if status.exists() else 1)
 sys.exit(1 if (folder / 'fail-migration').exists() else 0)
 EOF
 chmod +x "$WORK/bin/"*
@@ -50,7 +55,7 @@ CONFIG_HASH="$(sha256sum "$WORK/config/config.json")"
 
 bash "$ROOT/tools/pi-nfc-agent/install.sh" > "$WORK/install.log"
 grep -q 'pcscd pcsc-tools python3-pyscard curl' "$WORK/apt.log"
-[ "$(cat "$WORK/migration.log")" = --apply ]
+[ "$(cat "$WORK/migration.log")" = "$(printf -- '--check\n--apply')" ]
 # The installer migrates synchronously; the updater must not start a second run.
 [ "$(cat "$WORK/updater-auto.log")" = 0 ]
 [ "$(sha256sum "$WORK/config/config.json")" = "$CONFIG_HASH" ]
@@ -63,4 +68,12 @@ if bash "$ROOT/tools/pi-nfc-agent/install.sh" > "$WORK/install.log" 2>&1; then
 fi
 grep -q 'PC/SC-Paketmigration fehlgeschlagen' "$WORK/install.log"
 [ ! -f "$WORK/chromium/stempeluhr.json" ]
-echo 'Pi installer: new install, skip-apt, repeated install/config preservation and failed migration passed'
+
+# Bookworm and other platforms without bundled packages keep their pcscd.
+rm -f "$WORK/fail-migration" "$WORK/migration.log"
+echo 3 > "$WORK/check-status"
+bash "$ROOT/tools/pi-nfc-agent/install.sh" > "$WORK/install.log" 2>&1
+[ "$(cat "$WORK/migration.log")" = --check ]
+grep -q 'keine PC/SC-Pakete für diese Plattform' "$WORK/install.log"
+[ -f "$WORK/chromium/stempeluhr.json" ]
+echo 'Pi installer: new install, skip-apt, repeated install/config preservation, failed migration and unsupported platform passed'

@@ -207,6 +207,30 @@ class ReaderTests(unittest.TestCase):
         publish.assert_not_called()
         self.assertEqual((fake.connects, fake.contexts), (3, 1))
 
+    def test_unreadable_object_left_on_the_reader_stops_connecting_until_removed(self):
+        def take_away(fake):
+            fake.transmit_result = None
+            return fake.remove()
+        fake = FakePcsc(FakePcsc.insert, *([idle] * 100), take_away, FakePcsc.insert, FakePcsc.remove)
+        fake.transmit_result = (FakePcsc.SCARD_W_UNRESPONSIVE_CARD, [])
+        publish = self.run_agent(fake)
+        # Each connect costs pcscd a Polkit check: a few attempts, then the
+        # long hold costs none; the next real card is read normally.
+        self.assertEqual(fake.connects, agent.UNREADABLE_CARD_ATTEMPTS + 1)
+        self.assertEqual(publish.call_count, 1)
+
+    def test_failed_scan_handling_still_waits_for_the_held_card(self):
+        fake = FakePcsc(FakePcsc.insert, hold(0.05), FakePcsc.remove)
+        with patch.object(agent, "scard", fake), \
+             patch.object(agent.time, "sleep"), \
+             patch.object(agent, "handle_card_scan", side_effect=RuntimeError("publish failed")) as publish, \
+             self.assertLogs(agent.LOGGER, "ERROR"):
+            with self.assertRaises(KeyboardInterrupt):
+                agent.run(agent.AgentConfig("https://kiosk.test", "test", 0, None), Mock())
+        # Without the removal wait the held card would be published again.
+        self.assertEqual(publish.call_count, 1)
+        self.assertEqual((fake.connects, fake.contexts), (1, 1))
+
     def test_card_removed_before_connect_or_during_transmit_returns_to_idle(self):
         for operation in ("connect", "transmit"):
             with self.subTest(operation=operation):

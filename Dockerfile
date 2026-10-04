@@ -36,6 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY tools/pcsc/build-packages.sh /build-packages.sh
 RUN bash /build-packages.sh /out
 
+# Only the packages, for CI and review (tools/pcsc/README.md):
+# docker build --target pcsc-packages --output type=local,dest=artifacts/pcsc .
+FROM scratch AS pcsc-packages
+COPY --from=pcsc-build /out/ /
+
 FROM alpine:3.22 AS pi-bundle
 ARG VERSION=0.0.0-local
 COPY tools/pi-nfc-agent/ /src/pi-nfc-agent/

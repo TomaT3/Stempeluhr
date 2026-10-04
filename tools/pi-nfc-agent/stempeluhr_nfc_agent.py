@@ -539,6 +539,8 @@ def _card_unavailable_codes() -> frozenset:
 
 # Upper bound for one blocking status wait: SIGTERM is handled between waits.
 STATUS_WAIT_MS = 1000
+# Reads of one held object before waiting for its removal.
+UNREADABLE_CARD_ATTEMPTS = 3
 
 
 class PcscError(Exception):
@@ -668,6 +670,7 @@ def choose_reader(names: list[str], name_filter: str | None) -> str | None:
 def run(config: AgentConfig, scan_server: LocalScanServer) -> None:
     last_uid: str | None = None
     last_submit_at = 0.0
+    failed_reads = 0
     session = ReaderSession(config.reader_name_contains)
     try:
         while True:
@@ -677,12 +680,22 @@ def run(config: AgentConfig, scan_server: LocalScanServer) -> None:
                     time.sleep(3)
                     continue
                 if not session.wait_for_card():
+                    failed_reads = 0
                     continue
                 uid = session.read_uid()
                 if uid is None:
-                    # Card held but unreadable: retry slowly while it stays.
-                    time.sleep(0.5)
+                    failed_reads += 1
+                    if failed_reads < UNREADABLE_CARD_ATTEMPTS:
+                        # A card placed slowly can fail its first reads.
+                        time.sleep(0.5)
+                        continue
+                    # Phone, bank card or mute tag: every connect costs pcscd
+                    # a Polkit check, so wait until the object is taken away.
+                    LOGGER.info("Unreadable card on the reader; waiting for its removal")
+                    session.wait_for_removal()
+                    failed_reads = 0
                     continue
+                failed_reads = 0
                 now = time.monotonic()
                 if uid == last_uid and now - last_submit_at < config.debounce_seconds:
                     # A tap within the debounce is ignored; a card still held
@@ -690,14 +703,17 @@ def run(config: AgentConfig, scan_server: LocalScanServer) -> None:
                     if session.wait_for_removal(config.debounce_seconds - (now - last_submit_at)):
                         continue
                     now = time.monotonic()
-                # Wait for removal even when the UI never acknowledged the scan.
+                # Book the debounce and wait for removal even when the UI never
+                # acknowledged the scan or publishing failed: a held card must
+                # not become a second scan.
+                last_uid = uid
+                last_submit_at = now
                 try:
                     handle_card_scan(config, uid, scan_server)
-                finally:
-                    last_uid = uid
-                    last_submit_at = now
-                # A shutdown during the Ack wait must unwind immediately;
-                # waiting for a held card here would delay SIGTERM indefinitely.
+                except Exception:
+                    LOGGER.exception("Handling scan of card %s failed", uid)
+                # SIGTERM during the Ack wait raises SystemExit, which skips
+                # this wait: a held card would delay shutdown indefinitely.
                 session.wait_for_removal()
             except PcscError as error:
                 session.close()

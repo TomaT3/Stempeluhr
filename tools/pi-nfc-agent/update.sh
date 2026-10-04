@@ -58,6 +58,8 @@ schedule_pcsc_migration() {
   case "$status" in
     0) return 0 ;;
     1) ;;
+    # No packages for this platform (e.g. Bookworm): pcscd stays as it is.
+    3) return 0 ;;
     *) log "WARNUNG: PC/SC-Fixstand fehlt; automatische Migration bereits versucht - manuell prüfen (siehe Pi-Anleitung)." >&2
        return 0 ;;
   esac

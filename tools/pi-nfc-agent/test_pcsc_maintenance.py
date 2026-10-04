@@ -187,7 +187,8 @@ class MaintenanceTests(unittest.TestCase):
              patch.object(maintenance, "verify") as verify:
             maintenance.rollback(folder, snapshot)
         self.assertEqual(maintenance.read_result(folder)["status"], "rolled-back")
-        verify.assert_called_once_with(folder, snapshot, require_fix=False)
+        # A missing browser heartbeat cannot fail the return to the known-good packages.
+        verify.assert_called_once_with(folder, {**snapshot, "browserAlive": False}, require_fix=False)
         calls = [call.args for call in command.call_args_list]
         install = next(i for i, args in enumerate(calls) if "--allow-downgrades" in args)
         # An interrupted dpkg run is completed before the originals are reinstalled.
@@ -315,6 +316,101 @@ class MaintenanceTests(unittest.TestCase):
         self.assertTrue(maintenance.migration_running())
         maintenance.write_result(folder, "rolled-back", "done")
         self.assertFalse(maintenance.migration_running())
+
+    def pending(self, boot, result=None):
+        maintenance.STATE.mkdir(exist_ok=True)
+        folder = self.root / "interrupted"
+        folder.mkdir(exist_ok=True)
+        (folder / "snapshot.json").write_text(json.dumps({"rollbackUnit": "rollback-unit"}))
+        (maintenance.STATE / "pending.json").write_text(json.dumps({"folder": str(folder), "bootId": boot}))
+        if result:
+            maintenance.write_result(folder, result, "")
+        return folder
+
+    def main(self, *args):
+        with patch.object(maintenance.sys, "argv", ["pcsc_maintenance.py", *args]), \
+             patch.object(maintenance.os, "geteuid", return_value=0, create=True):
+            return maintenance.main()
+
+    def test_a_reboot_during_the_migration_is_detected_and_rolled_back(self):
+        folder = self.pending("boot-1", "failed")
+        with patch.object(maintenance, "current_boot", return_value="boot-1"):
+            self.assertIsNone(maintenance.interrupted_migration())
+            self.assertTrue(maintenance.migration_running())
+        with patch.object(maintenance, "current_boot", return_value="boot-2"):
+            # Transient units and rollback timer are gone: not "running" forever.
+            self.assertEqual(maintenance.interrupted_migration(), folder)
+            self.assertFalse(maintenance.migration_running())
+            with patch.object(maintenance, "suitable", return_value=True):
+                self.assertEqual(self.main("--check"), 1)
+
+            def rollback_unit(*args, **kwargs):
+                maintenance.write_result(folder, "rolled-back", "restored")
+            with patch.object(maintenance, "command", side_effect=rollback_unit) as command, \
+                 patch.object(maintenance, "suitable", return_value=False), \
+                 patch.object(maintenance, "prepare") as prepare:
+                self.assertEqual(self.main("--apply", "--auto"), 0)
+            job = command.call_args.args
+            self.assertEqual(job[:2], ("systemd-run", "--unit=rollback-unit-recover"))
+            self.assertEqual(job[-2:], ("--rollback", str(folder)))
+            prepare.assert_not_called()
+            self.assertIsNone(maintenance.interrupted_migration())
+
+    def test_finished_migrations_are_not_recovered_after_a_reboot(self):
+        for status in sorted(maintenance.TERMINAL):
+            with self.subTest(status=status):
+                self.pending("boot-1", status)
+                with patch.object(maintenance, "current_boot", return_value="boot-2"):
+                    self.assertIsNone(maintenance.interrupted_migration())
+
+    def test_platforms_without_bundled_packages_need_no_action(self):
+        with patch.object(maintenance, "suitable", return_value=False), \
+             patch.object(maintenance, "bundle_version", return_value=VERSION), \
+             patch.object(maintenance, "distribution", return_value="bookworm"), \
+             patch.object(maintenance, "prepare") as prepare:
+            self.assertEqual(self.main("--check"), 3)
+            self.assertEqual(self.main("--apply", "--auto"), 0)
+        prepare.assert_not_called()
+        self.assertFalse(maintenance.auto_marker().exists())
+
+    def test_only_a_rejected_system_uses_up_the_automatic_attempt(self):
+        failures = (subprocess.CalledProcessError(100, "apt-get download"), ValueError("gehalten"))
+        for error in failures:
+            with self.subTest(error=type(error).__name__):
+                maintenance.auto_marker().unlink(missing_ok=True)
+                with patch.object(maintenance, "suitable", return_value=False), \
+                     patch.object(maintenance, "platform_supported", return_value=True), \
+                     patch.object(maintenance, "bundle_version", return_value=VERSION), \
+                     patch.object(maintenance, "prepare", side_effect=error):
+                    with self.assertRaises(type(error)):
+                        self.main("--apply", "--auto")
+                # A temporary download error before any change is retried next run.
+                self.assertEqual(maintenance.auto_marker().exists(), isinstance(error, ValueError))
+
+    def test_failed_rollback_restarts_the_agent(self):
+        folder = self.root / "rollback"
+        (folder / "old").mkdir(parents=True)
+        snapshot = {"agentActive": True, "auto": [], "originals": {"pcscd": [OLD, "arm64"]},
+                    "conffiles": [], "targetVersion": VERSION}
+        def command(*args, **kwargs):
+            if args[:2] == ("dpkg", "--configure"):
+                raise subprocess.CalledProcessError(1, args, stderr="dpkg: error: broken")
+            return ""
+        with patch.object(maintenance, "installed", return_value=(VERSION, "arm64")), \
+             patch.object(maintenance, "command", side_effect=command), \
+             patch.object(maintenance.subprocess, "run", return_value=Mock(returncode=0)) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                maintenance.rollback(folder, snapshot)
+        run.assert_called_once_with(["systemctl", "start", maintenance.AGENT_SERVICE], check=False)
+
+    def test_dpkg_lock_of_another_apt_run_is_waited_for(self):
+        locked = subprocess.CalledProcessError(2, "dpkg", stderr="dpkg: error: dpkg frontend lock was locked by another process")
+        with patch.object(maintenance, "command", side_effect=[locked, locked, ""]) as command, \
+             patch.object(maintenance.time, "sleep"):
+            maintenance.configure_interrupted_packages()
+        self.assertEqual(command.call_count, 3)
+        self.assertEqual(command.call_args.kwargs["env"]["LC_ALL"], "C")
+        self.assertIn("DPkg::Lock::Timeout=600", maintenance.APT_INSTALL)
 
     def test_health_alone_cannot_pass_verification(self):
         (self.root / "probe_reader.py").write_text("print('probe')")

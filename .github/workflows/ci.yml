@@ -26,7 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build packages from pinned Debian source
-        run: docker build -f tools/pcsc/Dockerfile --output type=local,dest=artifacts/pcsc .
+        # Same stage as the release image, so CI tests the shipped packages' build.
+        run: docker build --target pcsc-packages --output type=local,dest=artifacts/pcsc .
       - name: Verify install and rollback in disposable Trixie container
         run: >-
           docker run --rm

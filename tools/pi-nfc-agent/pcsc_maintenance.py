@@ -4,7 +4,8 @@
 --check makes no changes. --apply uses the packages authenticated by the agent
 bundle's SHA-256; original packages must be downloadable before any service is
 stopped. The agent updater starts --apply --auto once per bundled package
-version; a failed automatic attempt is not repeated without --apply.
+version; a failed automatic attempt is not repeated without --apply. A
+migration interrupted by a reboot is rolled back by the next --apply.
 """
 from __future__ import annotations
 
@@ -30,10 +31,17 @@ TERMINAL = FINISHED | {"rollback-failed"}
 ROLLBACK_DELAY = "20m"
 ACTIVATION_LIMIT = "15min"
 RESULT_WAIT_SECONDS = 25 * 60
+# unattended-upgrades may hold the dpkg lock for several minutes.
+DPKG_LOCK_WAIT_SECONDS = 10 * 60
 AGENT_SERVICE = "stempeluhr-nfc-agent.service"
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
 BASE = Path(os.environ.get("STEMPELUHR_AGENT_DIR", "/opt/stempeluhr-nfc-agent"))
 STATE = Path(os.environ.get("STEMPELUHR_PCSC_STATE", "/var/lib/stempeluhr-pcsc-migration"))
+OS_RELEASE = Path(os.environ.get("STEMPELUHR_OS_RELEASE", "/etc/os-release"))
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
+APT_INSTALL = ("apt-get", "-y", "-o", f"DPkg::Lock::Timeout={DPKG_LOCK_WAIT_SECONDS}",
+               "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
+               "--no-install-recommends")
 
 
 def command(*args, timeout=120, **kwargs):
@@ -63,8 +71,17 @@ def has_fix(version):
 
 
 def distribution():
-    values = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+    values = dict(line.split("=", 1) for line in OS_RELEASE.read_text().splitlines() if "=" in line)
     return values.get("VERSION_CODENAME", "").strip('"') if values.get("ID", "").strip('"') == "debian" else None
+
+
+def platform_supported():
+    """Only Trixie/arm64 bundles carry packages; other systems keep their pcscd."""
+    try:
+        return (bundle_version() is not None and distribution() == "trixie"
+                and command("dpkg", "--print-architecture") == "arm64")
+    except (OSError, subprocess.CalledProcessError):
+        return False
 
 
 @contextmanager
@@ -97,13 +114,41 @@ def auto_possible():
         return True
 
 
-def migration_running():
+def current_boot():
     try:
-        folder = Path(json.loads((STATE / "pending.json").read_text())["folder"])
+        return BOOT_ID.read_text().strip()
+    except OSError:
+        return None
+
+
+def pending_migration():
+    """(folder, boot id) of a migration without a final result, else None."""
+    try:
+        pending = json.loads((STATE / "pending.json").read_text())
+        folder = Path(pending["folder"])
     except (OSError, ValueError, KeyError):
-        return False
+        return None
     result = read_result(folder)
-    return result is None or result["status"] not in TERMINAL
+    if result is not None and result["status"] in TERMINAL:
+        return None
+    return folder, pending.get("bootId")
+
+
+def interrupted_migration():
+    """Folder of an unfinished migration whose units died with a reboot.
+
+    Activation and rollback timer are transient systemd units, which do not
+    survive a reboot; nothing would ever finish or roll back such a run.
+    """
+    pending = pending_migration()
+    if pending is None:
+        return None
+    folder, boot = pending
+    return folder if boot is not None and boot != current_boot() else None
+
+
+def migration_running():
+    return pending_migration() is not None and interrupted_migration() is None
 
 
 def record_auto_attempt(version):
@@ -216,7 +261,9 @@ def prepare():
             verified[p] = path
         if set(verified) != {p for p in selected if old[p] is not None}:
             raise ValueError("Originalpakete für Rückinstallation fehlen")
-        simulate(originals)
+        # No separate rollback simulation: before the change it would only
+        # reinstall the same versions. The forward simulation already rejects
+        # any change to other packages, so the rollback is its exact inverse.
         record_auto_attempt(version)
         (folder / "pcsc-config").mkdir()
         conffiles = []
@@ -251,7 +298,7 @@ def prepare():
         # Timer is armed before activation; both jobs continue after SSH disconnects.
         # Without a started activation it remains a harmless safety net.
         detached(folder, snapshot["rollbackUnit"], "--rollback", "--on-active=" + ROLLBACK_DELAY)
-        pending.write_text(json.dumps({"folder": str(folder)}))
+        pending.write_text(json.dumps({"folder": str(folder), "bootId": current_boot()}))
         detached(folder, "stempeluhr-pcsc-activate-" + folder.name, "--activate",
                  "--property=RuntimeMaxSec=" + ACTIVATION_LIMIT)
         print("Paketwechsel gestartet; Protokoll und Originalsicherung:", folder)
@@ -312,6 +359,20 @@ def verify(folder, snapshot, require_fix=True):
     print("PC/SC-Leser geprüft. Agent-/Browserprüfung und echter Scan nach Einrichtung erforderlich.")
 
 
+def configure_interrupted_packages():
+    """dpkg --configure -a, waiting for a dpkg lock held by another APT run."""
+    deadline = time.monotonic() + DPKG_LOCK_WAIT_SECONDS
+    while True:
+        try:
+            # Package mutations must finish without a subprocess timeout.
+            command("dpkg", "--configure", "-a", timeout=None, env={**os.environ, "LC_ALL": "C"})
+            return
+        except subprocess.CalledProcessError as error:
+            if "lock" not in (error.stderr or "") or time.monotonic() >= deadline:
+                raise
+            time.sleep(5)
+
+
 def restore_auto(snapshot):
     if snapshot["auto"]:
         command("apt-mark", "auto", *snapshot["auto"])
@@ -326,27 +387,33 @@ def rollback(folder, snapshot):
                 command("systemctl", "start", AGENT_SERVICE)
             raise ValueError("PC/SC-Version wurde außerhalb der Migration verändert; kein automatisches Downgrade")
     command("systemctl", "stop", AGENT_SERVICE)
-    # Finish a dpkg run interrupted by a killed activation before reinstalling.
-    # Package mutations must finish without a subprocess timeout, particularly
-    # in this rollback unit, which intentionally has no systemd runtime limit.
-    command("dpkg", "--configure", "-a", timeout=None)
-    originals = list((folder / "old").glob("*.deb"))
-    if originals:
-        command("apt-get", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
-                "--no-install-recommends", "--allow-downgrades", "install", *(str(p) for p in originals), timeout=None)
-    for name in snapshot["conffiles"]:
-        relative = Path(name)
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError("Ungültiger Konfigurationspfad in Originalsicherung")
-        shutil.copy2(folder / "pcsc-config" / relative, Path("/etc") / relative)
-    restore_auto(snapshot)
-    for p, expected in snapshot["originals"].items():
-        if installed(p) != tuple(expected):
-            raise ValueError("Originalversion nach Rückinstallation nicht wiederhergestellt")
-    command("systemctl", "restart", "pcscd.service")
+    try:
+        # Finish a dpkg run interrupted by a killed activation before reinstalling.
+        # This rollback unit intentionally has no systemd runtime limit.
+        configure_interrupted_packages()
+        originals = list((folder / "old").glob("*.deb"))
+        if originals:
+            command(*APT_INSTALL, "--allow-downgrades", "install", *(str(p) for p in originals), timeout=None)
+        for name in snapshot["conffiles"]:
+            relative = Path(name)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("Ungültiger Konfigurationspfad in Originalsicherung")
+            shutil.copy2(folder / "pcsc-config" / relative, Path("/etc") / relative)
+        restore_auto(snapshot)
+        for p, expected in snapshot["originals"].items():
+            if installed(p) != tuple(expected):
+                raise ValueError("Originalversion nach Rückinstallation nicht wiederhergestellt")
+        command("systemctl", "restart", "pcscd.service")
+    except Exception:
+        # Even a failed rollback must not leave the terminal without NFC.
+        if snapshot.get("agentActive"):
+            subprocess.run(["systemctl", "start", AGENT_SERVICE], check=False)
+        raise
     if snapshot["agentActive"]:
         command("systemctl", "start", AGENT_SERVICE)
-    verify(folder, snapshot, require_fix=False)
+    # The restored packages are the known-good state. A kiosk browser that
+    # stopped sending heartbeats is not fixed by repeating the rollback.
+    verify(folder, {**snapshot, "browserAlive": False}, require_fix=False)
     if not snapshot["pcscActive"] and not snapshot["agentActive"]:
         command("systemctl", "stop", "pcscd.service")
     write_result(folder, "rolled-back", "Originalpakete wiederhergestellt; Funktionsprüfung vor Ort weiterhin erforderlich")
@@ -363,8 +430,7 @@ def activate(folder):
             command("systemctl", "stop", AGENT_SERVICE)
             # The activation unit supplies its own outer deadline and rollback;
             # do not interrupt dpkg early with the timeout for read-only checks.
-            command("apt-get", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
-                    "--no-install-recommends", "install", *(str(p) for p in (folder / "new").glob("*.deb")), timeout=None)
+            command(*APT_INSTALL, "install", *(str(p) for p in (folder / "new").glob("*.deb")), timeout=None)
             restore_auto(snapshot)
             command("systemctl", "restart", "pcscd.service")
             if snapshot["agentActive"]:
@@ -395,13 +461,20 @@ def main():
     parser.add_argument("--auto", action="store_true", help="with --apply: skip if already attempted for this bundle")
     args = parser.parse_args()
     if args.check:
-        # 0 = suitable, 1 = automatic migration pending or running, 2 = manual action needed.
+        # 0 = suitable, 1 = automatic migration pending or running, 2 = manual
+        # action needed, 3 = no packages for this platform (nothing to do).
+        if interrupted_migration():
+            print("PC/SC-Paketmigration durch Neustart unterbrochen; Rückinstallation steht aus.")
+            return 1
         if suitable():
             print("PC/SC-Fixstand geeignet (>= 2.5.0).")
             return 0
         if migration_running():
             print("PC/SC-Paketmigration läuft.")
             return 1
+        if not platform_supported():
+            print("PC/SC-Fixstand fehlt; Paketmigration für diese Plattform nicht verfügbar (nur Trixie/arm64).")
+            return 3
         if auto_possible():
             print("PC/SC-Fixstand fehlt; automatische Paketmigration steht aus.")
             return 1
@@ -423,16 +496,40 @@ def main():
                              "Rückinstallation fehlgeschlagen; Originalsicherung und Journal prüfen")
                 raise
     else:
+        if recover_interrupted() and args.auto:
+            return 0
         if args.auto:
-            if suitable() or not auto_possible():
-                print("Keine automatische Paketmigration erforderlich oder bereits versucht.")
+            if suitable() or not platform_supported() or not auto_possible():
+                print("Keine automatische Paketmigration erforderlich, möglich oder bereits versucht.")
                 return 0
-            # Before prepare(): systems it rejects are not retried every run.
-            record_auto_attempt(bundle_version())
-        folder = prepare()
+            try:
+                folder = prepare()
+            except ValueError:
+                # A rejected system is not retried every updater run. Download
+                # and APT errors are not recorded: they are often temporary
+                # and occur before anything changed.
+                record_auto_attempt(bundle_version())
+                raise
+        else:
+            folder = prepare()
         if folder:
             return wait_for_result(folder)
     return 0
+
+
+def recover_interrupted():
+    """Rolls back a migration interrupted by a reboot; True if one was found."""
+    with locked():
+        folder = interrupted_migration()
+        if folder is None:
+            return False
+        print("Paketmigration durch Neustart unterbrochen; Rückinstallation:", folder)
+        snapshot = json.loads((folder / "snapshot.json").read_text())
+        detached(folder, snapshot["rollbackUnit"] + "-recover", "--rollback")
+    wait_for_result(folder)
+    if read_result(folder)["status"] != "rolled-back":
+        raise ValueError("Rückinstallation der unterbrochenen Migration fehlgeschlagen; Dienstjournal prüfen")
+    return True
 
 
 def wait_for_result(folder):

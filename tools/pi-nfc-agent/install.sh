@@ -144,7 +144,14 @@ STEMPELUHR_PCSC_AUTO=0 bash "$UPDATER" --force
 if [ "$SKIP_APT" -eq 0 ]; then
   [ -f "$AGENT_DIR/current/pcsc_maintenance.py" ] || fail "Agent-Bundle enthält keine PC/SC-Paketprüfung; Server zuerst aktualisieren"
   log "PC/SC-Fixstand prüfen und bei Bedarf migrieren (kurze NFC-Unterbrechung)"
-  python3 "$AGENT_DIR/current/pcsc_maintenance.py" --apply || fail "PC/SC-Paketmigration fehlgeschlagen; Originalpakete und Dienstjournal prüfen"
+  PCSC_STATUS=0
+  python3 "$AGENT_DIR/current/pcsc_maintenance.py" --check || PCSC_STATUS=$?
+  case "$PCSC_STATUS" in
+    0) ;;
+    3) log "WARNUNG: keine PC/SC-Pakete für diese Plattform (nur Trixie/arm64); pcscd bleibt unverändert" ;;
+    *) python3 "$AGENT_DIR/current/pcsc_maintenance.py" --apply \
+         || fail "PC/SC-Paketmigration fehlgeschlagen; Originalpakete und Dienstjournal prüfen" ;;
+  esac
 fi
 
 # Dateien des alten, manuell kopierten Agenten (vor dem Release-Layout).

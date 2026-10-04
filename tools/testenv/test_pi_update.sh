@@ -49,7 +49,10 @@ cat > "$WORK/bin/systemd-run" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >> "$WORK/systemd-run.log"
 EOF
-chmod +x "$WORK/bin/dpkg-query" "$WORK/bin/systemd-run"
+# Platform with bundled packages, independent of the test host.
+printf '#!/bin/sh\n[ "$1" = --print-architecture ] && echo arm64\n' > "$WORK/bin/dpkg"
+printf 'ID=debian\nVERSION_CODENAME=trixie\n' > "$WORK/os-release"
+chmod +x "$WORK/bin/dpkg-query" "$WORK/bin/systemd-run" "$WORK/bin/dpkg"
 
 # pyscard-Stub: der Agent importiert smartcard beim Start.
 cat > "$WORK/stub/smartcard/__init__.py" <<'EOF'
@@ -117,6 +120,7 @@ run_update() {
   STEMPELUHR_JOURNALD_DIR="${TEST_JOURNALD_DIR:-$WORK/journald}" \
   STEMPELUHR_HEALTH_TIMEOUT=8 \
   STEMPELUHR_PCSC_STATE="$WORK/pcsc-state" \
+  STEMPELUHR_OS_RELEASE="$WORK/os-release" \
   PATH="$WORK/bin:$PATH" \
   SYSTEMCTL="$WORK/systemctl" \
     bash "$AGENT_SRC/update.sh" "$@" > "$WORK/update.log" 2>&1
@@ -260,6 +264,13 @@ printf '{"targetVersion": "2.5.2-1~stempeluhr13.1"}\n' > "$WORK/pcsc-state/auto-
 if run_update; then ok "Update nach Migrationsversuch erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
 [ ! -f "$WORK/systemd-run.log" ] && grep -q 'bereits versucht' "$WORK/update.log" \
   && ok "Kein zweiter automatischer Versuch, Hinweis im Journal" || bad "Wiederholter Versuch oder Hinweis fehlt"
+
+say "10: Bookworm ohne Pakete bleibt still"
+rm -f "$WORK/pcsc-state/auto-attempt.json"
+printf 'ID=debian\nVERSION_CODENAME=bookworm\n' > "$WORK/os-release"
+if run_update; then ok "Update endet erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
+[ ! -f "$WORK/systemd-run.log" ] && ! grep -q 'PC/SC' "$WORK/update.log" \
+  && ok "Keine Migration, keine Warnung" || bad "Migration oder Warnung auf Bookworm: $(grep 'PC/SC' "$WORK/update.log")"
 
 say "Ergebnis: $PASS bestanden, $FAIL fehlgeschlagen"
 [ "$FAIL" -eq 0 ]
