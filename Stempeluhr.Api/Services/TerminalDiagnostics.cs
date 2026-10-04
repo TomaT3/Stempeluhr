@@ -24,7 +24,12 @@ public static class TerminalDiagnostics
             lagMs = Number(ui, "lagMs"), lastInputAgeMs = Number(ui, "lastInputAgeMs"),
             cpuPercent = Number(system, "cpuPercent"), availableMemoryKb = Number(system, "availableMemoryKb"),
             chromiumProcesses = Number(system, "chromiumProcesses"), chromiumRssSumKb = Number(system, "chromiumRssSumKb"),
-            pcscdRssKb = Number(system, "pcscdRssKb"), temperatureC = Number(system, "temperatureC"),
+            pcscdRssKb = Number(system, "pcscdRssKb"),
+            pcscdAnonymousKb = Number(system, "pcscdAnonymousKb"), pcscdSwapKb = Number(system, "pcscdSwapKb"),
+            pcscdAnonymousAndSwapKb = AnonymousAndSwap(system),
+            pcscdPid = Number(system, "pcscdPid", 1, int.MaxValue),
+            pcscdStartTicks = Number(system, "pcscdStartTicks", 0, 9_007_199_254_740_991),
+            pcscdVersion = PackageVersion(system, "pcscdVersion"), temperatureC = Number(system, "temperatureC"),
             throttledFlags = Number(system, "throttledFlags"), diskFreeMb = Number(system, "diskFreeMb"),
             uptimeSeconds = Number(system, "uptimeSeconds"), load1 = Number(system, "load1"),
             requests = Array(ui, "requests").Take(10).Select(r => new
@@ -71,8 +76,22 @@ public static class TerminalDiagnostics
             ThrottledFlags: Number(system, "throttledFlags", 0, int.MaxValue),
             DiskFreeMb: Number(system, "diskFreeMb"),
             UptimeSeconds: Number(system, "uptimeSeconds"),
-            Load1: Number(system, "load1"));
+            Load1: Number(system, "load1"),
+            PcscdRssKb: Number(system, "pcscdRssKb"),
+            PcscdAnonymousKb: Number(system, "pcscdAnonymousKb"),
+            PcscdSwapKb: Number(system, "pcscdSwapKb"),
+            PcscdAnonymousAndSwapKb: AnonymousAndSwap(system),
+            PcscdPid: Number(system, "pcscdPid", 1, int.MaxValue),
+            PcscdStartTicks: Number(system, "pcscdStartTicks", 0, 9_007_199_254_740_991),
+            PcscdVersion: PackageVersion(system, "pcscdVersion"));
     }
+
+    // Derive the total from validated components; a missing component is unknown.
+    private static double? AnonymousAndSwap(JsonElement system) =>
+        Number(system, "pcscdAnonymousKb") + Number(system, "pcscdSwapKb");
+
+    private static string? PackageVersion(JsonElement value, string key) =>
+        SafeIdentifier(value, key, @"\A[0-9A-Za-z.+:~\-]{1,64}\z");
 
     private static JsonElement Object(JsonElement value, string key) =>
         value.ValueKind == JsonValueKind.Object && value.TryGetProperty(key, out var child) ? child : default;

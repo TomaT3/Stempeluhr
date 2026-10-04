@@ -85,6 +85,8 @@ class SystemSampler:
     def __init__(self, proc: Path = Path("/proc")):
         self.proc = proc
         self.previous_cpu = None
+        self._package_version = None
+        self._version_checked_at = -600
 
     def sample(self) -> dict:
         values = {}
@@ -102,7 +104,8 @@ class SystemSampler:
             values["load1"] = float((self.proc / "loadavg").read_text().split()[0])
         except (OSError, ValueError, KeyError, IndexError):
             pass
-        chromium_rss, chromium_count, pcscd_rss = 0, 0, 0
+        chromium_rss, chromium_count = 0, 0
+        pcscd = []
         try:
             for path in self.proc.iterdir():
                 if not path.name.isdecimal():
@@ -117,12 +120,35 @@ class SystemSampler:
                         chromium_count += 1
                         chromium_rss += rss
                     else:
-                        pcscd_rss += rss
-                except (OSError, ValueError, KeyError):
+                        # stat field 22 is the process start time in clock ticks.
+                        # PID + start time distinguish restarts and PID reuse.
+                        stat = (path / "stat").read_text().rsplit(")", 1)[1].split()
+                        def kb(key):
+                            raw = status.get(key)
+                            return int(raw.split()[0]) if raw else None
+                        pcscd.append({"pcscdPid": int(path.name), "pcscdStartTicks": int(stat[19]),
+                                      "pcscdRssKb": rss, "pcscdAnonymousKb": kb("RssAnon"),
+                                      "pcscdSwapKb": kb("VmSwap")})
+                except (OSError, ValueError, KeyError, IndexError):
                     continue
-            values.update(chromiumProcesses=chromium_count, chromiumRssSumKb=chromium_rss, pcscdRssKb=pcscd_rss)
+            values.update(chromiumProcesses=chromium_count, chromiumRssSumKb=chromium_rss)
+            # A missing, unreadable or ambiguous process is not zero memory.
+            if len(pcscd) == 1:
+                values.update(pcscd[0])
+                anonymous, swap = values["pcscdAnonymousKb"], values["pcscdSwapKb"]
+                values["pcscdAnonymousAndSwapKb"] = None if anonymous is None or swap is None else anonymous + swap
         except OSError:
             pass
+        if time.monotonic() - self._version_checked_at >= 600:
+            self._version_checked_at = time.monotonic()
+            try:
+                result = subprocess.run(["dpkg-query", "-W", "-f=${Version}", "pcscd"],
+                                        capture_output=True, text=True, timeout=2, check=True)
+                version = result.stdout.strip()
+                self._package_version = version if re.fullmatch(r"[0-9A-Za-z.+:~\-]{1,64}", version) else None
+            except (OSError, subprocess.SubprocessError):
+                self._package_version = None
+        values["pcscdVersion"] = self._package_version
         try:
             values["temperatureC"] = round(float(Path("/sys/class/thermal/thermal_zone0/temp").read_text()) / 1000, 1)
         except (OSError, ValueError):

@@ -31,6 +31,9 @@ describe('TerminalStatusPage', () => {
           agentVersion: '0.18.0', appVersion: '0.18.0', uiStatus: 'alive', heartbeatAgeSeconds: 4,
           screen: 'idle', blocked: 'none', busy: false, offline: false, pending: 0, rejected: 0,
           cpuPercent: 12, availableMemoryKb: 512_000, chromiumRssSumKb: 200_000, temperatureC: 82,
+          pcscdRssKb: 102_400, pcscdAnonymousKb: 102_400, pcscdSwapKb: 51_200,
+          pcscdAnonymousAndSwapKb: 153_600, pcscdPid: 726, pcscdStartTicks: 150,
+          pcscdVersion: '2.5.2-1~stempeluhr13.1',
           throttledFlags: 0x50000, diskFreeMb: 9000, uptimeSeconds: 7200, load1: 0.4,
         },
         powerFlags: ['Unterspannung (seit Start)'],
@@ -47,7 +50,9 @@ describe('TerminalStatusPage', () => {
     expect(rows.length).toBe(2);
     expect(rows[0].getAttribute('data-state')).toBe('problem');
     expect(rows[0].textContent).toContain('Temperatur 82 °C seit 12:00.');
-    expect(rows[0].textContent).toContain('500 MB');
+    expect(rows[0].textContent).toContain('500 MiB');
+    expect(rows[0].textContent).toContain('150 MiB');
+    expect(rows[0].textContent).toContain('2.5.2-1~stempeluhr13.1');
     expect(rows[0].textContent).toContain('2 h 0 min');
     expect(rows[0].textContent).toContain('Unterspannung (seit Start)');
     expect(rows[1].textContent).toContain('Noch nie gemeldet');

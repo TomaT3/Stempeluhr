@@ -79,6 +79,18 @@
                 <dd>{{ megabytes(report.availableMemoryKb) }}</dd>
               </div>
               <div>
+                <dt>PC/SC · RAM + Swap</dt>
+                <dd>{{ megabytes(report.pcscdAnonymousAndSwapKb) }}</dd>
+              </div>
+              <div>
+                <dt>PC/SC · RSS / Swap</dt>
+                <dd>{{ megabytes(report.pcscdRssKb) }} / {{ megabytes(report.pcscdSwapKb) }}</dd>
+              </div>
+              <div>
+                <dt>PC/SC-Version · Prozess</dt>
+                <dd>{{ report.pcscdVersion ?? '-' }} · PID {{ report.pcscdPid ?? '-' }}</dd>
+              </div>
+              <div>
                 <dt>CPU</dt>
                 <dd>{{ value(report.cpuPercent, '%') }}</dd>
               </div>

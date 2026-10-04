@@ -35,6 +35,12 @@ public static class TerminalMetricsLineProtocol
         Float("load1", report.Load1);
         Float("available_memory_kb", report.AvailableMemoryKb);
         Float("chromium_rss_kb", report.ChromiumRssSumKb);
+        Float("pcscd_rss_kb", report.PcscdRssKb);
+        Float("pcscd_anonymous_kb", report.PcscdAnonymousKb);
+        Float("pcscd_swap_kb", report.PcscdSwapKb);
+        Float("pcscd_anonymous_and_swap_kb", report.PcscdAnonymousAndSwapKb);
+        Float("pcscd_pid", report.PcscdPid);
+        Float("pcscd_start_ticks", report.PcscdStartTicks);
         Float("temperature_c", report.TemperatureC);
         if (report.ThrottledFlags is { } throttled)
         {
@@ -52,6 +58,7 @@ public static class TerminalMetricsLineProtocol
         Tag(line, "terminal", sample.TerminalId);
         Tag(line, "agent_version", report.AgentVersion);
         Tag(line, "app_version", report.AppVersion);
+        Tag(line, "pcscd_version", report.PcscdVersion);
         line.Append(' ').AppendJoin(',', fields);
         line.Append(' ').Append(sample.ReceivedAt.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
         return line.ToString();

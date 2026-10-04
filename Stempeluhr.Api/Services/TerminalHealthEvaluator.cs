@@ -19,7 +19,14 @@ public sealed record TerminalHealthReport(
     double? ThrottledFlags,
     double? DiskFreeMb,
     double? UptimeSeconds,
-    double? Load1);
+    double? Load1,
+    double? PcscdRssKb = null,
+    double? PcscdAnonymousKb = null,
+    double? PcscdSwapKb = null,
+    double? PcscdAnonymousAndSwapKb = null,
+    double? PcscdPid = null,
+    double? PcscdStartTicks = null,
+    string? PcscdVersion = null);
 
 public enum TerminalCondition
 {
