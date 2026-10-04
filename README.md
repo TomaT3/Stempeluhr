@@ -271,6 +271,40 @@ landen sie in `telegramChatId`:
 { "telegramAlertChatId": "-1009876543210" }
 ```
 
+### Terminal-Metriken in Grafana (optional)
+
+Die API schreibt jeden Terminal-Bericht (etwa einmal pro Minute: Temperatur,
+freier RAM, CPU, Load, Chromium-Speicher, Speicherplatz, Queue, Drosselung,
+Laufzeit, Kiosk-Lebenszeichen) in eine InfluxDB. Schreiben klappt mit
+InfluxDB 2.x und InfluxDB 3 über deren `/api/v2/write`. Das mitgelieferte
+Dashboard nutzt aber Flux-Abfragen und läuft daher nur mit InfluxDB 2.x;
+InfluxDB 3 kann kein Flux, dort Panels selbst mit SQL oder InfluxQL bauen.
+Die Pis brauchen dafür nichts.
+
+1. In InfluxDB einen Bucket anlegen (z. B. `stempeluhr`, Aufbewahrung etwa
+   90 Tage) und einen API-Token mit Schreibrecht auf diesen Bucket.
+2. In `data/settings.json` ergänzen. `influxOrg` darf bei InfluxDB 3 leer
+   bleiben. Aus dem Container ist Influx über die NAS-IP oder ein gemeinsames
+   Docker-Netz erreichbar, nicht über `localhost`.
+
+   ```json
+   {
+     "influxUrl": "http://192.168.1.10:8086",
+     "influxOrg": "home",
+     "influxBucket": "stempeluhr",
+     "influxToken": "<TOKEN>"
+   }
+   ```
+
+3. Nur InfluxDB 2.x: In Grafana eine InfluxDB-Datenquelle mit Abfragesprache
+   **Flux** anlegen (Token mit Leserecht) und
+   [`tools/grafana/terminal-dashboard.json`](tools/grafana/terminal-dashboard.json)
+   importieren (Dashboards → New → Import). Dabei Datenquelle und Bucket wählen.
+
+Die Einstellungen werden ohne Neustart wirksam. Ist Influx nicht erreichbar,
+gehen die Werte dieser Zeit verloren. Das Log meldet den Ausfall einmal und die
+Wiederkehr einmal. Stempeln und Überwachung beeinflusst das nie.
+
 ### Terminal (Raspberry Pi)
 
 Zuerst ein eigenes Terminal-Token in `data/settings.json` registrieren und

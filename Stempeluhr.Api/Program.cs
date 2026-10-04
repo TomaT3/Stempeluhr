@@ -53,6 +53,16 @@ builder.Services.AddHostedService<WorkTimeAlertService>();
 // Terminal monitoring: status page and Telegram alarm when a terminal stops reporting.
 builder.Services.AddSingleton<TerminalHealthStore>();
 builder.Services.AddHostedService<TerminalHealthWatcher>();
+// Optional: terminal reports into InfluxDB for Grafana dashboards.
+builder.Services.AddHttpClient(TerminalMetricsWriter.ClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(5);
+}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+});
+builder.Services.AddSingleton<TerminalMetricsWriter>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TerminalMetricsWriter>());
 builder.Services.AddHttpClient<IKimaiClient, KimaiClient>(client =>
 {
     // Every Kimai call runs under the global sync lock: one hung connection

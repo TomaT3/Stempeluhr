@@ -104,6 +104,8 @@ Die API merkt sich den letzten Bericht jedes Terminals im Speicher. Die Seite
 **Admin → Terminalstatus** (`/admin/terminals`) zeigt für jedes Terminal mit
 Eintrag in `terminalTokens` den Zustand, die Zeit seit dem letzten Bericht,
 aktive Probleme und die letzten Werte. Sie lädt sich alle 30 Sekunden neu.
+Den Verlauf über die Zeit zeigt ein optionales Grafana-Dashboard (siehe
+[README](../README.md#terminal-metriken-in-grafana-optional)).
 
 Ein Hintergrunddienst prüft jede Minute. Beginnt eine Störung, schickt er eine
 Telegram-Nachricht an `telegramAlertChatId` (leer: `telegramChatId`), und eine

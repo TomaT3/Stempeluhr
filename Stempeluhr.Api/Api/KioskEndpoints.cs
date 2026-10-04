@@ -18,7 +18,8 @@ public static class KioskEndpoints
     {
         var diagnosticLimiter = new RequestRateLimiter(TimeSpan.FromMinutes(1), 2);
         app.MapPost("/api/kiosk/diagnostics", (HttpContext context, JsonElement report,
-            IRuntimeSettingsStore store, TerminalHealthStore health, ILogger<Program> logger) =>
+            IRuntimeSettingsStore store, TerminalHealthStore health, TerminalMetricsWriter metrics,
+            ILogger<Program> logger) =>
         {
             var terminalId = TerminalAuthentication.Authenticate(context.Request, store.Load());
             if (terminalId is null) return Results.Unauthorized();
@@ -26,7 +27,9 @@ public static class KioskEndpoints
             if (report.ValueKind != JsonValueKind.Object) return Results.BadRequest();
             logger.LogInformation("Terminal {TerminalId} diagnostics: {Report}",
                 terminalId, JsonSerializer.Serialize(TerminalDiagnostics.Filter(report)));
-            health.Record(terminalId, TerminalDiagnostics.Summarize(report));
+            var summary = TerminalDiagnostics.Summarize(report);
+            health.Record(terminalId, summary);
+            metrics.Enqueue(terminalId, summary);
             return Results.Ok(new { ok = true });
         }).WithMetadata(new RequestSizeLimitAttribute(32768));
 
