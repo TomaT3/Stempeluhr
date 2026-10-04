@@ -23,6 +23,7 @@ from contextlib import contextmanager
 
 MIN_VERSION = "2.5.0"
 PACKAGES = {"pcscd", "libpcsclite1", "libpcsclite-dev"}
+FINISHED = {"ok", "rolled-back", "unchanged"}
 AGENT_SERVICE = "stempeluhr-nfc-agent.service"
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
 BASE = Path(os.environ.get("STEMPELUHR_AGENT_DIR", "/opt/stempeluhr-nfc-agent"))
@@ -47,7 +48,12 @@ def at_least(version, minimum):
 
 def suitable():
     versions = [installed(p) for p in ("pcscd", "libpcsclite1")]
-    return all(v is not None and at_least(v[0], MIN_VERSION) for v in versions)
+    return all(v is not None and has_fix(v[0]) for v in versions)
+
+
+def has_fix(version):
+    # A Debian epoch changes package ordering, not the upstream fix level.
+    return at_least(version.split(":", 1)[-1], MIN_VERSION)
 
 
 def distribution():
@@ -72,7 +78,7 @@ def packages_from_manifest(directory, architecture):
     if manifest["distribution"] != "trixie" or manifest["architecture"] != architecture:
         raise ValueError("PC/SC-Bundle passt nicht zu Distribution/Architektur")
     version = manifest["version"]
-    if not at_least(version, MIN_VERSION):
+    if not has_fix(version):
         raise ValueError("PC/SC-Bundle enthält den erforderlichen Fixstand nicht")
     result = {}
     for entry in manifest["packages"]:
@@ -124,7 +130,7 @@ def prepare():
         if pending.exists():
             previous = Path(json.loads(pending.read_text())["folder"])
             result = read_result(previous)
-            if result is None or result["status"] not in ("ok", "rolled-back"):
+            if result is None or result["status"] not in FINISHED:
                 raise ValueError("Eine Paketmigration ist noch offen; zuerst deren Dienstjournal/Originalsicherung prüfen")
             pending.unlink()
         if suitable():
@@ -188,7 +194,7 @@ def prepare():
                     "auto": sorted(set(command("apt-mark", "showauto").splitlines()) & selected.keys()),
                     "rollbackUnit": "stempeluhr-pcsc-rollback-" + folder.name,
                     "originals": {p: list(old[p]) for p in selected if old[p] is not None},
-                    "conffiles": conffiles}
+                    "conffiles": conffiles, "targetVersion": version}
         (folder / "snapshot.json").write_text(json.dumps(snapshot))
         shutil.copy2(__file__, folder / "pcsc_maintenance.py")
         shutil.copy2(Path(__file__).with_name("probe_reader.py"), folder / "probe_reader.py")
@@ -246,6 +252,13 @@ def restore_auto(snapshot):
 
 
 def rollback(folder, snapshot):
+    # A separately started APT update must not be overwritten by our rollback.
+    for p, expected in snapshot["originals"].items():
+        current = installed(p)
+        if current is not None and current[0] not in (expected[0], snapshot.get("targetVersion")):
+            if snapshot["agentActive"]:
+                command("systemctl", "start", AGENT_SERVICE)
+            raise ValueError("PC/SC-Version wurde außerhalb der Migration verändert; kein automatisches Downgrade")
     command("systemctl", "stop", AGENT_SERVICE)
     originals = list((folder / "old").glob("*.deb"))
     if originals:
@@ -272,6 +285,10 @@ def rollback(folder, snapshot):
 def activate(folder):
     with locked():
         snapshot = json.loads((folder / "snapshot.json").read_text())
+        if any(installed(p) != tuple(expected) for p, expected in snapshot["originals"].items()):
+            write_result(folder, "unchanged", "PC/SC-Pakete seit Vorprüfung verändert; Paketwechsel ohne Dienstunterbrechung abgebrochen")
+            subprocess.run(["systemctl", "stop", snapshot["rollbackUnit"] + ".timer"], check=False)
+            return
         try:
             command("systemctl", "stop", AGENT_SERVICE)
             command("apt-get", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
@@ -312,7 +329,7 @@ def main():
     elif args.rollback:
         with locked():
             result = read_result(args.rollback)
-            if result and result["status"] in ("ok", "rolled-back"):
+            if result and result["status"] in FINISHED:
                 return 0
             rollback(args.rollback, json.loads((args.rollback / "snapshot.json").read_text()))
     else:

@@ -227,6 +227,11 @@ erneut prüfen. Gehaltene Pakete und fehlende Unterstützung führen zu einem
 verständlichen Fehler. Ein installiertes `libpcsclite-dev` wird zusammen
 mit der exakt passenden Bibliothek aktualisiert.
 
+Verändert ein anderer Paketmanager-Lauf die PC/SC-Versionen nach der
+Vorprüfung, bricht die Aktivierung vor der Dienstunterbrechung ab. Eine
+außerhalb der Migration installierte neuere Version wird auch durch den
+Rollback nicht automatisch überschrieben; dann ist manuelle Prüfung nötig.
+
 Originalpakete, PC/SC-Konfigurationsdateien, Agent-Konfiguration und Zustand
 liegen geschützt unter `/var/lib/stempeluhr-pcsc-migration/<lauf>/`. Die
 Aktivierung läuft als eigener systemd-Dienst weiter, wenn SSH abbricht.

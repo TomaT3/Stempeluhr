@@ -76,6 +76,12 @@ class MaintenanceTests(unittest.TestCase):
             self.assertIsNone(maintenance.prepare())
         command.assert_not_called()
 
+    def test_debian_epoch_does_not_imply_the_upstream_fix_is_present(self):
+        with patch.object(maintenance, "installed", return_value=("1:2.3.3-1", "arm64")):
+            self.assertFalse(maintenance.suitable())
+        with patch.object(maintenance, "installed", return_value=("1:2.5.2-1", "arm64")):
+            self.assertTrue(maintenance.suitable())
+
     def test_unsupported_distribution_changes_no_packages(self):
         with patch.object(maintenance, "suitable", return_value=False), \
              patch.object(maintenance, "distribution", return_value="bookworm"), \
@@ -122,7 +128,7 @@ class MaintenanceTests(unittest.TestCase):
         folder = self.root / "activation"
         folder.mkdir()
         (folder / "new").mkdir()
-        (folder / "snapshot.json").write_text(json.dumps({"agentActive": True, "auto": [], "rollbackUnit": "test"}))
+        (folder / "snapshot.json").write_text(json.dumps({"agentActive": True, "auto": [], "rollbackUnit": "test", "originals": {}}))
         with patch.object(maintenance, "command"), \
              patch.object(maintenance, "verify", side_effect=ValueError("reader missing")), \
              patch.object(maintenance, "rollback") as rollback:
@@ -135,7 +141,7 @@ class MaintenanceTests(unittest.TestCase):
         folder = self.root / "activation"
         folder.mkdir()
         (folder / "new").mkdir()
-        (folder / "snapshot.json").write_text(json.dumps({"agentActive": True, "auto": [], "rollbackUnit": "test"}))
+        (folder / "snapshot.json").write_text(json.dumps({"agentActive": True, "auto": [], "rollbackUnit": "test", "originals": {}}))
         def stop_timer(*args, **kwargs):
             self.assertEqual(maintenance.read_result(folder)["status"], "ok")
             return Mock(returncode=0)
@@ -173,12 +179,32 @@ class MaintenanceTests(unittest.TestCase):
         folder = self.root / "rollback"
         folder.mkdir()
         (folder / "old").mkdir()
-        snapshot = {"auto": [], "originals": {"pcscd": [OLD, "arm64"]}, "conffiles": []}
+        snapshot = {"auto": [], "originals": {"pcscd": [OLD, "arm64"]}, "conffiles": [],
+                    "targetVersion": VERSION}
         with patch.object(maintenance, "command"), \
              patch.object(maintenance, "installed", return_value=(VERSION, "arm64")):
             with self.assertRaisesRegex(ValueError, "Originalversion"):
                 maintenance.rollback(folder, snapshot)
         self.assertIsNone(maintenance.read_result(folder))
+
+    def test_external_newer_version_is_never_downgraded_by_rollback(self):
+        snapshot = {"originals": {"pcscd": [OLD, "arm64"]}, "targetVersion": VERSION, "agentActive": False}
+        with patch.object(maintenance, "installed", return_value=("2.6.0-1", "arm64")), \
+             patch.object(maintenance, "command") as command:
+            with self.assertRaisesRegex(ValueError, "kein automatisches Downgrade"):
+                maintenance.rollback(self.root, snapshot)
+        command.assert_not_called()
+
+    def test_package_changes_between_prepare_and_activate_do_not_interrupt_services(self):
+        folder = self.root / "activation"
+        folder.mkdir()
+        (folder / "snapshot.json").write_text(json.dumps({"originals": {"pcscd": [OLD, "arm64"]}, "rollbackUnit": "test"}))
+        with patch.object(maintenance, "installed", return_value=("2.6.0-1", "arm64")), \
+             patch.object(maintenance, "command") as command, \
+             patch.object(maintenance.subprocess, "run", return_value=Mock(returncode=0)):
+            maintenance.activate(folder)
+        command.assert_not_called()
+        self.assertEqual(maintenance.read_result(folder)["status"], "unchanged")
 
     def test_health_alone_cannot_pass_verification(self):
         (self.root / "probe_reader.py").write_text("print('probe')")
