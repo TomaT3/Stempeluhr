@@ -28,23 +28,15 @@ RUN dotnet publish Stempeluhr.Api/Stempeluhr.Api.csproj \
 
 # Agent-Bundle für die Pi-Terminals. Der Server liefert es unter /pi/ aus,
 # die Pis holen es sich per update.sh selbst - Agent-Version = Server-Version.
-FROM --platform=linux/arm64 debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS pcsc-build
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential debhelper dh-exec dh-runit flex libpolkit-gobject-1-dev \
-    libsystemd-dev libudev-dev meson pkgconf systemd-dev curl ca-certificates python3 \
-    && rm -rf /var/lib/apt/lists/*
-COPY tools/pcsc/build-packages.sh /build-packages.sh
-RUN bash /build-packages.sh /out
-
-# Only the packages, for CI and review (tools/pcsc/README.md):
+# PC/SC packages are built once from tools/pcsc and pinned by digest; the tag
+# ends with tools/pcsc/inputs-hash.sh (tools/pcsc/README.md). Export them with:
 # docker build --target pcsc-packages --output type=local,dest=artifacts/pcsc .
-FROM scratch AS pcsc-packages
-COPY --from=pcsc-build /out/ /
+FROM --platform=linux/arm64 ghcr.io/tomat3/stempeluhr/pcsc-packages:unpublished AS pcsc-packages
 
 FROM alpine:3.22 AS pi-bundle
 ARG VERSION=0.0.0-local
 COPY tools/pi-nfc-agent/ /src/pi-nfc-agent/
-COPY --from=pcsc-build /out/ /src/pi-nfc-agent/pcsc/
+COPY --from=pcsc-packages / /src/pi-nfc-agent/pcsc/
 RUN sh /src/pi-nfc-agent/build-bundle.sh "${VERSION}" /out/pi
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS final

@@ -47,8 +47,8 @@ weitergereicht. Die Queue bleibt dabei erhalten.
   (siehe [docs/raspberry-pi-kiosk-nfc.md](../../docs/raspberry-pi-kiosk-nfc.md))
 - `build-bundle.sh` – baut im Docker-Image das Bundle für `/pi/`
 - `pcsc_maintenance.py`, `probe_reader.py`, `pcsc/` – PC/SC-Paketmigration
-  mit Originalsicherung und Rollback; Leserprüfung ohne Scan. Pakete entstehen
-  beim Docker-Build aus `tools/pcsc`; `update.sh` startet die Migration
+  mit Originalsicherung und Rollback; Leserprüfung ohne Scan. Die Pakete kommen
+  aus dem fixierten Paket-Image (`tools/pcsc`); `update.sh` startet die Migration
   automatisch, wenn der Fixstand fehlt.
 - `config.example.json` – Beispielkonfiguration
 - `test_scan_handling.py`, `test_local_scan_server.py` – Selbsttests ohne

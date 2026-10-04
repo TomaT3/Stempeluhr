@@ -13,6 +13,11 @@ on:
           - patch
           - minor
           - major
+      dry_run:
+        description: "Dry run: build the container only, no release, tag or push"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -29,6 +34,12 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
 
     steps:
+      - name: Require main for real releases
+        if: ${{ !inputs.dry_run && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "::error::Releases only from main; use dry_run on other branches."
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -146,6 +157,7 @@ jobs:
           cat "$file"
 
       - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
@@ -159,9 +171,10 @@ jobs:
           LATEST_TAG: ${{ steps.last.outputs.latest }}
           TAG: ${{ steps.version.outputs.tag }}
           BUMP: ${{ steps.bump.outputs.bump }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           {
-            echo "## Release created"
+            if [ "$DRY_RUN" = true ]; then echo "## Dry run (no release)"; else echo "## Release created"; fi
             echo ""
             echo "- Previous: ${LATEST_TAG:-none}"
             echo "- Released: $TAG"
@@ -176,7 +189,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release.outputs.tag }}
+          # Dry run: no tag exists, build the dispatched commit.
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.tag }}
 
       - name: Normalize image name
         id: image
@@ -202,14 +216,11 @@ jobs:
           image="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}"
           echo "tags=${image}:${version},${image}:${major_minor},${image}:latest" >> "$GITHUB_OUTPUT"
 
-      - name: Set up ARM emulation for Pi packages
-        uses: docker/setup-qemu-action@v3
-
       - name: Build and push container
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: ${{ !inputs.dry_run }}
           build-args: |
             VERSION=${{ needs.release.outputs.version }}
           tags: ${{ steps.tags.outputs.tags }}
@@ -221,7 +232,7 @@ jobs:
   container-retry:
     runs-on: ubuntu-latest
     needs: [release, container]
-    if: failure() && needs.release.result == 'success'
+    if: failure() && needs.release.result == 'success' && !inputs.dry_run
 
     steps:
       - name: Checkout
@@ -252,9 +263,6 @@ jobs:
           major_minor="${version%.*}"
           image="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}"
           echo "tags=${image}:${version},${image}:${major_minor},${image}:latest" >> "$GITHUB_OUTPUT"
-
-      - name: Set up ARM emulation for Pi packages
-        uses: docker/setup-qemu-action@v3
 
       - name: Build and push container (retry)
         uses: docker/build-push-action@v6

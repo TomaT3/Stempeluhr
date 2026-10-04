@@ -1,0 +1,117 @@
+name: PC/SC packages
+
+# pcsc-lite is compiled only when tools/pcsc/Dockerfile or build-packages.sh
+# change. The tested packages are published as an image tagged with their
+# input hash; the main Dockerfile pins it by digest and the release only
+# copies it (tools/pcsc/README.md).
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - tools/pcsc/**
+      - tools/pi-nfc-agent/pcsc_maintenance.py
+      - tools/testenv/test_pcsc_packages.sh
+      - .github/workflows/pcsc-packages.yml
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - tools/pcsc/**
+      - tools/pi-nfc-agent/pcsc_maintenance.py
+      - tools/testenv/test_pcsc_packages.sh
+      - .github/workflows/pcsc-packages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pcsc-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/tomat3/stempeluhr/pcsc-packages
+
+jobs:
+  packages:
+    name: PC/SC Trixie arm64 packages + rollback
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get packages (pinned, published or built)
+        id: packages
+        run: |
+          hash="$(bash tools/pcsc/inputs-hash.sh)"
+          ref="${IMAGE}:inputs-${hash}"
+          pinned="$(sed -nE 's#^FROM --platform=linux/arm64 ([^ ]+) AS pcsc-packages$#\1#p' Dockerfile)"
+          export_image() {
+            printf 'FROM --platform=linux/arm64 %s\n' "$1" \
+              | docker build --output type=local,dest=artifacts/pcsc -
+          }
+          if [[ "$pinned" =~ ^"${ref}"@sha256:[0-9a-f]{64}$ ]]; then
+            source=pinned
+            export_image "$pinned"
+          elif digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+            source=published
+            export_image "${ref}@${digest}"
+          else
+            source=built
+            docker build --platform linux/arm64 --output type=local,dest=artifacts/pcsc tools/pcsc
+          fi
+          echo "Inputs ${hash}; Dockerfile pin: ${pinned:-none}; packages: ${source}"
+          {
+            echo "ref=$ref"
+            echo "source=$source"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify install and rollback in disposable Trixie container
+        run: >-
+          docker run --rm
+          --mount type=bind,source=${{ github.workspace }},target=/work,readonly
+          --workdir /work debian:trixie-slim
+          bash tools/testenv/test_pcsc_packages.sh /work/artifacts/pcsc
+
+      # Publishes exactly the tested files; an existing tag is never replaced.
+      - name: Publish tested packages
+        if: >-
+          steps.packages.outputs.source == 'built'
+          && (github.event_name != 'pull_request'
+              || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          REF: ${{ steps.packages.outputs.ref }}
+        run: |
+          version="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' artifacts/pcsc/manifest.json)"
+          printf 'FROM scratch\nCOPY . /\n' > "$RUNNER_TEMP/Dockerfile.pcsc"
+          docker build --platform linux/arm64 -f "$RUNNER_TEMP/Dockerfile.pcsc" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${version}" \
+            --label "org.opencontainers.image.description=pcsc-lite ${version} for Trixie/arm64 Stempeluhr terminals" \
+            -t "$REF" artifacts/pcsc
+          docker push "$REF"
+
+      - name: Require Dockerfile pin for these inputs
+        if: steps.packages.outputs.source != 'pinned'
+        env:
+          REF: ${{ steps.packages.outputs.ref }}
+        run: |
+          if digest="$(docker buildx imagetools inspect "$REF" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+            line="FROM --platform=linux/arm64 ${REF}@${digest} AS pcsc-packages"
+            echo "### PC/SC pin outdated"$'\n\n'"Set in \`Dockerfile\`:"$'\n\n```\n'"$line"$'\n```' >> "$GITHUB_STEP_SUMMARY"
+            echo "::error file=Dockerfile::PC/SC build inputs changed. Pin the tested packages: $line"
+          else
+            echo "::error file=Dockerfile::PC/SC build inputs changed and ${REF} is not published. Run this workflow on the branch (workflow_dispatch) and pin the reported image."
+          fi
+          exit 1
