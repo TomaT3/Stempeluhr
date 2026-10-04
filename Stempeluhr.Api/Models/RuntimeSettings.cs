@@ -43,6 +43,23 @@ public sealed class RuntimeSettings
     public bool TelegramAlertsEnabled =>
         !string.IsNullOrWhiteSpace(TelegramBotToken) && !string.IsNullOrWhiteSpace(TelegramAlertChat);
 
+    /// <summary>Optional InfluxDB for terminal metrics over time, e.g. <c>http://192.168.1.10:8086</c>.</summary>
+    public string? InfluxUrl { get; init; }
+
+    /// <summary>InfluxDB 2.x organization; may stay empty for InfluxDB 3.</summary>
+    public string? InfluxOrg { get; init; }
+
+    /// <summary>InfluxDB bucket (InfluxDB 3: database).</summary>
+    public string? InfluxBucket { get; init; }
+
+    /// <summary>InfluxDB token with write access (secret, never returned to clients).</summary>
+    public string? InfluxToken { get; init; }
+
+    [JsonIgnore]
+    public bool InfluxEnabled =>
+        Uri.TryCreate(InfluxUrl, UriKind.Absolute, out var url) && url.Scheme is "http" or "https"
+        && !string.IsNullOrWhiteSpace(InfluxBucket) && !string.IsNullOrWhiteSpace(InfluxToken);
+
     /// <summary>
     /// Maximaler Abstand zwischen dem Ende des letzten gestoppten
     /// Timesheets und dem Zeitstempel eines replayten pauseEnd- bzw.

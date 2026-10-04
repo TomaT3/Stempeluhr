@@ -60,6 +60,10 @@ public sealed record AdminSettingsDto(
 {
     public IReadOnlyCollection<string> TerminalIds { get; init; } = [];
     public string? TelegramAlertChatId { get; init; }
+    public string? InfluxUrl { get; init; }
+    public string? InfluxOrg { get; init; }
+    public string? InfluxBucket { get; init; }
+    public bool HasInfluxToken { get; init; }
 
     public static AdminSettingsDto FromSettings(RuntimeSettings settings)
     {
@@ -76,6 +80,10 @@ public sealed record AdminSettingsDto(
         {
             TerminalIds = settings.TerminalTokens.Keys.ToArray(),
             TelegramAlertChatId = settings.TelegramAlertChatId,
+            InfluxUrl = settings.InfluxUrl,
+            InfluxOrg = settings.InfluxOrg,
+            InfluxBucket = settings.InfluxBucket,
+            HasInfluxToken = !string.IsNullOrWhiteSpace(settings.InfluxToken),
         };
     }
 }
@@ -157,7 +165,11 @@ public sealed record AdminSettingsUpdateDto(
     string? TelegramBotToken,
     string? TelegramChatId,
     IReadOnlyCollection<AdminEmployeeUpdateDto> Employees,
-    string? TelegramAlertChatId = null)
+    string? TelegramAlertChatId = null,
+    string? InfluxUrl = null,
+    string? InfluxOrg = null,
+    string? InfluxBucket = null,
+    string? InfluxToken = null)
 {
     public RuntimeSettings ToSettings(RuntimeSettings current)
     {
@@ -178,10 +190,18 @@ public sealed record AdminSettingsUpdateDto(
             TelegramAlertChatId = string.IsNullOrWhiteSpace(TelegramAlertChatId)
                 ? current.TelegramAlertChatId
                 : TelegramAlertChatId.Trim(),
+            // Same keep-current semantics: the admin UI has no Influx fields.
+            InfluxUrl = KeepOrTrim(InfluxUrl, current.InfluxUrl),
+            InfluxOrg = KeepOrTrim(InfluxOrg, current.InfluxOrg),
+            InfluxBucket = KeepOrTrim(InfluxBucket, current.InfluxBucket),
+            InfluxToken = KeepOrTrim(InfluxToken, current.InfluxToken),
             TerminalTokens = current.TerminalTokens,
             Employees = employees
         };
     }
+
+    private static string? KeepOrTrim(string? value, string? current) =>
+        string.IsNullOrWhiteSpace(value) ? current : value.Trim();
 }
 
 public sealed record AdminEmployeeUpdateDto(
