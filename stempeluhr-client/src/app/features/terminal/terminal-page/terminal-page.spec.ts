@@ -10,6 +10,8 @@ import { lastKnownStatus, rememberProjectedStatus } from '../../../core/services
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
 import { OfflineQueueService } from '../../../core/services/offline-queue';
+import { CORRECTION_IDLE_MS } from '../../clock/correction-flow/correction-flow';
+import { CORRECTION_NOW, CORRECTION_TIMESHEETS, correction } from '../../clock/correction-flow/correction-fixtures';
 import { TerminalPage } from './terminal-page';
 
 describe('TerminalPage', () => {
@@ -24,6 +26,10 @@ describe('TerminalPage', () => {
   let pendingQueue: ReturnType<typeof signal<unknown[]>>;
   let rejectedStamps: ReturnType<typeof signal<RejectedOfflineStamp[]>>;
   let recovered$: Subject<void>;
+  let correctionTimesheets: ReturnType<typeof vi.fn>;
+  let submitCorrection: ReturnType<typeof vi.fn>;
+  let myCorrections: ReturnType<typeof vi.fn>;
+  let withdrawCorrection: ReturnType<typeof vi.fn>;
 
   const status: ClockStatus = {
     isRunning: false,
@@ -66,6 +72,10 @@ describe('TerminalPage', () => {
     pendingQueue = signal<unknown[]>([]);
     rejectedStamps = signal<RejectedOfflineStamp[]>([]);
     recovered$ = new Subject<void>();
+    correctionTimesheets = vi.fn(() => of(CORRECTION_TIMESHEETS));
+    submitCorrection = vi.fn(() => of(correction()));
+    myCorrections = vi.fn(() => of([]));
+    withdrawCorrection = vi.fn(() => of(correction({ status: 'withdrawn' })));
 
     await TestBed.configureTestingModule({
       imports: [TerminalPage],
@@ -81,6 +91,10 @@ describe('TerminalPage', () => {
             ),
             identify: vi.fn(() => new Subject<NfcClockEvent>()),
             health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
+            correctionTimesheets,
+            submitCorrection,
+            myCorrections,
+            withdrawCorrection,
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
@@ -912,6 +926,565 @@ describe('TerminalPage', () => {
 
         expect(fixture.componentInstance.selectedEmployee()).toBeNull();
         expect(fixture.componentInstance.clockState.status()).toBeNull();
+      });
+    });
+  });
+
+  describe('Korrekturanträge', () => {
+    // Seit 13 h eingestempelt (Beginn 01:00Z, jetzt 14:00Z), Abschnitt = Timesheet 12 der Testdaten.
+    const working: ClockStatus = {
+      isRunning: true,
+      activeTimesheetId: 12,
+      startedAt: '2026-10-05T01:00:00Z',
+      durationSeconds: 46800,
+      state: 'working',
+      stateText: 'Eingestempelt',
+      activeIsDefaultTask: true,
+    };
+    const clockedOut: ClockStatus = { ...status, stateText: 'Ausgestempelt' };
+
+    beforeEach(() => {
+      vi.setSystemTime(CORRECTION_NOW);
+    });
+
+    function login(sessionStatus: ClockStatus = status, tasks: { id: string; label: string }[] = []): ComponentFixture<TerminalPage> {
+      const fixture = TestBed.createComponent(TerminalPage);
+      ['1', '2', '3', '4'].forEach(digit => fixture.componentInstance.pressDigit(digit));
+      pinLoginResult.next({ employee: { ...session.employee, tasks }, status: sessionStatus });
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    function loginWithCard(): ComponentFixture<TerminalPage> {
+      window.localStorage.setItem('stempeluhr.employee-card-cache.v1', JSON.stringify({ '04ABCD': session.employee }));
+      localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+      const fixture = TestBed.createComponent(TerminalPage);
+      vi.advanceTimersByTime(1_000);
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    const entryButton = (fixture: ComponentFixture<TerminalPage>) =>
+      fixture.nativeElement.querySelector('app-correction-entry .correction-entry') as HTMLButtonElement | null;
+
+    function openFlow(fixture: ComponentFixture<TerminalPage>): void {
+      entryButton(fixture)!.click();
+      fixture.detectChanges();
+    }
+
+    function tap(fixture: ComponentFixture<TerminalPage>, text: string): void {
+      const button = ([...fixture.nativeElement.querySelectorAll('app-correction-flow button')] as HTMLButtonElement[])
+        .find(candidate => candidate.textContent?.trim() === text);
+      expect(button, `Knopf "${text}"`).toBeDefined();
+      button!.click();
+      fixture.detectChanges();
+    }
+
+    function tapEntry(fixture: ComponentFixture<TerminalPage>, range: string): void {
+      const button = ([...fixture.nativeElement.querySelectorAll('app-correction-flow .flow-entry')] as HTMLButtonElement[])
+        .find(candidate => candidate.textContent?.includes(range));
+      expect(button, `Eintrag ${range}`).toBeDefined();
+      button!.click();
+      fixture.detectChanges();
+    }
+
+    const flowTitle = (fixture: ComponentFixture<TerminalPage>) =>
+      fixture.nativeElement.querySelector('app-correction-flow .flow-title')?.textContent?.trim();
+
+    describe('Einstieg', () => {
+      it('offers Korrektur in the session, but not on the login screen', () => {
+        const fixture = TestBed.createComponent(TerminalPage);
+        fixture.detectChanges();
+        expect(entryButton(fixture)).toBeNull();
+
+        ['1', '2', '3', '4'].forEach(digit => fixture.componentInstance.pressDigit(digit));
+        pinLoginResult.next(session);
+        fixture.detectChanges();
+
+        expect(entryButton(fixture)?.textContent?.trim()).toBe('Korrektur');
+        expect(entryButton(fixture)?.disabled).toBe(false);
+      });
+
+      it('is locked offline and says why', () => {
+        const fixture = login();
+        fixture.componentInstance.isOffline.set(true);
+        fixture.detectChanges();
+
+        expect(entryButton(fixture)?.textContent?.trim()).toBe('Korrektur nur online');
+        expect(entryButton(fixture)?.disabled).toBe(true);
+        entryButton(fixture)!.click();
+        fixture.componentInstance.openCorrection();
+        fixture.detectChanges();
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        expect(correctionTimesheets).not.toHaveBeenCalled();
+      });
+
+      it('is locked while stamps of this employee still wait for transfer', () => {
+        pendingQueue.set([{ kind: 'kiosk', event: { employeeId: 'max' } }]);
+        const fixture = TestBed.createComponent(TerminalPage);
+        ['1', '2', '3', '4'].forEach(digit => fixture.componentInstance.pressDigit(digit));
+        pinLoginResult.next(session);
+        fixture.detectChanges();
+
+        expect(entryButton(fixture)?.disabled).toBe(true);
+      });
+
+      it('reports a lost connection inside the open flow instead of queuing anything', () => {
+        const fixture = login();
+        openFlow(fixture);
+        fixture.componentInstance.isOffline.set(true);
+        correctionTimesheets.mockReturnValue(throwError(() => ({ status: 0 })));
+        tap(fixture, 'Pause nachtragen');
+
+        expect(fixture.nativeElement.querySelector('app-correction-flow .flow-error')?.textContent).toContain('Keine Verbindung');
+        expect(fixture.componentInstance.correctionOpen()).toBe(true);
+        expect(enqueueKiosk).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('Ablauf bis Absenden (PIN-Session)', () => {
+      it('addPause', () => {
+        const fixture = login();
+        openFlow(fixture);
+        tap(fixture, 'Pause nachtragen');
+        tapEntry(fixture, '07:00–11:00');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Absenden');
+
+        expect(correctionTimesheets).toHaveBeenCalledWith({ employeeId: 'max', pin: '1234', nfcCardId: null });
+        expect(submitCorrection).toHaveBeenCalledExactlyOnceWith({
+          employeeId: 'max', pin: '1234', nfcCardId: null,
+          kind: 'addPause', timesheetId: 21, begin: null, end: null,
+          pauseBegin: '2026-10-05T08:45', pauseEnd: '2026-10-05T09:15',
+          taskId: null, comment: null, source: 'term-1',
+        });
+        expect(fixture.nativeElement.querySelector('app-correction-flow .flow-sent')?.textContent)
+          .toBe('Antrag gesendet – wartet auf Freigabe');
+      });
+
+      it('setEnd', () => {
+        const fixture = login();
+        openFlow(fixture);
+        tap(fixture, 'Ausstempeln nachtragen');
+        tapEntry(fixture, '22:00 – So 04.10. 02:00');
+        (fixture.nativeElement.querySelector('app-time-stepper .hour-later') as HTMLButtonElement).click();
+        fixture.detectChanges();
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Absenden');
+
+        expect(submitCorrection).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          kind: 'setEnd', timesheetId: 12, end: '2026-10-04T01:00', begin: null, comment: null, source: 'term-1',
+        }));
+      });
+
+      it('changeTimes', () => {
+        const fixture = login();
+        openFlow(fixture);
+        tap(fixture, 'Zeiten ändern');
+        tapEntry(fixture, '07:00–11:00');
+        (fixture.nativeElement.querySelector('app-time-stepper .minute-later-5') as HTMLButtonElement).click();
+        fixture.detectChanges();
+        tap(fixture, 'Weiter');
+        (fixture.nativeElement.querySelector('app-time-stepper .minute-earlier-1') as HTMLButtonElement).click();
+        fixture.detectChanges();
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Absenden');
+
+        expect(submitCorrection).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          kind: 'changeTimes', timesheetId: 21, begin: '2026-10-05T07:05', end: '2026-10-05T10:59',
+        }));
+      });
+
+      it('addShift with task and pause', () => {
+        const fixture = login(status, [{ id: 'kx', label: 'Kunde X' }]);
+        openFlow(fixture);
+        tap(fixture, 'Schicht nachtragen');
+        tap(fixture, 'Kunde X');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Mit Pause');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Absenden');
+
+        expect(submitCorrection).toHaveBeenCalledExactlyOnceWith({
+          employeeId: 'max', pin: '1234', nfcCardId: null,
+          kind: 'addShift', timesheetId: null,
+          begin: '2026-10-05T08:00', end: '2026-10-05T16:00',
+          pauseBegin: '2026-10-05T11:45', pauseEnd: '2026-10-05T12:15',
+          taskId: 'kx', comment: null, source: 'term-1',
+        });
+      });
+
+      it('has no comment field - the terminal has no keyboard', () => {
+        const fixture = login();
+        openFlow(fixture);
+        tap(fixture, 'Ausstempeln nachtragen');
+        tapEntry(fixture, '22:00 – So 04.10. 02:00');
+        tap(fixture, 'Weiter');
+
+        expect(flowTitle(fixture)).toBe('Zusammenfassung');
+        expect(fixture.nativeElement.querySelector('app-correction-flow textarea')).toBeNull();
+      });
+
+      it('shows the server message on 400 and the employee stays in the summary', () => {
+        submitCorrection.mockReturnValue(throwError(() => ({ status: 400, error: { message: 'Eine Pause darf höchstens 4 Stunden dauern.' } })));
+        const fixture = login();
+        openFlow(fixture);
+        tap(fixture, 'Pause nachtragen');
+        tapEntry(fixture, '07:00–11:00');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Absenden');
+
+        expect(fixture.nativeElement.querySelector('app-correction-flow .flow-error')?.textContent).toContain('höchstens 4 Stunden');
+        expect(flowTitle(fixture)).toBe('Zusammenfassung');
+      });
+
+      it('Fertig returns to the session, the employee stays logged in', () => {
+        const fixture = login();
+        openFlow(fixture);
+        tap(fixture, 'Ausstempeln nachtragen');
+        tapEntry(fixture, '22:00 – So 04.10. 02:00');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Absenden');
+        tap(fixture, 'Fertig');
+
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
+        expect(fixture.nativeElement.querySelector('.action-panel')).not.toBeNull();
+      });
+    });
+
+    describe('Karten-Session ohne PIN', () => {
+      it('sends employeeId plus cardId and an empty PIN with every request', () => {
+        const fixture = loginWithCard();
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
+
+        openFlow(fixture);
+        tap(fixture, 'Ausstempeln nachtragen');
+        tapEntry(fixture, '22:00 – So 04.10. 02:00');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Absenden');
+
+        const card = { employeeId: 'max', pin: '', nfcCardId: '04ABCD' };
+        expect(correctionTimesheets).toHaveBeenCalledWith(card);
+        expect(submitCorrection).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ...card, kind: 'setEnd', timesheetId: 12 }));
+      });
+
+      it('reads and withdraws "Meine Anträge" with the card', () => {
+        myCorrections.mockReturnValue(of([correction({ id: 'p1' })]));
+        withdrawCorrection.mockReturnValue(of(correction({ id: 'p1', status: 'withdrawn' })));
+        const fixture = loginWithCard();
+        openFlow(fixture);
+        tap(fixture, 'Meine Anträge');
+        tap(fixture, 'Zurückziehen');
+
+        const card = { employeeId: 'max', pin: '', nfcCardId: '04ABCD' };
+        expect(myCorrections).toHaveBeenCalledWith(card);
+        expect(withdrawCorrection).toHaveBeenCalledExactlyOnceWith(card, 'p1');
+      });
+    });
+
+    describe('Meine Anträge', () => {
+      it('lists the requests with status, before and after, and withdraws an open one', () => {
+        myCorrections.mockReturnValue(of([
+          correction({ id: 'p1' }),
+          correction({ id: 'r1', status: 'rejected', decisionNote: 'Bitte mit dem Chef sprechen' }),
+        ]));
+        withdrawCorrection.mockReturnValue(of(correction({ id: 'p1', status: 'withdrawn' })));
+        const fixture = login();
+        openFlow(fixture);
+        tap(fixture, 'Meine Anträge');
+
+        const text = fixture.nativeElement.querySelector('app-correction-flow')?.textContent ?? '';
+        expect(text).toContain('Wartet auf Freigabe');
+        expect(text).toContain('Abgelehnt');
+        expect(text).toContain('Grund: Bitte mit dem Chef sprechen');
+        expect(text).toContain('Arbeit Mo 05.10. 07:00–11:00');
+        expect(text).toContain('Arbeit Mo 05.10. 07:00–10:00');
+
+        tap(fixture, 'Zurückziehen');
+        expect(withdrawCorrection).toHaveBeenCalledExactlyOnceWith({ employeeId: 'max', pin: '1234', nfcCardId: null }, 'p1');
+        expect(fixture.nativeElement.querySelector('app-correction-flow')?.textContent).toContain('Zurückgezogen');
+        expect(([...fixture.nativeElement.querySelectorAll('app-correction-flow button')] as HTMLButtonElement[])
+          .some(button => button.textContent?.trim() === 'Zurückziehen')).toBe(false);
+      });
+    });
+
+    describe('Sitzung und verspätete Antworten', () => {
+      it('discards a late answer after the identity changed - nothing of Max under Anna', () => {
+        const lateList = new Subject<typeof CORRECTION_TIMESHEETS>();
+        correctionTimesheets.mockReturnValue(lateList);
+        const fixture = login();
+        openFlow(fixture);
+        tap(fixture, 'Pause nachtragen');
+
+        // X: Max is gone, Anna logs in and opens her own flow.
+        fixture.nativeElement.querySelector('.back-button').click();
+        fixture.detectChanges();
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        pinLogin.mockImplementation(() => of({ employee: { ...session.employee, id: 'anna', displayName: 'Anna Beispiel' }, status }));
+        ['4', '3', '2', '1'].forEach(digit => fixture.componentInstance.pressDigit(digit));
+        fixture.detectChanges();
+        correctionTimesheets.mockReturnValue(of({ timeZone: 'Europe/Berlin', shifts: [] }));
+        openFlow(fixture);
+        tap(fixture, 'Pause nachtragen');
+
+        // Max's answer finally arrives.
+        lateList.next(CORRECTION_TIMESHEETS);
+        fixture.detectChanges();
+
+        expect(correctionTimesheets).toHaveBeenLastCalledWith({ employeeId: 'anna', pin: '4321', nfcCardId: null });
+        expect(fixture.nativeElement.querySelector('app-correction-flow .flow-entry')).toBeNull();
+        expect(fixture.nativeElement.querySelector('app-correction-flow .flow-note')?.textContent).toContain('Keine passenden Einträge');
+        expect(fixture.nativeElement.textContent).not.toContain('Nachtdienst');
+        expect(lateList.observed).toBe(false);
+      });
+
+      it('X ends the flow and logs out', () => {
+        const fixture = login();
+        openFlow(fixture);
+        expect(fixture.componentInstance.correctionOpen()).toBe(true);
+
+        fixture.nativeElement.querySelector('.back-button').click();
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        expect(fixture.nativeElement.querySelector('app-correction-flow')).toBeNull();
+        expect(fixture.nativeElement.querySelector('.login-panel')).not.toBeNull();
+      });
+
+      it('a new card scan during the flow does not switch the employee, the flow stays', () => {
+        const fixture = login();
+        openFlow(fixture);
+        localScanValue = { cardId: '04ffff', scannedAt: new Date().toISOString(), consumed: false };
+        vi.advanceTimersByTime(1_000);
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
+        expect(fixture.componentInstance.correctionOpen()).toBe(true);
+      });
+
+      it('goes back to the idle screen after 2 minutes without a tap in the flow', () => {
+        const fixture = login();
+        openFlow(fixture);
+
+        vi.advanceTimersByTime(CORRECTION_IDLE_MS - 1_000);
+        fixture.detectChanges();
+        expect(fixture.componentInstance.selectedEmployee()).not.toBeNull();
+
+        tap(fixture, 'Pause nachtragen');
+        vi.advanceTimersByTime(CORRECTION_IDLE_MS - 1_000);
+        fixture.detectChanges();
+        // The tap started the 2 minutes anew.
+        expect(fixture.componentInstance.selectedEmployee()).not.toBeNull();
+
+        vi.advanceTimersByTime(1_000);
+        fixture.detectChanges();
+        expect(fixture.componentInstance.selectedEmployee()).toBeNull();
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        expect(fixture.nativeElement.querySelector('.login-panel')).not.toBeNull();
+      });
+
+      it('a running reset after a stamp does not close the flow opened right afterwards', () => {
+        clockImpl.mockImplementation(() => of({ ...working, stateText: 'Eingestempelt' }));
+        const fixture = login();
+        fixture.componentInstance.start();
+        fixture.detectChanges();
+        // Within the 2.2 s of the reset the employee taps Korrektur.
+        openFlow(fixture);
+
+        vi.advanceTimersByTime(5_000);
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.correctionOpen()).toBe(true);
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
+      });
+    });
+
+    describe('Vergessen auszustempeln?', () => {
+      const hint = (fixture: ComponentFixture<TerminalPage>) =>
+        fixture.nativeElement.querySelector('.status-line .forgot-hint') as HTMLButtonElement | null;
+
+      it('shows the hint from 12 hours on', () => {
+        const fixture = login({ ...working, startedAt: '2026-10-05T02:00:00Z' });
+
+        expect(hint(fixture)?.textContent?.trim()).toBe('Vergessen auszustempeln?');
+      });
+
+      it('shows no hint for a shorter section', () => {
+        const fixture = login({ ...working, startedAt: '2026-10-05T02:00:01Z' });
+
+        expect(hint(fixture)).toBeNull();
+      });
+
+      it('has no hint when clocked out or paused', () => {
+        const fixture = login({ ...status });
+        expect(hint(fixture)).toBeNull();
+      });
+
+      it('clocks out the normal way and then opens "Ausstempeln nachtragen" for exactly that timesheet', () => {
+        clockImpl.mockImplementation(() => of(clockedOut));
+        const fixture = login(working);
+
+        hint(fixture)!.click();
+        fixture.detectChanges();
+
+        expect(clockImpl).toHaveBeenCalledExactlyOnceWith('max', '1234', 'stop', null, null, expect.any(String));
+        expect(fixture.componentInstance.correctionOpen()).toBe(true);
+        expect(flowTitle(fixture)).toBe('Ende');
+        expect(fixture.nativeElement.querySelector('app-correction-flow .flow-context')?.textContent).toContain('Nachtdienst');
+        // No reset to the idle screen: the employee is still in the flow.
+        vi.advanceTimersByTime(10_000);
+        fixture.detectChanges();
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
+
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Absenden');
+        expect(submitCorrection).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          kind: 'setEnd', timesheetId: 12, end: '2026-10-04T00:00', pin: '1234',
+        }));
+      });
+
+      it('says "bitte Ende eintragen" in the session and drops that hint when the flow is closed', () => {
+        clockImpl.mockImplementation(() => of(clockedOut));
+        const fixture = login(working);
+        hint(fixture)!.click();
+        fixture.detectChanges();
+        expect(fixture.componentInstance.message()).toBe('Ausgestempelt – bitte das tatsächliche Ende eintragen.');
+
+        tap(fixture, 'Zurück');
+        tap(fixture, 'Zurück');
+
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        expect(fixture.componentInstance.message()).toBe('');
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
+      });
+
+      it('queues the stop offline and opens no correction (needs the server)', () => {
+        const fixture = login(working);
+        fixture.componentInstance.isOffline.set(true);
+        fixture.detectChanges();
+
+        hint(fixture)!.click();
+        fixture.detectChanges();
+
+        expect(clockImpl).not.toHaveBeenCalled();
+        expect(enqueueKiosk).toHaveBeenCalledWith(expect.objectContaining({ action: 'stop' }));
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+      });
+
+      it('queues the stop when the live stop fails and opens no correction', () => {
+        clockImpl.mockImplementation(() => throwError(() => ({ status: 0 })));
+        const fixture = login(working);
+
+        hint(fixture)!.click();
+        fixture.detectChanges();
+
+        expect(enqueueKiosk).toHaveBeenCalledWith(expect.objectContaining({ action: 'stop' }));
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+      });
+
+      it('opens no correction when the stop was refused for good', () => {
+        clockImpl.mockImplementation(() => throwError(() => ({ status: 400 })));
+        const fixture = login(working);
+
+        hint(fixture)!.click();
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        expect(fixture.componentInstance.message()).toBe('Kimai konnte nicht speichern');
+      });
+
+      it('drops the result of the stop when the session ended meanwhile', () => {
+        const stop = new Subject<ClockStatus>();
+        clockImpl.mockImplementation(() => stop);
+        const fixture = login(working);
+        hint(fixture)!.click();
+
+        fixture.componentInstance.back();
+        stop.next(clockedOut);
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        expect(fixture.componentInstance.selectedEmployee()).toBeNull();
+      });
+    });
+
+    describe('Layout 800x480', () => {
+      it('replaces the stamp buttons and the hours card in their column and keeps name, X and status', () => {
+        const fixture = login(working);
+        expect(fixture.nativeElement.querySelector('.action-panel')).not.toBeNull();
+        expect(fixture.nativeElement.querySelector('.hours-overview')).not.toBeNull();
+        // Korrektur sits in the employee column, never among the big stamp buttons.
+        expect(fixture.nativeElement.querySelector('.action-panel app-correction-entry')).toBeNull();
+        expect(fixture.nativeElement.querySelector('.session-panel app-correction-entry')).not.toBeNull();
+
+        openFlow(fixture);
+
+        const terminal = fixture.nativeElement.querySelector('.terminal') as HTMLElement;
+        const flow = fixture.nativeElement.querySelector('app-correction-flow') as HTMLElement;
+        expect(flow.parentElement).toBe(terminal);
+        expect(flow.classList.contains('layout-terminal')).toBe(true);
+        expect(fixture.nativeElement.querySelector('.action-panel')).toBeNull();
+        expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
+        expect(fixture.nativeElement.querySelector('.session-panel .back-button')).not.toBeNull();
+        expect(fixture.nativeElement.querySelector('.session-panel h1')?.textContent).toContain('Max Mustermann');
+        expect(fixture.nativeElement.querySelector('.session-panel .status-line')).not.toBeNull();
+        // The entry button itself gives way to the flow.
+        expect(entryButton(fixture)).toBeNull();
+      });
+
+      it('scrolls only inside the flow: fixed head and footer around ONE scroll body', () => {
+        const fixture = login(working);
+        openFlow(fixture);
+        tap(fixture, 'Pause nachtragen');
+
+        const flow = fixture.nativeElement.querySelector('app-correction-flow') as HTMLElement;
+        expect(flow.querySelectorAll('.flow-body').length).toBe(1);
+        expect(flow.querySelector('.flow-body .flow-list')).not.toBeNull();
+        expect(flow.querySelector('.flow-head')).not.toBeNull();
+        expect(flow.querySelector('.flow-footer')).not.toBeNull();
+        expect(flow.querySelector('.flow-body .flow-footer')).toBeNull();
+        expect(flow.querySelector('.flow-body .flow-head')).toBeNull();
+      });
+
+      it('is not covered by the offline banner: the banner stays above the flow in the same grid', () => {
+        const fixture = login(working);
+        openFlow(fixture);
+        fixture.componentInstance.isOffline.set(true);
+        fixture.detectChanges();
+
+        const terminal = fixture.nativeElement.querySelector('.terminal') as HTMLElement;
+        const banner = terminal.querySelector('.offline-banner') as HTMLElement;
+        const flow = terminal.querySelector('app-correction-flow') as HTMLElement;
+        expect(banner.parentElement).toBe(terminal);
+        expect(flow.parentElement).toBe(terminal);
+        // In the flow of the document, not fixed over it: the banner is the first grid item.
+        expect(terminal.firstElementChild).toBe(banner);
+        expect(banner.compareDocumentPosition(flow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      });
+
+      it('shows no notice about refused stamps during the session (it would cover the flow)', () => {
+        rejectedStamps.set([{
+          eventId: 'e1', action: 'stop', performedAt: '2026-10-05T10:00:00Z', employeeName: 'Max', message: 'abgelehnt',
+        } as unknown as RejectedOfflineStamp]);
+        const fixture = login(working);
+        openFlow(fixture);
+
+        expect(fixture.nativeElement.querySelector('.rejected-notice')).toBeNull();
+      });
+
+      it('keeps the focus visible: after every step the heading of the flow holds it', () => {
+        const fixture = login();
+        openFlow(fixture);
+        expect(document.activeElement?.classList.contains('flow-title')).toBe(true);
+
+        tap(fixture, 'Pause nachtragen');
+        expect(document.activeElement?.classList.contains('flow-title')).toBe(true);
+        expect(document.activeElement?.textContent?.trim()).toBe('Eintrag wählen');
       });
     });
   });

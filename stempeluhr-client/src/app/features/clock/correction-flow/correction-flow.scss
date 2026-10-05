@@ -1,0 +1,272 @@
+/* Der Ablauf ersetzt am Terminal die Stempelknöpfe in ihrer Spalte (wie die
+   Tätigkeitsauswahl) und auf /clock die Stempelknöpfe unter dem Status.
+   Kopf und Fußzeile stehen fest, nur der Körper scrollt - nie die Seite
+   (800x480 scrollt nicht). */
+:host {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-auto-rows: auto;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-translucent);
+  box-shadow: var(--shadow-panel);
+  color: var(--color-text);
+  text-align: left;
+}
+
+/* contain: size - eine lange Liste darf die Zeile nicht strecken, sonst
+   rutschen Zurück/Weiter unter den Rand. Wie .action-panel.picker. */
+:host(.layout-terminal) {
+  contain: size;
+}
+
+:host(.layout-clock) {
+  width: min(560px, 100%);
+  padding: 16px;
+  gap: 12px;
+}
+
+@media (max-width: 700px) {
+  :host(.layout-terminal) {
+    contain: none;
+  }
+}
+
+h2,
+h3,
+p,
+dl,
+dd {
+  margin: 0;
+}
+
+.flow-title {
+  font-size: clamp(1.05rem, 2.4vw, 1.35rem);
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.flow-title:focus {
+  outline: none;
+}
+
+.flow-subtitle,
+.flow-context {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+/* Der Rand gibt dem Fokusrahmen (3 px + 2 px Abstand) Platz: ein
+   scrollender Container schneidet Umrisse sonst am Rand ab. */
+.flow-body {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  margin: -5px;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.flow-list,
+.flow-shift {
+  display: grid;
+  gap: 8px;
+}
+
+.flow-shift h3 {
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.flow-choice,
+.flow-button {
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: clamp(1rem, 2.2vw, 1.2rem);
+  font-weight: 900;
+  line-height: 1.1;
+  text-align: left;
+  cursor: pointer;
+}
+
+.flow-choice:disabled,
+.flow-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.flow-mine {
+  background: var(--color-surface-subtle);
+  color: var(--color-muted);
+}
+
+.flow-entry {
+  display: grid;
+  gap: 2px;
+}
+
+.flow-entry span {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.flow-footer {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.flow-button {
+  min-height: 52px;
+  background: var(--color-surface-subtle);
+  text-align: center;
+}
+
+.flow-button.primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+.flow-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.flow-summary dt {
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.flow-summary dd {
+  display: grid;
+  gap: 2px;
+}
+
+.flow-line {
+  font-size: clamp(0.9rem, 2vw, 1.05rem);
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.flow-note {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.flow-sent {
+  padding: 12px 4px;
+  font-size: clamp(1.1rem, 2.6vw, 1.4rem);
+  font-weight: 900;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.flow-error {
+  padding: 6px 8px;
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius);
+  background: var(--color-danger-surface);
+  color: var(--color-danger-text);
+  font-size: 0.9rem;
+  font-weight: 850;
+  line-height: 1.15;
+}
+
+.flow-comment {
+  display: grid;
+  gap: 4px;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.flow-comment textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  resize: none;
+}
+
+.flow-comment textarea:focus-visible {
+  outline: 3px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.flow-comment small {
+  justify-self: end;
+}
+
+.flow-request {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.flow-request header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+
+.flow-status {
+  font-size: 0.85rem;
+  font-weight: 900;
+}
+
+.status-pending .flow-status {
+  color: var(--color-primary-strong);
+}
+
+.status-applied .flow-status,
+.status-resolvedManually .flow-status {
+  color: var(--color-success);
+}
+
+.status-rejected .flow-status,
+.status-failed .flow-status,
+.flow-reason {
+  color: var(--color-danger-text);
+}
+
+.status-withdrawn .flow-status {
+  color: var(--color-muted);
+}
+
+.flow-reason {
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.flow-request .flow-button {
+  min-height: 44px;
+  font-size: 1rem;
+}

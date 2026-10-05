@@ -6,10 +6,12 @@ import { HoursOverviewCard } from '../../../shared/components/hours-overview-car
 import { DurationPipe } from '../../../shared/pipes/duration-pipe';
 import { ThemeService } from '../../../core/services/theme';
 import { ClockWorkflow } from '../../clock/clock-workflow';
+import { CorrectionEntry } from '../../clock/correction-flow/correction-entry';
+import { CorrectionFlow } from '../../clock/correction-flow/correction-flow';
 
 @Component({
   selector: 'app-terminal-page',
-  imports: [DatePipe, DurationPipe, HoursOverviewCard, VersionBadge],
+  imports: [CorrectionEntry, CorrectionFlow, DatePipe, DurationPipe, HoursOverviewCard, VersionBadge],
   templateUrl: './terminal-page.html',
   styleUrl: './terminal-page.scss',
 })

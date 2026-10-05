@@ -1,0 +1,167 @@
+<header class="flow-head">
+  <h2 class="flow-title" #heading tabindex="-1">{{ title() }}</h2>
+  @if (subtitle()) {
+    <p class="flow-subtitle">{{ subtitle() }}</p>
+  }
+</header>
+
+<div class="flow-body">
+  @switch (step()) {
+    @case ('kind') {
+      <!-- Art wählen. Die Liste scrollt intern, wenn der Platz (800x480 mit
+           Offline-Banner) nicht reicht - nie die Seite. -->
+      <div class="flow-list" role="group" aria-label="Art der Korrektur">
+        @for (option of kinds; track option) {
+          <button class="flow-choice" type="button" [disabled]="isBusy()" (click)="chooseKind(option)">
+            {{ kindLabels[option] }}
+          </button>
+        }
+        <button class="flow-choice flow-mine" type="button" [disabled]="isBusy()" (click)="openMine()">Meine Anträge</button>
+      </div>
+      @if (isBusy()) {
+        <p class="flow-note" role="status">Lädt …</p>
+      }
+    }
+    @case ('entry') {
+      <div class="flow-list" role="group" aria-label="Eintrag wählen">
+        @for (shift of selectableShifts(); track shift.begin) {
+          <section class="flow-shift">
+            <h3>Schicht {{ formatRange(shift.begin, shift.end) }}</h3>
+            @for (entry of shift.entries; track entry.id) {
+              <button class="flow-choice flow-entry" type="button" (click)="chooseEntry(entry)">
+                <strong>{{ entry.label }}</strong>
+                <span>{{ formatRange(entry.begin, entry.end) }}</span>
+              </button>
+            }
+          </section>
+        } @empty {
+          <p class="flow-note">Keine passenden Einträge in den letzten 31 Tagen.</p>
+        }
+      </div>
+    }
+    @case ('task') {
+      <div class="flow-list" role="group" aria-label="Tätigkeit wählen">
+        @for (option of taskOptions(); track option.id) {
+          <button class="flow-choice" type="button" (click)="chooseTask(option.id)">{{ option.label }}</button>
+        }
+      </div>
+    }
+    @case ('time') {
+      @if (entryLine()) {
+        <p class="flow-context">{{ entryLine() }}</p>
+      }
+      @if (field(); as current) {
+        <app-time-stepper
+          [label]="fieldLabel()"
+          [value]="valueOf(current)"
+          [min]="boundsOf(current).min"
+          [max]="boundsOf(current).max"
+          (valueChange)="setField(current, $event)" />
+      }
+      @if (unchanged() && isLastField()) {
+        <p class="flow-note">Keine Änderung eingestellt.</p>
+      }
+    }
+    @case ('pauseAsk') {
+      <div class="flow-list" role="group" aria-label="Pause eintragen?">
+        <button class="flow-choice" type="button" (click)="choosePause(false)">Ohne Pause</button>
+        <button class="flow-choice" type="button" (click)="choosePause(true)">Mit Pause</button>
+      </div>
+    }
+    @case ('summary') {
+      <dl class="flow-summary">
+        <dt>Vorher</dt>
+        <dd>
+          @for (line of before(); track $index) {
+            <span class="flow-line">{{ line.label }} {{ line.range }}</span>
+          } @empty {
+            <span class="flow-line">kein Eintrag</span>
+          }
+        </dd>
+        <dt>Nachher</dt>
+        <dd>
+          @for (line of after(); track $index) {
+            <span class="flow-line">{{ line.label }} {{ line.range }}</span>
+          }
+        </dd>
+      </dl>
+      @if (layout() === 'clock') {
+        <label class="flow-comment">
+          Kommentar (optional)
+          <textarea rows="2" [attr.maxlength]="maxCommentLength" [value]="comment()" (input)="setComment($event)"></textarea>
+          <small>{{ comment().length }}/{{ maxCommentLength }}</small>
+        </label>
+      }
+    }
+    @case ('sent') {
+      <p class="flow-sent" role="status">Antrag gesendet – wartet auf Freigabe</p>
+    }
+    @case ('mine') {
+      <div class="flow-list" role="group" aria-label="Meine Anträge">
+        @for (request of mine(); track request.id) {
+          <article class="flow-request" [class]="'flow-request status-' + request.status">
+            <header>
+              <strong>{{ kindLabels[request.kind] }}</strong>
+              <span class="flow-status">{{ statusLabels[request.status] }}</span>
+            </header>
+            <dl class="flow-summary">
+              <dt>Vorher</dt>
+              <dd>
+                @for (line of lines(request, 'before'); track $index) {
+                  <span class="flow-line">{{ line.label }} {{ line.range }}</span>
+                } @empty {
+                  <span class="flow-line">kein Eintrag</span>
+                }
+              </dd>
+              <dt>Nachher</dt>
+              <dd>
+                @for (line of lines(request, 'after'); track $index) {
+                  <span class="flow-line">{{ line.label }} {{ line.range }}</span>
+                }
+              </dd>
+            </dl>
+            @if (request.status === 'rejected' && request.decisionNote) {
+              <p class="flow-reason">Grund: {{ request.decisionNote }}</p>
+            }
+            @if (request.status === 'failed' && request.error) {
+              <p class="flow-reason">{{ request.error }}</p>
+            }
+            @if (request.status === 'pending') {
+              <button class="flow-button" type="button" [disabled]="isBusy()" (click)="withdraw(request)">Zurückziehen</button>
+            }
+          </article>
+        } @empty {
+          <p class="flow-note">Keine Anträge in den letzten 31 Tagen.</p>
+        }
+      </div>
+    }
+  }
+</div>
+
+@if (mineNotice()) {
+  <p class="flow-note" role="status">{{ mineNotice() }}</p>
+}
+@if (error()) {
+  <p class="flow-error" role="alert">{{ error() }}</p>
+}
+
+<div class="flow-footer">
+  @switch (step()) {
+    @case ('sent') {
+      <button class="flow-button primary" type="button" (click)="done()">Fertig</button>
+    }
+    @case ('time') {
+      <button class="flow-button" type="button" (click)="back()">Zurück</button>
+      <button class="flow-button primary" type="button" [disabled]="isBusy() || (unchanged() && isLastField())" (click)="next()">Weiter</button>
+    }
+    @case ('summary') {
+      <button class="flow-button" type="button" [disabled]="isBusy()" (click)="back()">Zurück</button>
+      <button class="flow-button primary" type="button" [disabled]="isBusy() || unchanged()" (click)="submit()">
+        {{ isBusy() ? 'Sendet …' : 'Absenden' }}
+      </button>
+    }
+    @default {
+      <button class="flow-button" type="button" (click)="back()">Zurück</button>
+    }
+  }
+</div>

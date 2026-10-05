@@ -74,6 +74,16 @@
           } @else {
             <span>Nicht eingestempelt</span>
           }
+          @if (forgotToStop()) {
+            <!-- Seit über 12 h eingestempelt: stempelt normal aus und öffnet
+                 danach "Ausstempeln nachtragen" für genau diesen Abschnitt. -->
+            <app-correction-entry
+              layout="terminal"
+              variant="hint"
+              label="Vergessen auszustempeln?"
+              [disabled]="actionsBlocked()"
+              (pressed)="stopAndCorrect()" />
+          }
         </div>
       } @else {
         <!-- Ohne Server (und ohne je gesehenen Status) ist der echte Zustand
@@ -87,10 +97,35 @@
         </div>
       }
 
+      @if (isUnlocked() && !correctionOpen()) {
+        <!-- Korrektur beantragen: nur online (keine Queue). Bewusst in der
+             Mitarbeiter-Spalte, damit die Stempelknöpfe ihre Größe behalten. -->
+        <app-correction-entry
+          layout="terminal"
+          [label]="correctionLabel()"
+          [disabled]="correctionBlocked()"
+          (pressed)="openCorrection()" />
+      }
+
       <p class="message" aria-live="polite">{{ message() }}</p>
     </section>
 
-    @if (isUnlocked()) {
+    @if (isUnlocked() && correctionOpen()) {
+      <!-- Der Ablauf ersetzt die Stempelknöpfe und die Stundenkarte: nur so
+           bleibt bei 800x480 Platz, ohne dass die Seite scrollt. Die X-Taste
+           und der Name bleiben stehen. -->
+      @if (correctionAuth(); as auth) {
+        <app-correction-flow
+          layout="terminal"
+          [auth]="auth"
+          [source]="correctionSource"
+          [tasks]="employeeTasks()"
+          [defaultTaskLabel]="defaultTaskLabel()"
+          [start]="correctionStart()"
+          (closed)="onCorrectionClosed()"
+          (timedOut)="onCorrectionTimedOut()" />
+      }
+    } @else if (isUnlocked()) {
       <section
         class="action-panel"
         [class.three]="clockState.isWorking() && employeeTasks().length > 0 && !taskPickerOpen()"
