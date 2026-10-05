@@ -54,13 +54,23 @@ public sealed class TelegramCorrectionTests : IDisposable
         Employees = [Max()],
     };
 
-    private async Task<TimeCorrectionDto> SubmitPauseAsync()
+    /// <summary>Submits without waiting for the (background) Telegram message.</summary>
+    private async Task<TimeCorrectionDto> SubmitPauseNoWaitAsync()
     {
         var sheet = _kimai.Add(At(6), At(11));
         var result = await _service.SubmitAsync(new SubmitCorrectionRequest(
-            "max", "1234", null, "addPause", sheet.Id, null, null, Text(At(8)), Text(At(8, 30)), null, "Pause vergessen", "terminal-1"));
+            "max", "1234", null, "addPause", sheet.Id, null, null, Text(At(8)), Text(At(8, 30)), null, "Pause vergessen", "terminal-1"))
+            .WaitAsync(TimeSpan.FromSeconds(10));
         Assert.True(result.Outcome == CorrectionOutcome.Ok, result.Message);
         return result.Value!;
+    }
+
+    private async Task<TimeCorrectionDto> SubmitPauseAsync()
+    {
+        var dto = await SubmitPauseNoWaitAsync();
+        // The message is sent in the background: wait so the tests stay deterministic.
+        await _service.WhenNotificationsCompleteAsync();
+        return dto;
     }
 
     private async Task<TimeSpan> TapAsync(params object[] updates)
@@ -100,6 +110,7 @@ public sealed class TelegramCorrectionTests : IDisposable
         var sheet = _kimai.Add(Day(4, 22), At(6, 10));
         var result = await _service.SubmitAsync(new SubmitCorrectionRequest(
             "max", "1234", null, "setEnd", sheet.Id, null, Text(At(5, 40)), null, null, null, null, null));
+        await _service.WhenNotificationsCompleteAsync();
         Assert.True(result.Outcome == CorrectionOutcome.Ok, result.Message);
 
         var text = Assert.Single(_telegram.Calls).Text;
@@ -159,6 +170,65 @@ public sealed class TelegramCorrectionTests : IDisposable
         Assert.Equal(3, _kimai.Writes.Count);
     }
 
+    // ------------------------------------------------------------ Telegram hängt
+
+    [Fact]
+    public async Task Submit_ReturnsWhileTelegramHangs_AndTheMessageFollowsOnceItAnswers()
+    {
+        var hold = new TaskCompletionSource();
+        _telegram.Holds["sendMessage"] = hold;
+
+        var dto = await SubmitPauseNoWaitAsync();
+
+        // Der Antrag ist angelegt und der Mitarbeiter hat seine Antwort, die Nachricht fehlt noch.
+        Assert.Equal(TimeCorrectionStatus.Pending, _store.Find(dto.Id)!.Status);
+        Assert.Null(_store.Find(dto.Id)!.TelegramMessageId);
+
+        hold.SetResult();
+        await _service.WhenNotificationsCompleteAsync();
+
+        Assert.Equal(FakeTelegram.FirstMessageId, _store.Find(dto.Id)!.TelegramMessageId);
+        Assert.Single(_telegram.CallsTo("sendMessage"));
+    }
+
+    [Fact]
+    public async Task Withdraw_ReturnsWhileTelegramHangs_AndTheMessageIsUpdatedAfterwards()
+    {
+        var dto = await SubmitPauseAsync();
+        var hold = new TaskCompletionSource();
+        _telegram.Holds["editMessageText"] = hold;
+
+        var result = await _service.WithdrawAsync(new CorrectionAuthRequest("max", "1234", null), dto.Id)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(TimeCorrectionStatus.Withdrawn, result.Value!.Status);
+
+        hold.SetResult();
+        await _service.WhenNotificationsCompleteAsync();
+
+        Assert.EndsWith("↩️ Zurückgezogen · 05.10. 12:00", Assert.Single(_telegram.CallsTo("editMessageText")).Text);
+    }
+
+    [Fact]
+    public async Task Approval_WhileTheMessageIsStillBeingSent_IsNotBlockedAndTheMessageShowsTheResultLater()
+    {
+        var hold = new TaskCompletionSource();
+        _telegram.Holds["sendMessage"] = hold;
+        var dto = await SubmitPauseNoWaitAsync();
+
+        // Entscheidung vor der Nachricht: OnDecided findet noch keine und tut nichts.
+        var result = await _service.ApproveAsync(dto.Id, "Admin").WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(TimeCorrectionStatus.Applied, result.Value!.Status);
+        Assert.Empty(_telegram.CallsTo("editMessageText"));
+
+        hold.SetResult();
+        await _service.WhenNotificationsCompleteAsync();
+
+        var edit = Assert.Single(_telegram.CallsTo("editMessageText"));
+        Assert.EndsWith("✅ Genehmigt von Admin · 05.10. 12:00 – in Kimai eingetragen", edit.Text);
+        Assert.True(edit.KeyboardIsEmpty);
+    }
+
     // ------------------------------------------------------------ Nachricht nach Entscheidungen
 
     [Fact]
@@ -192,6 +262,7 @@ public sealed class TelegramCorrectionTests : IDisposable
         var dto = await SubmitPauseAsync();
 
         var result = await _service.WithdrawAsync(new CorrectionAuthRequest("max", "1234", null), dto.Id);
+        await _service.WhenNotificationsCompleteAsync();
 
         Assert.Equal(CorrectionOutcome.Ok, result.Outcome);
         var edit = Assert.Single(_telegram.CallsTo("editMessageText"));
@@ -436,6 +507,7 @@ public sealed class TelegramCorrectionTests : IDisposable
     {
         var dto = await SubmitPauseAsync();
         await _service.WithdrawAsync(new CorrectionAuthRequest("max", "1234", null), dto.Id);
+        await _service.WhenNotificationsCompleteAsync();
 
         await TapAsync(FakeTelegram.Callback(1, Data(TelegramCorrectionAction.AskApprove, dto.Id)));
 

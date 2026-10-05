@@ -35,6 +35,7 @@ public sealed class TimeCorrectionService(
 
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<Task, byte> _backgroundNotifications = new();
 
     // Prüfung "ein offener Antrag pro Timesheet" und Anlegen bilden eine
     // Einheit - sonst legen zwei gleichzeitige Anträge beide an.
@@ -113,7 +114,10 @@ public sealed class TimeCorrectionService(
             _submitGate.Release();
         }
 
-        await NotifyAsync(() => notifier.OnSubmitted(created, CancellationToken.None), "submitted", created.Id);
+        // Im Hintergrund: der Kiosk bricht nach wenigen Sekunden ab, und ein
+        // langsames Telegram darf einen schon angelegten Antrag nicht wie einen
+        // Fehler aussehen lassen (das erneute Absenden wäre dann ein Duplikat).
+        NotifyInBackground(() => notifier.OnSubmitted(created, CancellationToken.None), "submitted", created.Id);
         return CorrectionResult<TimeCorrectionDto>.Ok(ToDto(created, settings, forEmployee: true));
     }
 
@@ -169,7 +173,7 @@ public sealed class TimeCorrectionService(
             store.Update(withdrawn);
         }
 
-        await NotifyAsync(() => notifier.OnDecided(withdrawn, CancellationToken.None), "withdrawn", withdrawn.Id);
+        NotifyInBackground(() => notifier.OnDecided(withdrawn, CancellationToken.None), "withdrawn", withdrawn.Id);
         return CorrectionResult<TimeCorrectionDto>.Ok(ToDto(withdrawn, settings, forEmployee: true));
     }
 
@@ -643,6 +647,31 @@ public sealed class TimeCorrectionService(
     {
         public void Dispose() => gate.Release();
     }
+
+    /// <summary>
+    /// Meldet nach außen, ohne dass der Aufrufer wartet (wie die Stempel-Meldung
+    /// in <see cref="TelegramNotifier"/>). <see cref="NotifyAsync"/> fängt und
+    /// loggt jede Ausnahme; die Fortsetzung loggt zusätzlich, falls schon das
+    /// Loggen scheitert. Die Reihenfolge Entscheidung vor Meldung ist
+    /// unkritisch: der Telegram-Notifier liest den frischen Stand und trägt das
+    /// Ergebnis nach.
+    /// </summary>
+    private void NotifyInBackground(Func<Task> notify, string what, string id)
+    {
+        var task = Task.Run(() => NotifyAsync(notify, what, id));
+        _backgroundNotifications[task] = 0;
+        _ = task.ContinueWith(finished =>
+        {
+            _backgroundNotifications.TryRemove(finished, out _);
+            if (finished.IsFaulted)
+            {
+                logger?.LogError(finished.Exception, "Correction request {Id}: notification '{What}' crashed", id, what);
+            }
+        }, TaskScheduler.Default);
+    }
+
+    /// <summary>Wartet auf die laufenden Hintergrund-Meldungen (Tests, Herunterfahren).</summary>
+    public Task WhenNotificationsCompleteAsync() => Task.WhenAll(_backgroundNotifications.Keys);
 
     private async Task NotifyAsync(Func<Task> notify, string what, string id)
     {

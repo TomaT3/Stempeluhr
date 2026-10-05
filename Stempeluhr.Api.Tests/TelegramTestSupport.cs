@@ -47,6 +47,9 @@ internal sealed class FakeTelegram : HttpMessageHandler
     /// <summary>Queue of getUpdates answers; empty queue answers with no updates.</summary>
     public Queue<HttpResponseMessage> Updates { get; } = new();
 
+    /// <summary>Calls of a method wait until the test completes its source.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource> Holds { get; } = new();
+
     public IReadOnlyList<TelegramCall> Calls
     {
         get
@@ -88,6 +91,12 @@ internal sealed class FakeTelegram : HttpMessageHandler
             request.Options.TryGetValue(new HttpRequestOptionsKey<string>("client"), out var client) ? client : string.Empty,
             path[0]["bot".Length..], path[1], document.RootElement.Clone());
         lock (_gate) _calls.Add(call);
+
+        // A hanging Telegram: the call is recorded, the answer waits for the test.
+        if (Holds.TryGetValue(call.Method, out var hold))
+        {
+            await hold.Task.WaitAsync(cancellationToken);
+        }
 
         if (Responder?.Invoke(call) is { } custom)
         {

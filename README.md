@@ -446,7 +446,9 @@ Testumgebung): das steht einmal im Log, danach wartet der Poller mit Backoff
 und versucht es weiter. Auch bei Netzfehlern steigt die Wartezeit von 5 s auf
 höchstens 60 s, ohne das Log zu fluten. `callback_data` hat die Form
 `c:<aktion>:<id>` (höchstens 64 Bytes). Telegram-Fehler werden nur geloggt und
-beeinflussen weder Entscheidung noch Buchung; die Anfragen an die Bot API
+beeinflussen weder Entscheidung noch Buchung. Die Nachricht beim Absenden und
+beim Zurückziehen geht im Hintergrund hinaus, damit ein langsames Telegram den
+Kiosk nicht in sein Zeitlimit laufen lässt; die Anfragen an die Bot API
 loggt .NET nur ab Warning, weil der Token im URL-Pfad steht.
 
 ### Terminal-Metriken in Grafana (optional)
