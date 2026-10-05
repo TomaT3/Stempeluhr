@@ -221,7 +221,7 @@ public sealed class KimaiClientTests
     public async Task GetTimesheetAsync_ReadsSingleTimesheet()
     {
         var handler = new ScriptedHandler(Resp(HttpStatusCode.OK,
-            """{"id":42,"begin":"2026-08-28T08:00:00+02:00","end":"2026-08-28T16:00:00+02:00","activity":5,"project":{"id":3},"description":"Schicht","billable":false}"""));
+            """{"id":42,"begin":"2026-08-28T08:00:00+02:00","end":"2026-08-28T16:00:00+02:00","activity":5,"project":{"id":3},"description":"Schicht","billable":false,"user":{"id":7}}"""));
 
         var sheet = await CreateClient(handler).GetTimesheetAsync(Settings, Employee, 42);
 
@@ -231,6 +231,21 @@ public sealed class KimaiClientTests
         Assert.Equal(DateTimeOffset.Parse("2026-08-28T08:00:00+02:00"), sheet.Begin);
         Assert.Equal(DateTimeOffset.Parse("2026-08-28T16:00:00+02:00"), sheet.End);
         Assert.Equal((5, 3, "Schicht", false), (sheet.ActivityId, sheet.ProjectId, sheet.Description, sheet.Billable));
+        Assert.Equal(7, sheet.UserId);
+    }
+
+    [Fact]
+    public async Task GetTimesheetAsync_ReturnsForeignOwner_SoCallersCanEnforceOwnership()
+    {
+        // Kimai answers a successful GET for another user's sheet if the token
+        // may view it; the client must not hide that - UserId lets #96 reject it.
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.OK,
+            """{"id":50,"begin":"2026-08-28T08:00:00+02:00","end":"2026-08-28T16:00:00+02:00","activity":5,"project":3,"user":12}"""));
+
+        var sheet = await CreateClient(handler).GetTimesheetAsync(Settings, Employee, 50);
+
+        Assert.NotNull(sheet);
+        Assert.Equal(12, sheet.UserId);
     }
 
     [Fact]

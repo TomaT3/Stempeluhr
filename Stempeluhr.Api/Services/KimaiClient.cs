@@ -177,7 +177,8 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             GetId(sheet, "activity") ?? throw new InvalidOperationException($"Kimai timesheet {timesheetId} has no activity."),
             GetId(sheet, "project") ?? throw new InvalidOperationException($"Kimai timesheet {timesheetId} has no project."),
             GetString(sheet, "description"),
-            !sheet.TryGetProperty("billable", out var billable) || billable.ValueKind != JsonValueKind.False);
+            !sheet.TryGetProperty("billable", out var billable) || billable.ValueKind != JsonValueKind.False,
+            GetId(sheet, "user"));
     }
 
     /// <inheritdoc />

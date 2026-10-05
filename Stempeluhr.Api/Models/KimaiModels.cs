@@ -26,4 +26,5 @@ public sealed record KimaiTimesheetDetailDto(
     int ActivityId,
     int ProjectId,
     string? Description,
-    bool Billable);
+    bool Billable,
+    int? UserId = null);

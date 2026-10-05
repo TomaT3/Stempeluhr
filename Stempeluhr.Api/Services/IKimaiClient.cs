@@ -95,7 +95,13 @@ public interface IKimaiClient
         DateTime end,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Reads one timesheet of the token owner; null if Kimai answers 404.</summary>
+    /// <summary>
+    /// Reads one timesheet by id; null if Kimai answers 404. The token alone
+    /// does not restrict this to the owner's sheets (a user with
+    /// view_other_timesheet may read others), so callers that need "own
+    /// timesheets only" must compare <see cref="KimaiTimesheetDetailDto.UserId"/>
+    /// with the employee's Kimai user id.
+    /// </summary>
     Task<KimaiTimesheetDetailDto?> GetTimesheetAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
