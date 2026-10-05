@@ -134,7 +134,7 @@ describe('AdminPage', () => {
 
       component.updateTelegramCorrectionChatId(' -42 ');
       component.updateTelegramApproverUserIds('33, 44;55  33');
-      expect(component.telegramApproverText(component.adminSettings()!)).toBe('33, 44;55  33');
+      expect(component.telegramApproverText()).toBe('33, 44;55  33');
       component.saveAdminSettings();
       expect(savedPayload(http)).toMatchObject({
         telegramCorrectionChatId: ' -42 ',

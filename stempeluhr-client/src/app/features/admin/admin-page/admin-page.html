@@ -181,7 +181,7 @@
           <label>
             Entscheiden dürfen (User-IDs)
             <input
-              [value]="telegramApproverText(settings)"
+              [value]="telegramApproverText()"
               (input)="updateTelegramApproverUserIds($any($event.target).value)"
               placeholder="leer = jedes Mitglied des Chats"
               autocomplete="off"
@@ -207,7 +207,7 @@
       }
 
       <section class="admin-section employee-admin-list" id="employees">
-        <div class="section-head"><span class="section-number">05</span><div><h2>Mitarbeiter<span class="count">{{ settings.employees.length }}</span></h2><p>Zugang, Buchungsregeln und Tätigkeiten pro Person</p></div></div>
+        <div class="section-head"><span class="section-number">05</span><div><h2>Mitarbeiter <span class="count">{{ settings.employees.length }}</span></h2><p>Zugang, Buchungsregeln und Tätigkeiten pro Person</p></div></div>
         <div class="admin-actions">
           <button type="button" (click)="importKimaiUsers()">Aus Kimai laden</button>
           <button type="button" (click)="addEmployee()">Mitarbeiter hinzufügen</button>

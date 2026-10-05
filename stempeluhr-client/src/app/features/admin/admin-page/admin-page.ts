@@ -43,6 +43,8 @@ export class AdminPage implements OnDestroy {
   readonly initialLoading = signal(false);
   /** Offene Korrekturanträge (pending und failed) für den Quick-Link. */
   readonly openCorrections = signal(0);
+  /** Eingabe der Freigeber-IDs als Text, damit „12, “ beim Tippen nicht umgeschrieben wird. */
+  readonly telegramApproverText = signal('');
 
   private nfcPollTimer: number | null = null;
 
@@ -93,6 +95,7 @@ export class AdminPage implements OnDestroy {
         this.kimaiProjects.set(projects ?? []);
         this.kimaiActivities.set(activities ?? []);
         this.adminSettings.set(this.withEditableTokens(settings));
+        this.telegramApproverText.set(this.approverUserIdsToText(settings));
         this.adminMessage.set(projects === null || activities === null
           ? 'Kimai-Projekte oder Aktivitäten konnten nicht geladen werden. Bitte Verbindung und Token prüfen und die Listen aktualisieren.'
           : '');
@@ -138,13 +141,13 @@ export class AdminPage implements OnDestroy {
       return;
     }
 
-    if (settings.telegramApproverUserIds !== undefined && this.parseApproverUserIds(this.telegramApproverText(settings)) === null) {
+    if (settings.telegramApproverUserIds !== undefined && this.parseApproverUserIds(this.telegramApproverText()) === null) {
       this.adminMessage.set('Telegram-User-IDs müssen Zahlen sein, getrennt durch Komma.');
       return;
     }
 
     const password = this.adminPassword().trim();
-    const newPassword =((settings as AdminSettings & { adminPassword?: string }).adminPassword ?? '').trim();
+    const newPassword = ((settings as AdminSettings & { adminPassword?: string }).adminPassword ?? '').trim();
     this.adminBusy.set(true);
     this.adminApi.saveSettings(password, this.toUpdatePayload(settings)).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: saved => {
@@ -153,6 +156,7 @@ export class AdminPage implements OnDestroy {
         this.adminSession.remember(password);
         this.adminPassword.set(password);
         this.adminSettings.set(this.withEditableTokens(saved));
+        this.telegramApproverText.set(this.approverUserIdsToText(saved));
         this.adminMessage.set('Gespeichert');
         this.adminDirty.set(false);
         if (newPassword && newPassword !== password) {
@@ -332,14 +336,9 @@ export class AdminPage implements OnDestroy {
     this.updateSettings(settings => ({ ...settings, telegramCorrectionChatId: value }));
   }
 
-  /** Die Eingabe bleibt als Text erhalten, damit „12, “ beim Tippen nicht umgeschrieben wird. */
   updateTelegramApproverUserIds(value: string): void {
-    this.updateSettings(settings => ({ ...settings, telegramApproverText: value }) as AdminSettings);
-  }
-
-  telegramApproverText(settings: AdminSettings): string {
-    return (settings as AdminSettings & { telegramApproverText?: string }).telegramApproverText
-      ?? (settings.telegramApproverUserIds ?? []).join(', ');
+    this.telegramApproverText.set(value);
+    this.adminDirty.set(true);
   }
 
   updateEmployee(index: number, patch: Partial<AdminEmployee>): void {
@@ -693,7 +692,7 @@ export class AdminPage implements OnDestroy {
       telegramCorrectionChatId: settings.telegramCorrectionChatId ?? null,
       telegramApproverUserIds: settings.telegramApproverUserIds === undefined
         ? null
-        : this.parseApproverUserIds(this.telegramApproverText(settings)),
+        : this.parseApproverUserIds(this.telegramApproverText()),
       employees: settings.employees.map(employee => ({
         id: employee.id,
         kimaiUserId: employee.kimaiUserId,
@@ -832,6 +831,10 @@ export class AdminPage implements OnDestroy {
       tasks: [],
       defaultTaskLabel: null,
     };
+  }
+
+  private approverUserIdsToText(settings: AdminSettings): string {
+    return (settings.telegramApproverUserIds ?? []).join(', ');
   }
 
   /** Komma-, Semikolon- oder Leerzeichen-getrennte Zahlen; null bei etwas anderem. */
