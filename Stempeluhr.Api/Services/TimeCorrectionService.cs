@@ -367,17 +367,24 @@ public sealed class TimeCorrectionService(
                 }
 
                 request = request with { TimesheetId = sheet.Id, Original = ToOriginal(sheet) };
-                if (kind == TimeCorrectionKind.ChangeTimes)
+
+                // Der Kiosk zeigt Zeiten auf die Minute, Einträge aus Stempeln
+                // und Offline-Nachtrag haben Sekunden: eine Zeit in der Minute
+                // des bisherigen Werts meint genau diesen Wert.
+                request = kind switch
                 {
-                    // Der Kiosk zeigt Zeiten auf die Minute: eine gleich
-                    // gebliebene Zeit ist keine Änderung und lässt die
-                    // Sekunden des Eintrags unberührt.
-                    request = request with
+                    // Gleich gebliebene Zeit: keine Änderung, die Sekunden bleiben.
+                    TimeCorrectionKind.ChangeTimes => request with
                     {
                         Begin = SameMinute(request.Begin, sheet.Begin) ? null : request.Begin,
                         End = SameMinute(request.End, sheet.End) ? null : request.End,
-                    };
-                }
+                    },
+                    // Pause bis zum angezeigten Ende: keine Rest-Arbeit von ein paar Sekunden.
+                    TimeCorrectionKind.AddPause when SameMinute(request.PauseEnd, sheet.End) => request with { PauseEnd = sheet.End },
+                    // Ende in derselben Minute: kein Kürzen um Sekunden, der Validator lehnt es ab.
+                    TimeCorrectionKind.SetEnd when SameMinute(request.End, sheet.End) => request with { End = sheet.End },
+                    _ => request,
+                };
             }
             else if (WorkTargetResolver.Resolve(settings, employee, request.TaskId) is null)
             {
@@ -494,7 +501,8 @@ public sealed class TimeCorrectionService(
 
             var surrounding = await ReadSurroundingTimesheetsAsync(settings, employee, request, timeZone, cancellationToken);
             var open = store.List().Where(other => other.IsOpen).ToArray();
-            if (TimeCorrectionValidator.Validate(request, surrounding, open, _clock.GetUtcNow(), timeZone, settings, employee) is { } error)
+            if (TimeCorrectionValidator.Validate(
+                    request, surrounding, open, _clock.GetUtcNow(), timeZone, settings, employee, applying: true) is { } error)
             {
                 return Fail(request, error);
             }

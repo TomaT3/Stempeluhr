@@ -229,10 +229,14 @@ offenen (`pending`, `failed`) bleiben, von den abgeschlossenen die letzten 1000.
 | `changeTimes` | gestopptes Timesheet, neuer Beginn und/oder neues Ende | Beginn/Ende ändern |
 
 **Regeln** (beim Absenden und beim Genehmigen): nur eigene Timesheets der
-letzten 31 Tage; keine Zeit in der Zukunft (2 Minuten Toleranz); Ende nach
-Beginn, höchstens 16 h pro Schicht und 4 h pro Pause; keine Überlappung mit
-anderen Timesheets (angrenzend ist erlaubt); pro Timesheet höchstens ein
-offener Antrag. „Eigen“ prüft die API über die Kimai-Benutzer-ID des Tokens
+letzten 31 Tage (beim Genehmigen gezählt ab dem Absenden, eine späte
+Entscheidung lässt den Antrag nicht verfallen); keine Zeit in der Zukunft
+(2 Minuten Toleranz); Ende nach Beginn, höchstens 16 h pro Schicht und 4 h pro
+Pause; keine Überlappung mit anderen Timesheets (angrenzend ist erlaubt); pro
+Timesheet höchstens ein offener Antrag. Der Kiosk sendet Zeiten auf die Minute:
+liegt ein Pausenende oder neues Ende in der Minute des bisherigen Endes, gilt
+das bisherige Ende samt Sekunden (keine Rest-Arbeit, kein Kürzen um Sekunden).
+„Eigen“ prüft die API über die Kimai-Benutzer-ID des Tokens
 (`/api/users/me`) gegen den Besitzer des Timesheets, denn Kimai liefert fremde
 Einträge auch an Tokens mit `view_other_timesheet`. Fehlt eine der IDs, wird
 abgelehnt statt geraten. Gebucht wird mit dem **Mitarbeiter-Token**, das

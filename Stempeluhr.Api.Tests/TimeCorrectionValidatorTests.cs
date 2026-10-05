@@ -21,8 +21,9 @@ public sealed class TimeCorrectionValidatorTests
         IReadOnlyCollection<KimaiTimesheetEntryDto>? timesheets = null,
         IReadOnlyCollection<TimeCorrectionRequest>? open = null,
         RuntimeSettings? settings = null,
-        DateTimeOffset? now = null)
-        => TimeCorrectionValidator.Validate(request, timesheets ?? [], open ?? [], now ?? Now, Berlin, settings ?? Configured, Max());
+        DateTimeOffset? now = null,
+        bool applying = false)
+        => TimeCorrectionValidator.Validate(request, timesheets ?? [], open ?? [], now ?? Now, Berlin, settings ?? Configured, Max(), applying);
 
     private static TimeCorrectionRequest AddPause(DateTimeOffset pauseBegin, DateTimeOffset pauseEnd, FakeKimai.Sheet? sheet = null)
         => Request(TimeCorrectionKind.AddPause, sheet ?? Work(10, At(6), At(11)),
@@ -167,6 +168,17 @@ public sealed class TimeCorrectionValidatorTests
     }
 
     [Fact]
+    public void WhenApplying_The31DaysCountFromTheSubmission()
+    {
+        // Submitted on day 30, approved two days later: a late decision must not let it expire.
+        var request = AddShift(Now.AddDays(-30), Now.AddDays(-30).AddHours(8));
+        var later = Now.AddDays(2);
+        Assert.Contains("31 Tage", Validate(request, now: later));
+        Assert.Null(Validate(request, now: later, applying: true));
+        Assert.Contains("31 Tage", Validate(request with { CreatedAt = later }, now: later, applying: true));
+    }
+
+    [Fact]
     public void OverlappingAnotherSheet_IsRejected_ButAdjacentSheetsAreAllowed()
     {
         var existing = Entry(11, At(6), At(10));
@@ -222,10 +234,18 @@ public sealed class TimeCorrectionValidatorTests
         var request = AddPause(At(8), At(8, 30));
         var createdPause = Entry(20, At(8), At(8, 30), PauseActivity);
         var createdRest = Entry(21, At(8, 30), At(11));
-        Assert.Null(Validate(request, [createdPause, createdRest]));
+        Assert.Null(Validate(request, [createdPause, createdRest], applying: true));
 
         // A different entry in that time still is an overlap.
-        Assert.Contains("überschneidet", Validate(request, [Entry(22, At(8, 10), At(8, 20))]));
+        Assert.Contains("überschneidet", Validate(request, [Entry(22, At(8, 10), At(8, 20))], applying: true));
+    }
+
+    [Fact]
+    public void WhenSubmitting_AnEqualEntryIsNotTheRequestsOwnWork()
+    {
+        // Nothing is created before the approval: the same addShift a second time is an overlap.
+        Assert.Contains("überschneidet", Validate(AddShift(At(8), At(11)), [Entry(12, At(8), At(11), WorkActivity)]));
+        Assert.Contains("überschneidet", Validate(AddPause(At(8), At(8, 30)), [Entry(20, At(8), At(8, 30), PauseActivity)]));
     }
 
     [Fact]
@@ -233,12 +253,12 @@ public sealed class TimeCorrectionValidatorTests
     {
         // Only what the request creates itself (same begin, end AND activity) is exempt.
         var otherActivity = Entry(11, At(8), At(11), activity: 6);
-        Assert.Contains("überschneidet", Validate(AddShift(At(8), At(11)), [otherActivity]));
+        Assert.Contains("überschneidet", Validate(AddShift(At(8), At(11)), [otherActivity], applying: true));
         // The same times on the activity the request books on are its own work (continuation).
-        Assert.Null(Validate(AddShift(At(8), At(11)), [Entry(12, At(8), At(11), WorkActivity)]));
+        Assert.Null(Validate(AddShift(At(8), At(11)), [Entry(12, At(8), At(11), WorkActivity)], applying: true));
 
         var pauseOnOtherActivity = Entry(13, At(8), At(8, 30), activity: 6);
-        Assert.Contains("überschneidet", Validate(AddPause(At(8), At(8, 30)), [pauseOnOtherActivity]));
+        Assert.Contains("überschneidet", Validate(AddPause(At(8), At(8, 30)), [pauseOnOtherActivity], applying: true));
     }
 
     [Fact]

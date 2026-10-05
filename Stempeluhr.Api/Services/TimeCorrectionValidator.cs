@@ -22,11 +22,18 @@ public static class TimeCorrectionValidator
     /// <param name="request">Der Antrag; für Arten mit Timesheet mit <see cref="TimeCorrectionRequest.Original"/>.</param>
     /// <param name="timesheets">
     /// Timesheets des Mitarbeiters rund um den Zeitraum des Antrags. Das
-    /// betroffene Timesheet und Einträge, die genau dem entsprechen, was der
-    /// Antrag selbst anlegt (gleicher Beginn, gleiches Ende, gleiche Aktivität;
-    /// Fortsetzung nach einem Teilfehler), zählen nicht als Überlappung.
+    /// betroffene Timesheet zählt nicht als Überlappung, beim Anwenden auch
+    /// keine Einträge, die genau dem entsprechen, was der Antrag selbst anlegt
+    /// (gleicher Beginn, gleiches Ende, gleiche Aktivität; Fortsetzung nach
+    /// einem Teilfehler).
     /// </param>
     /// <param name="openRequests">Offene Anträge; der Antrag selbst wird ignoriert.</param>
+    /// <param name="applying">
+    /// True beim Anwenden: Die 31 Tage zählen ab dem Absenden (eine späte
+    /// Genehmigung soll den Antrag nicht verfallen lassen), und schon
+    /// angelegte eigene Schritte sind keine Überlappung. Beim Absenden hat der
+    /// Antrag noch nichts angelegt.
+    /// </param>
     public static string? Validate(
         TimeCorrectionRequest request,
         IReadOnlyCollection<KimaiTimesheetEntryDto> timesheets,
@@ -34,7 +41,8 @@ public static class TimeCorrectionValidator
         DateTimeOffset now,
         TimeZoneInfo timeZone,
         RuntimeSettings settings,
-        EmployeeSettings employee)
+        EmployeeSettings employee,
+        bool applying = false)
     {
         if (request.Comment is { Length: > MaxCommentLength })
         {
@@ -59,7 +67,8 @@ public static class TimeCorrectionValidator
             return "Zeiten in der Zukunft sind nicht erlaubt.";
         }
 
-        if (TouchedTimes(request).Append(request.Original?.Begin ?? now).Any(time => time < now - MaxAge))
+        var ageReference = applying ? request.CreatedAt : now;
+        if (TouchedTimes(request).Append(request.Original?.Begin ?? ageReference).Any(time => time < ageReference - MaxAge))
         {
             return "Korrekturen sind nur für die letzten 31 Tage möglich.";
         }
@@ -70,7 +79,7 @@ public static class TimeCorrectionValidator
             return "Für diesen Eintrag gibt es schon einen offenen Antrag.";
         }
 
-        return FindOverlap(request, timesheets, openRequests, now, timeZone, settings, employee);
+        return FindOverlap(request, timesheets, openRequests, now, timeZone, settings, employee, applying);
     }
 
     private static string? ValidateAddPause(TimeCorrectionRequest request, RuntimeSettings settings, TimeZoneInfo timeZone)
@@ -257,7 +266,8 @@ public static class TimeCorrectionValidator
         DateTimeOffset now,
         TimeZoneInfo timeZone,
         RuntimeSettings settings,
-        EmployeeSettings employee)
+        EmployeeSettings employee,
+        bool applying)
     {
         if (ClaimedRange(request) is not { } claimed)
         {
@@ -266,12 +276,15 @@ public static class TimeCorrectionValidator
 
         // Was der Antrag selbst schon angelegt hat, mit denselben Zielkriterien
         // wie beim Anwenden. Lässt sich ein Schritt nicht auflösen, gilt nichts
-        // als sein Werk.
-        var created = TimeCorrectionPlan.Steps(request)
-            .Where(step => step.Kind != PlannedStepKind.Patch)
-            .Select(step => (Step: step, Target: TimeCorrectionTargets.Resolve(step, request, settings, employee)?.Target))
-            .Where(planned => planned.Target is not null)
-            .ToArray();
+        // als sein Werk. Beim Absenden ist ein gleicher Eintrag fremd: sonst
+        // ginge derselbe Nachtrag ein zweites Mal durch.
+        var created = !applying
+            ? []
+            : TimeCorrectionPlan.Steps(request)
+                .Where(step => step.Kind != PlannedStepKind.Patch)
+                .Select(step => (Step: step, Target: TimeCorrectionTargets.Resolve(step, request, settings, employee)?.Target))
+                .Where(planned => planned.Target is not null)
+                .ToArray();
 
         foreach (var entry in timesheets)
         {

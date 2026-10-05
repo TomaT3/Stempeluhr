@@ -138,6 +138,42 @@ public sealed class TimeCorrectionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Approve_AddPause_EndingInTheMinuteOfTheOldEnd_CreatesNoRestWorkOfSeconds()
+    {
+        // Stamped entries end with seconds, the kiosk sends minutes.
+        var sheet = _kimai.Add(At(6), At(11).AddSeconds(37));
+        var dto = await Submitted(Submit("addPause", sheet.Id, pauseBegin: At(10, 30), pauseEnd: At(11)));
+
+        var result = await Approved(dto.Id);
+
+        Assert.Equal(["shorten", "pause"], result.AppliedSteps);
+        Assert.Equal(At(11).AddSeconds(37), _store.Find(dto.Id)!.PauseEnd);
+    }
+
+    [Fact]
+    public async Task Submit_SetEnd_InTheMinuteOfTheOldEnd_IsNoCorrection()
+    {
+        var sheet = _kimai.Add(At(6), At(11).AddSeconds(37));
+
+        var result = await _service.SubmitAsync(Submit("setEnd", sheet.Id, end: At(11)));
+
+        Assert.Equal(CorrectionOutcome.Invalid, result.Outcome);
+        Assert.Contains("vor dem bisherigen Ende", result.Message);
+    }
+
+    [Fact]
+    public async Task Approve_TwoDaysAfterSubmittingOnDay30_StillApplies()
+    {
+        var sheet = _kimai.Add(Now.AddDays(-30), Now.AddDays(-30).AddHours(8));
+        var dto = await Submitted(Submit("setEnd", sheet.Id, end: Now.AddDays(-30).AddHours(7)));
+        _clock.Advance(TimeSpan.FromDays(2));
+
+        var result = await Approved(dto.Id);
+
+        Assert.Equal(TimeCorrectionStatus.Applied, result.Status);
+    }
+
+    [Fact]
     public async Task Approve_SetEnd_PatchesTheEnd()
     {
         var sheet = WorkSheet();
