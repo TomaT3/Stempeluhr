@@ -90,7 +90,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             billable = target.Billable,
             // full=true only expands the response. The tracking mode and the
             // token owner's permissions determine whether begin is allowed.
-            begin = startedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz")
+            begin = FormatTimestamp(startedAt)
         };
 
         // A 400 may mean that begin is forbidden, not that this is an old
@@ -121,13 +121,96 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         CancellationToken cancellationToken = default)
     {
         return BackdatePatchAsync(
-            settings, employee, "end-backdate", timesheetId, endedAt,
-            new { end = endedAt.ToString("yyyy-MM-dd'T'HH:mm:sszzz") },
+            settings, employee, "end-backdate", timesheetId, endedAt.ToString("o"),
+            new { end = FormatTimestamp(endedAt) },
             cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task UpdateTimesheetTimesAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int timesheetId,
+        DateTimeOffset? begin,
+        DateTimeOffset? end,
+        CancellationToken cancellationToken = default)
+    {
+        if (begin is null && end is null)
+        {
+            throw new ArgumentException("begin or end must be set.");
+        }
+
+        var body = new Dictionary<string, string>();
+        if (begin is { } b) body["begin"] = FormatTimestamp(b);
+        if (end is { } e) body["end"] = FormatTimestamp(e);
+
+        return BackdatePatchAsync(
+            settings, employee, "times-update", timesheetId,
+            $"begin={begin?.ToString("o")} end={end?.ToString("o")}",
+            body, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<KimaiTimesheetDetailDto?> GetTimesheetAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int timesheetId,
+        CancellationToken cancellationToken = default)
+    {
+        JsonElement sheet;
+        try
+        {
+            sheet = await SendAsync<JsonElement>(
+                settings.BaseUrl, employee.ApiToken, HttpMethod.Get, $"api/timesheets/{timesheetId}", null, cancellationToken);
+        }
+        catch (KimaiApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        var begin = ParseDateTimeOffset(sheet, "begin")
+            ?? throw new InvalidOperationException($"Kimai timesheet {timesheetId} has no begin.");
+        return new KimaiTimesheetDetailDto(
+            GetId(sheet, "id") ?? timesheetId,
+            begin,
+            ParseDateTimeOffset(sheet, "end"),
+            GetId(sheet, "activity") ?? throw new InvalidOperationException($"Kimai timesheet {timesheetId} has no activity."),
+            GetId(sheet, "project") ?? throw new InvalidOperationException($"Kimai timesheet {timesheetId} has no project."),
+            GetString(sheet, "description"),
+            !sheet.TryGetProperty("billable", out var billable) || billable.ValueKind != JsonValueKind.False,
+            GetId(sheet, "user"));
+    }
+
+    /// <inheritdoc />
+    public async Task<int> CreateTimesheetAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        KimaiTimesheetTarget target,
+        DateTimeOffset begin,
+        DateTimeOffset end,
+        string? description,
+        CancellationToken cancellationToken = default)
+    {
+        var body = new
+        {
+            project = target.ProjectId,
+            activity = target.ActivityId,
+            description,
+            tags = employee.Tags.Length == 0 ? null : string.Join(",", employee.Tags),
+            billable = target.Billable,
+            begin = FormatTimestamp(begin),
+            end = FormatTimestamp(end)
+        };
+
+        var created = await SendAsync<JsonElement>(
+            settings.BaseUrl, employee.ApiToken, HttpMethod.Post, "api/timesheets?full=true", body, cancellationToken);
+        return GetId(created, "id") ?? throw new InvalidOperationException("Kimai returned no timesheet id.");
+    }
+
+    private static string FormatTimestamp(DateTimeOffset value) => value.ToString("yyyy-MM-dd'T'HH:mm:sszzz");
+
     /// <summary>
-    /// PATCHes an end timestamp with a short transient-retry loop. A lost
+    /// PATCHes begin/end timestamps with a short transient-retry loop. A lost
     /// backdate would otherwise silently leave a wrong stop time.
     /// </summary>
     private async Task BackdatePatchAsync(
@@ -135,7 +218,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         EmployeeSettings employee,
         string what,
         int timesheetId,
-        DateTimeOffset intendedTimestamp,
+        string intended,
         object body,
         CancellationToken cancellationToken)
     {
@@ -162,7 +245,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
                     ex,
                     "Kimai: {What} for timesheet {TimesheetId} (employee {Employee}) failed after {Retries} attempts; " +
                     "the timesheet may keep a timestamp other than {Intended}. Manual correction may be required.",
-                    what, timesheetId, employee.Id, BackdateRetryCount, intendedTimestamp);
+                    what, timesheetId, employee.Id, BackdateRetryCount, intended);
                 throw;
             }
         }
@@ -310,7 +393,9 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
                     ParseDateTimeOffset(item, "begin"),
                     ParseDateTimeOffset(item, "end"),
                     item.TryGetProperty("duration", out var durProp) && durProp.ValueKind == JsonValueKind.Number ? durProp.GetInt32() : null,
-                    GetId(item, "activity")));
+                    GetId(item, "activity"),
+                    GetId(item, "project"),
+                    GetString(item, "description")));
             }
 
             if (batch.Length < 500)

@@ -94,6 +94,42 @@ public interface IKimaiClient
         DateTime begin,
         DateTime end,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads one timesheet by id; null if Kimai answers 404. The token alone
+    /// does not restrict this to the owner's sheets (a user with
+    /// view_other_timesheet may read others), so callers that need "own
+    /// timesheets only" must compare <see cref="KimaiTimesheetDetailDto.UserId"/>
+    /// with the employee's Kimai user id.
+    /// </summary>
+    Task<KimaiTimesheetDetailDto?> GetTimesheetAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int timesheetId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates a finished timesheet on <paramref name="target"/> with both
+    /// <paramref name="begin"/> and <paramref name="end"/> and returns its id.
+    /// Not retried: a repeated POST could create a duplicate.
+    /// </summary>
+    Task<int> CreateTimesheetAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        KimaiTimesheetTarget target,
+        DateTimeOffset begin,
+        DateTimeOffset end,
+        string? description,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>PATCHes begin and/or end of a timesheet (null leaves the field untouched).</summary>
+    Task UpdateTimesheetTimesAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int timesheetId,
+        DateTimeOffset? begin,
+        DateTimeOffset? end,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Minimal view of a finished timesheet, for replay verification and pause resume.</summary>

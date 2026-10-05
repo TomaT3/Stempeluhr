@@ -14,4 +14,17 @@ public sealed record KimaiTimesheetEntryDto(
     DateTimeOffset? Begin,
     DateTimeOffset? End,
     int? DurationSeconds,
-    int? ActivityId);
+    int? ActivityId,
+    int? ProjectId = null,
+    string? Description = null);
+
+/// <summary>Ein einzelnes Kimai-Timesheet mit allem, was eine Korrektur zum Prüfen und Neuanlegen braucht.</summary>
+public sealed record KimaiTimesheetDetailDto(
+    int Id,
+    DateTimeOffset Begin,
+    DateTimeOffset? End,
+    int ActivityId,
+    int ProjectId,
+    string? Description,
+    bool Billable,
+    int? UserId = null);

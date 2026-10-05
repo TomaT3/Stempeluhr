@@ -4,7 +4,9 @@
 Simuliert die Kimai-REST-Endpoints, die der StempeluhrKimaiClient nutzt:
 - GET  /api/timesheets/active        -> aktives Timesheet (Array)
 - GET  /api/timesheets?begin=&end=   -> Timesheet-Liste (Pagination, ohne user = Token-Inhaber)
-- POST /api/timesheets?full=true     -> Timesheet erstellen (begin akzeptiert)
+- GET  /api/timesheets/{id}          -> einzelnes Timesheet (404 für unbekannte IDs)
+- POST /api/timesheets?full=true     -> Timesheet erstellen (begin und end akzeptiert;
+                                        ohne end bleibt der Eintrag laufend)
 - PATCH /api/timesheets/{id}         -> begin/end nachtragen
 - PATCH /api/timesheets/{id}/stop    -> Timesheet stoppen (end = jetzt)
 
@@ -82,6 +84,8 @@ def to_list_dto(sheet: dict) -> dict:
         "duration": duration,
         "activity": {"id": activity} if isinstance(activity, int) else activity,
         "project": {"id": project} if isinstance(project, int) else project,
+        "description": sheet.get("description"),
+        "billable": sheet.get("billable", True),
     }
 
 
@@ -117,6 +121,15 @@ class Handler(BaseHTTPRequestHandler):
                 active = [t for t in TIMESHEETS if t.get("end") is None]
                 # Kimai liefert nur das erste aktive Timesheet
                 self._send(200, active[:1])
+            return
+        single = urlparse(self.path).path.strip("/").split("/")
+        if len(single) == 3 and single[:2] == ["api", "timesheets"] and single[2].isdigit():
+            with LOCK:
+                sheet = next((t for t in TIMESHEETS if t["id"] == int(single[2])), None)
+                if sheet is None:
+                    self._send(404, {"code": 404, "message": "Not Found"})
+                else:
+                    self._send(200, to_list_dto(sheet))
             return
         if self.path.startswith("/api/timesheets"):
             # Liste (Stundenübersicht): ohne user (= Token-Inhaber), begin/end-Filter
@@ -170,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
                 sheet = {
                     "id": NEXT_ID,
                     "begin": body.get("begin") or now_iso(),
-                    "end": None,
+                    "end": body.get("end"),
                     "project": body.get("project"),
                     "activity": body.get("activity"),
                     "description": body.get("description"),

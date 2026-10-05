@@ -76,6 +76,10 @@ public sealed class ClockServiceIdentifyTests
 
     private sealed class StubKimaiClient : IKimaiClient
     {
+        public Task<KimaiTimesheetDetailDto?> GetTimesheetAsync(RuntimeSettings s, EmployeeSettings e, int id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<int> CreateTimesheetAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget t, DateTimeOffset begin, DateTimeOffset end, string? description, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task UpdateTimesheetTimesAsync(RuntimeSettings s, EmployeeSettings e, int id, DateTimeOffset? begin, DateTimeOffset? end, CancellationToken ct = default) => throw new NotSupportedException();
+
         public bool LastStatusChecked { get; private set; }
         public bool LastStamped { get; private set; }
 
