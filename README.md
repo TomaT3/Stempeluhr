@@ -207,9 +207,9 @@ einer Tätigkeit), bleibt der Wechsel zu jeder Tätigkeit möglich.
 
 Mitarbeiter vergessen, die Pause oder das Ausstempeln zu stempeln. Kimai-Zugang
 bekommen sie bewusst nicht; stattdessen beantragen sie die Korrektur, und erst
-nach der Freigabe durch Chef oder Admin schreibt die API sie in Kimai. Dieser
-Abschnitt beschreibt die API; die Oberflächen folgen in eigenen Schritten (Epic
-#94: Admin-Seite #97, Kiosk und `/clock` #98, Telegram-Knöpfe #99).
+nach der Freigabe durch Chef oder Admin schreibt die API sie in Kimai. Entschieden
+wird auf der Admin-Seite `/admin/corrections`; Kiosk und `/clock` (#98) und die
+Telegram-Knöpfe (#99) folgen in eigenen Schritten (Epic #94).
 
 **Ablauf:** Der Mitarbeiter wählt in der Liste der letzten 31 Tage einen Eintrag
 (nach Schichten gruppiert, eine Nachtschicht über Mitternacht bleibt eine
@@ -273,6 +273,21 @@ Antrag **als erledigt markieren**.
   `POST /api/admin/corrections/{id}/reject` (`{ "note": … }` optional),
   `POST /api/admin/corrections/{id}/retry` und
   `PUT /api/admin/corrections/{id}/resolved` (nur `failed`, sonst 409).
+
+**Admin-Seite** `/admin/corrections` (Quick-Link „Korrekturanträge“ auf
+`/admin`, mit der Zahl der offenen Anträge): Anmeldung mit dem Admin-Passwort
+wie auf den anderen Admin-Seiten, Filter „Offen“ (`pending` und `failed`,
+Standard) oder „Alle“. Jeder Antrag zeigt Mitarbeiter, Art, die Schicht,
+**Vorher → Nachher** (bei einer nachgetragenen Pause die drei Teile Arbeit,
+Pause, Rest-Arbeit), Kommentar, Quelle (Terminal oder `/clock`), Zeitpunkt des
+Antrags und die Entscheidung mit Grund bzw. Kimai-Meldung. Die Zeiten stehen in
+der Kimai-Zeitzone des Mitarbeiters; liegt das Gerät in einer anderen Zone,
+steht sie dabei. Offene Anträge lassen sich genehmigen oder ablehnen (der
+optionale Grund erscheint nach „Ablehnen“), fehlgeschlagene erneut versuchen
+oder als „Manuell in Kimai erledigt“ markieren. Nach jeder Aktion lädt die
+Liste neu und zeigt das Ergebnis; während eine Aktion läuft, sind die Knöpfe
+gesperrt. Die Seite ist für das Handy ausgelegt, damit der Chef unterwegs
+freigeben kann.
 
 ### Telegram-Benachrichtigung (optional)
 

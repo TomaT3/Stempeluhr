@@ -1,0 +1,109 @@
+<section class="corrections">
+  <div class="toolbar">
+    <a routerLink="/admin">&lt; Admin</a>
+    @if (adminSession.isLoggedIn()) {
+      <span>Als Admin angemeldet</span>
+      <div class="session-actions">
+        <button type="button" (click)="load()" [disabled]="isBusy()">Aktualisieren</button>
+        <button type="button" (click)="logout()">Abmelden</button>
+      </div>
+    } @else {
+      <label>Admin-Passwort
+        <input type="password" [value]="adminPassword()" (input)="adminPassword.set($any($event.target).value)"
+          (keyup.enter)="load()" autocomplete="current-password">
+      </label>
+      <button type="button" (click)="load()" [disabled]="isBusy()">Anmelden</button>
+    }
+  </div>
+  <h1>Korrekturanträge</h1>
+  <p>Erst nach dem Genehmigen schreibt die Stempeluhr die Korrektur mit dem Token des Mitarbeiters in Kimai.</p>
+  @if (message()) { <p class="message" role="alert">{{ message() }}</p> }
+  @if (hasLoaded()) {
+    <div class="filter" role="group" aria-label="Filter">
+      <button type="button" [class.active]="filter() === 'open'" [attr.aria-pressed]="filter() === 'open'"
+        (click)="setFilter('open')" [disabled]="isBusy()">Offen</button>
+      <button type="button" [class.active]="filter() === 'all'" [attr.aria-pressed]="filter() === 'all'"
+        (click)="setFilter('all')" [disabled]="isBusy()">Alle</button>
+    </div>
+    <div class="entry-list">
+      @for (entry of entries(); track entry.id) {
+        <article class="entry" [class]="'status-' + entry.status">
+          <header>
+            <strong>{{ entry.employeeName || entry.employeeId }}</strong>
+            <span>{{ kindLabel(entry.kind) }}</span>
+            <span class="status">{{ statusLabel(entry.status) }}</span>
+          </header>
+          <dl>
+            <dt>Schicht</dt>
+            <dd>
+              {{ shiftRange(entry) }}
+              @if (foreignTimeZone(entry); as timeZone) { <small>({{ timeZone }})</small> }
+            </dd>
+            <dt>Vorher</dt>
+            <dd>
+              @for (line of before(entry); track $index) {
+                <span class="line">{{ line.label }} {{ line.range }}</span>
+              } @empty { <span class="line">kein Eintrag</span> }
+            </dd>
+            <dt>Nachher</dt>
+            <dd>
+              @for (line of after(entry); track $index) {
+                <span class="line">{{ line.label }} {{ line.range }}</span>
+              }
+            </dd>
+            @if (entry.comment) {
+              <dt>Kommentar</dt>
+              <dd>{{ entry.comment }}</dd>
+            }
+            <dt>Quelle</dt>
+            <dd>{{ sourceLabel(entry.source) }}</dd>
+            <dt>Eingereicht</dt>
+            <dd>{{ entry.createdAt | date: 'dd.MM.yyyy HH:mm' }}</dd>
+            @if (entry.decidedAt || entry.decidedBy) {
+              <dt>Entschieden</dt>
+              <dd>{{ entry.decidedBy || 'Unbekannt' }}@if (entry.decidedAt) {, {{ entry.decidedAt | date: 'dd.MM.yyyy HH:mm' }}}</dd>
+            }
+            @if (entry.decisionNote) {
+              <dt>Grund</dt>
+              <dd>{{ entry.decisionNote }}</dd>
+            }
+            @if (entry.status === 'failed') {
+              <dt>Kimai-Meldung</dt>
+              <dd class="error">{{ entry.error || 'Keine Meldung' }}</dd>
+              @if (entry.appliedSteps.length) {
+                <dt>Fortschritt</dt>
+                <dd>{{ entry.appliedSteps.length }} Schritt(e) schon in Kimai. „Erneut versuchen“ setzt dort fort.</dd>
+              }
+            }
+          </dl>
+          @if (entry.status === 'pending') {
+            @if (rejectingId() === entry.id) {
+              <div class="reject">
+                <label>Grund (optional)
+                  <input type="text" [value]="rejectNote()" (input)="rejectNote.set($any($event.target).value)"
+                    (keyup.enter)="sendReject(entry)" [attr.maxlength]="maxNoteLength">
+                </label>
+                <div class="actions">
+                  <button type="button" class="danger" (click)="sendReject(entry)" [disabled]="isBusy()">Ablehnung senden</button>
+                  <button type="button" (click)="cancelReject()" [disabled]="isBusy()">Abbrechen</button>
+                </div>
+              </div>
+            } @else {
+              <div class="actions">
+                <button type="button" class="primary" (click)="approve(entry)" [disabled]="isBusy()">Genehmigen</button>
+                <button type="button" (click)="startReject(entry)" [disabled]="isBusy()">Ablehnen</button>
+              </div>
+            }
+          } @else if (entry.status === 'failed') {
+            <div class="actions">
+              <button type="button" class="primary" (click)="retry(entry)" [disabled]="isBusy()">Erneut versuchen</button>
+              <button type="button" (click)="resolve(entry)" [disabled]="isBusy()">Manuell in Kimai erledigt</button>
+            </div>
+          }
+        </article>
+      } @empty {
+        <p>{{ filter() === 'open' ? 'Keine offenen Korrekturanträge.' : 'Keine Korrekturanträge vorhanden.' }}</p>
+      }
+    </div>
+  }
+</section>
