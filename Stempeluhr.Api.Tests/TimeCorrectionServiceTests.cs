@@ -266,6 +266,67 @@ public sealed class TimeCorrectionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Submit_AddShift_OnTopOfAnEntryWithTheSameTimesOnAnotherActivity_IsRejected()
+    {
+        _kimai.Add(At(8), At(11), activity: 6, project: 5);
+
+        var result = await _service.SubmitAsync(Submit("addShift", begin: At(8), end: At(11)));
+
+        Assert.Equal(CorrectionOutcome.Invalid, result.Outcome);
+        Assert.Contains("überschneidet", result.Message);
+        Assert.Empty(_kimai.Writes);
+    }
+
+    [Fact]
+    public async Task Retry_WhenSomethingWasBookedIntoTheRemainingWorkMeanwhile_Fails_InsteadOfDoubleBooking()
+    {
+        var sheet = WorkSheet();
+        var dto = await Submitted(Submit("addPause", sheet.Id, pauseBegin: At(8), pauseEnd: At(8, 30)));
+        _kimai.FailBeforeCreate = 1; // shortened to 08:00, the pause cannot be created
+        Assert.Equal(TimeCorrectionStatus.Failed, (await Approved(dto.Id)).Status);
+        _kimai.Add(At(9), At(10)); // someone books the time the rest work would fill
+        var writes = _kimai.Writes.Count;
+
+        var retried = (await _service.RetryAsync(dto.Id, "Admin")).Value!;
+
+        Assert.Equal(TimeCorrectionStatus.Failed, retried.Status);
+        Assert.Contains("überschneidet", retried.Error);
+        Assert.Equal(writes, _kimai.Writes.Count);
+        Assert.DoesNotContain(_kimai.Sheets, entry => entry.Begin == At(8, 30));
+    }
+
+    [Fact]
+    public async Task Retry_WhenTheBeginChangedMeanwhile_IsASnapshotConflict()
+    {
+        var sheet = WorkSheet();
+        var dto = await Submitted(Submit("addPause", sheet.Id, pauseBegin: At(8), pauseEnd: At(8, 30)));
+        _kimai.FailBeforeCreate = 1;
+        Assert.Equal(TimeCorrectionStatus.Failed, (await Approved(dto.Id)).Status);
+        sheet.Begin = At(7); // not part of the patch: must still be compared with the snapshot
+
+        var retried = (await _service.RetryAsync(dto.Id, "Admin")).Value!;
+
+        Assert.Equal(TimeCorrectionStatus.Failed, retried.Status);
+        Assert.Equal("Eintrag wurde inzwischen geändert", retried.Error);
+        Assert.Single(_kimai.Writes);
+    }
+
+    [Fact]
+    public async Task Approve_ChangeTimes_WhenTheUnpatchedEndChangedToo_IsASnapshotConflict()
+    {
+        var sheet = WorkSheet();
+        var dto = await Submitted(Submit("changeTimes", sheet.Id, begin: At(5, 30)));
+        sheet.Begin = At(5, 30); // looks like the patched state ...
+        sheet.End = At(12);      // ... but the end differs from the snapshot
+
+        var result = await Approved(dto.Id);
+
+        Assert.Equal(TimeCorrectionStatus.Failed, result.Status);
+        Assert.Equal("Eintrag wurde inzwischen geändert", result.Error);
+        Assert.Empty(_kimai.Writes);
+    }
+
+    [Fact]
     public async Task Retry_WhenKimaiCreatedTheEntryButTheAnswerWasLost_DoesNotCreateItTwice()
     {
         var sheet = WorkSheet();

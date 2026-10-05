@@ -24,7 +24,6 @@ public sealed class TimeCorrectionService(
     private const int MaxSourceLength = 64;
     private const int MaxNoteLength = 300;
     private const int MaxErrorLength = 500;
-    private const string AddedShiftDescription = "Nachgetragen (Korrekturantrag)";
     private const string TimeFormat = "yyyy-MM-dd'T'HH:mm";
 
     /// <summary>
@@ -394,7 +393,7 @@ public sealed class TimeCorrectionService(
 
             var surrounding = await ReadSurroundingTimesheetsAsync(settings, employee, request, timeZone, cancellationToken);
             var open = store.List().Where(other => other.IsOpen).ToArray();
-            if (TimeCorrectionValidator.Validate(request, surrounding, open, now, timeZone, settings) is { } error)
+            if (TimeCorrectionValidator.Validate(request, surrounding, open, now, timeZone, settings, employee) is { } error)
             {
                 return CorrectionResult<TimeCorrectionRequest>.Fail(CorrectionOutcome.Invalid, error);
             }
@@ -495,7 +494,7 @@ public sealed class TimeCorrectionService(
 
             var surrounding = await ReadSurroundingTimesheetsAsync(settings, employee, request, timeZone, cancellationToken);
             var open = store.List().Where(other => other.IsOpen).ToArray();
-            if (TimeCorrectionValidator.Validate(request, surrounding, open, _clock.GetUtcNow(), timeZone, settings) is { } error)
+            if (TimeCorrectionValidator.Validate(request, surrounding, open, _clock.GetUtcNow(), timeZone, settings, employee) is { } error)
             {
                 return Fail(request, error);
             }
@@ -511,13 +510,13 @@ public sealed class TimeCorrectionService(
                 if (step.Kind == PlannedStepKind.Patch)
                 {
                     // Schon im Zielzustand (Schritt ausgeführt, Fortschritt aber nicht mehr gespeichert).
-                    if (sheet is not null && !IsPatched(sheet, step))
+                    if (sheet is not null && !IsPatched(sheet, request.Original!, step))
                     {
                         await kimai.UpdateTimesheetTimesAsync(
                             settings, employee, sheet.Id, step.Begin, step.End, cancellationToken);
                     }
                 }
-                else if (ResolveTarget(step, request, settings, employee) is not { } resolved)
+                else if (TimeCorrectionTargets.Resolve(step, request, settings, employee) is not { } resolved)
                 {
                     return Fail(request with { AppliedSteps = applied.ToArray() },
                         "Projekt, Aktivität oder Pausen-Aktivität sind nicht mehr eingerichtet.");
@@ -575,30 +574,16 @@ public sealed class TimeCorrectionService(
             return true;
         }
 
-        return steps.FirstOrDefault(step => step.Kind == PlannedStepKind.Patch) is { } patch && IsPatched(sheet, patch);
+        return steps.FirstOrDefault(step => step.Kind == PlannedStepKind.Patch) is { } patch && IsPatched(sheet, original, patch);
     }
 
-    private static bool IsPatched(KimaiTimesheetDetailDto sheet, PlannedStep patch)
-        => sheet.Begin == (patch.Begin ?? sheet.Begin) && sheet.End == (patch.End ?? sheet.End);
-
-    private static (KimaiTimesheetTarget Target, string? Description)? ResolveTarget(
-        PlannedStep step, TimeCorrectionRequest request, RuntimeSettings settings, EmployeeSettings employee)
-    {
-        if (step.Kind == PlannedStepKind.CreatePause)
-        {
-            return WorkTargetResolver.ResolvePause(settings, employee) is { } pause ? (pause, pause.Description) : null;
-        }
-
-        if (request.Kind == TimeCorrectionKind.AddPause)
-        {
-            // Rest-Arbeit: wie das ursprüngliche Timesheet.
-            var original = request.Original!;
-            return (new KimaiTimesheetTarget(original.ProjectId, original.ActivityId, original.Description ?? "", original.Billable, null, null),
-                original.Description);
-        }
-
-        return WorkTargetResolver.Resolve(settings, employee, request.TaskId) is { } work ? (work, AddedShiftDescription) : null;
-    }
+    /// <summary>
+    /// Erwarteter Zustand nach dem Patch-Schritt: der Snapshot, nur mit den
+    /// gepatchten Feldern ersetzt. Alle anderen Zeitfelder bleiben am Snapshot
+    /// gemessen - sonst ginge ein zwischenzeitlich geänderter Beginn durch.
+    /// </summary>
+    private static bool IsPatched(KimaiTimesheetDetailDto sheet, TimeCorrectionOriginal original, PlannedStep patch)
+        => sheet.Begin == (patch.Begin ?? original.Begin) && sheet.End == (patch.End ?? original.End);
 
     /// <summary>
     /// Gibt es den Eintrag schon (Beginn, Ende, Aktivität)? Dann hat ein
@@ -617,7 +602,7 @@ public sealed class TimeCorrectionService(
             settings, employee,
             LocalNaive(begin - TimeSpan.FromMinutes(1), timeZone), LocalNaive(begin + TimeSpan.FromMinutes(1), timeZone),
             cancellationToken);
-        return entries.Any(entry => entry.Begin == begin && entry.End == step.End && entry.ActivityId == target.ActivityId);
+        return entries.Any(entry => TimeCorrectionTargets.IsCreatedBy(entry, step, target.ActivityId));
     }
 
     // ------------------------------------------------------------ Hilfen

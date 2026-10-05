@@ -23,8 +23,8 @@ public static class TimeCorrectionValidator
     /// <param name="timesheets">
     /// Timesheets des Mitarbeiters rund um den Zeitraum des Antrags. Das
     /// betroffene Timesheet und Einträge, die genau dem entsprechen, was der
-    /// Antrag selbst anlegt (Fortsetzung nach einem Teilfehler), zählen nicht
-    /// als Überlappung.
+    /// Antrag selbst anlegt (gleicher Beginn, gleiches Ende, gleiche Aktivität;
+    /// Fortsetzung nach einem Teilfehler), zählen nicht als Überlappung.
     /// </param>
     /// <param name="openRequests">Offene Anträge; der Antrag selbst wird ignoriert.</param>
     public static string? Validate(
@@ -33,7 +33,8 @@ public static class TimeCorrectionValidator
         IReadOnlyCollection<TimeCorrectionRequest> openRequests,
         DateTimeOffset now,
         TimeZoneInfo timeZone,
-        RuntimeSettings settings)
+        RuntimeSettings settings,
+        EmployeeSettings employee)
     {
         if (request.Comment is { Length: > MaxCommentLength })
         {
@@ -69,7 +70,7 @@ public static class TimeCorrectionValidator
             return "Für diesen Eintrag gibt es schon einen offenen Antrag.";
         }
 
-        return FindOverlap(request, timesheets, openRequests, now, timeZone);
+        return FindOverlap(request, timesheets, openRequests, now, timeZone, settings, employee);
     }
 
     private static string? ValidateAddPause(TimeCorrectionRequest request, RuntimeSettings settings, TimeZoneInfo timeZone)
@@ -233,15 +234,15 @@ public static class TimeCorrectionValidator
     }
 
     /// <summary>
-    /// Zeiträume, die der Antrag neu belegt: die Pause (sie liegt im Eintrag, der
-    /// sonst nur gekürzt wird), die ganze nachgetragene Schicht, der geänderte
-    /// Eintrag. Nur Kürzen (Ende setzen) belegt nichts Neues.
+    /// Zeitraum, den der Antrag neu belegt: Pause samt Rest-Arbeit bis zum alten
+    /// Ende (der Eintrag selbst wird nur gekürzt), die ganze nachgetragene
+    /// Schicht, der geänderte Eintrag. Nur Kürzen (Ende setzen) belegt nichts Neues.
     /// </summary>
     private static (DateTimeOffset Begin, DateTimeOffset End)? ClaimedRange(TimeCorrectionRequest request)
     {
         return request.Kind switch
         {
-            TimeCorrectionKind.AddPause when request.PauseBegin is { } b && request.PauseEnd is { } e => (b, e),
+            TimeCorrectionKind.AddPause when request.PauseBegin is { } b && request.Original is { End: { } oldEnd } => (b, oldEnd),
             TimeCorrectionKind.AddShift when request.Begin is { } b && request.End is { } e => (b, e),
             TimeCorrectionKind.ChangeTimes when request.Original is { End: { } oldEnd } original
                 => (request.Begin ?? original.Begin, request.End ?? oldEnd),
@@ -254,17 +255,23 @@ public static class TimeCorrectionValidator
         IReadOnlyCollection<KimaiTimesheetEntryDto> timesheets,
         IReadOnlyCollection<TimeCorrectionRequest> openRequests,
         DateTimeOffset now,
-        TimeZoneInfo timeZone)
+        TimeZoneInfo timeZone,
+        RuntimeSettings settings,
+        EmployeeSettings employee)
     {
         if (ClaimedRange(request) is not { } claimed)
         {
             return null;
         }
 
+        // Was der Antrag selbst schon angelegt hat, mit denselben Zielkriterien
+        // wie beim Anwenden. Lässt sich ein Schritt nicht auflösen, gilt nichts
+        // als sein Werk.
         var created = TimeCorrectionPlan.Steps(request)
             .Where(step => step.Kind != PlannedStepKind.Patch)
-            .Select(step => (step.Begin, step.End))
-            .ToHashSet();
+            .Select(step => (Step: step, Target: TimeCorrectionTargets.Resolve(step, request, settings, employee)?.Target))
+            .Where(planned => planned.Target is not null)
+            .ToArray();
 
         foreach (var entry in timesheets)
         {
@@ -274,7 +281,8 @@ public static class TimeCorrectionValidator
             }
 
             var entryEnd = entry.End ?? now;
-            if (entryEnd <= entryBegin || created.Contains((entryBegin, entry.End)))
+            if (entryEnd <= entryBegin
+                || created.Any(planned => TimeCorrectionTargets.IsCreatedBy(entry, planned.Step, planned.Target!.ActivityId)))
             {
                 continue;
             }

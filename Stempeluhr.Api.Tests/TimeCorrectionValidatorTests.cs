@@ -22,7 +22,7 @@ public sealed class TimeCorrectionValidatorTests
         IReadOnlyCollection<TimeCorrectionRequest>? open = null,
         RuntimeSettings? settings = null,
         DateTimeOffset? now = null)
-        => TimeCorrectionValidator.Validate(request, timesheets ?? [], open ?? [], now ?? Now, Berlin, settings ?? Configured);
+        => TimeCorrectionValidator.Validate(request, timesheets ?? [], open ?? [], now ?? Now, Berlin, settings ?? Configured, Max());
 
     private static TimeCorrectionRequest AddPause(DateTimeOffset pauseBegin, DateTimeOffset pauseEnd, FakeKimai.Sheet? sheet = null)
         => Request(TimeCorrectionKind.AddPause, sheet ?? Work(10, At(6), At(11)),
@@ -226,6 +226,29 @@ public sealed class TimeCorrectionValidatorTests
 
         // A different entry in that time still is an overlap.
         Assert.Contains("überschneidet", Validate(request, [Entry(22, At(8, 10), At(8, 20))]));
+    }
+
+    [Fact]
+    public void AnEntryWithTheSameTimesButAnotherActivity_IsNotTheRequestsOwnWork()
+    {
+        // Only what the request creates itself (same begin, end AND activity) is exempt.
+        var otherActivity = Entry(11, At(8), At(11), activity: 6);
+        Assert.Contains("überschneidet", Validate(AddShift(At(8), At(11)), [otherActivity]));
+        // The same times on the activity the request books on are its own work (continuation).
+        Assert.Null(Validate(AddShift(At(8), At(11)), [Entry(12, At(8), At(11), WorkActivity)]));
+
+        var pauseOnOtherActivity = Entry(13, At(8), At(8, 30), activity: 6);
+        Assert.Contains("überschneidet", Validate(AddPause(At(8), At(8, 30)), [pauseOnOtherActivity]));
+    }
+
+    [Fact]
+    public void AddPause_ChecksTheRemainingWorkToo_NotOnlyThePause()
+    {
+        // Retry after a partial failure: something was booked into the range the rest work will fill.
+        var booked = Entry(11, At(9), At(10));
+        Assert.Contains("überschneidet", Validate(AddPause(At(8), At(8, 30)), [booked]));
+        // Outside the pause and the rest work (before the pause) it does not matter.
+        Assert.Null(Validate(AddPause(At(8), At(8, 30)), [Entry(12, At(4), At(5, 59))]));
     }
 
     [Fact]

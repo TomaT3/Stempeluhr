@@ -38,6 +38,8 @@ public static class TimeCorrectionPlan
     public const string StepWorkBeforePause = "work1";
     public const string StepWorkAfterPause = "work2";
 
+    public const string AddedShiftDescription = "Nachgetragen (Korrekturantrag)";
+
     public static IReadOnlyList<PlannedStep> Steps(TimeCorrectionRequest request)
     {
         switch (request.Kind)
@@ -73,6 +75,39 @@ public static class TimeCorrectionPlan
                 return [];
         }
     }
+}
+
+/// <summary>Anlege-Schritte: Zielkriterien, an denen ein schon vorhandener Eintrag erkannt wird.</summary>
+public static class TimeCorrectionTargets
+{
+    /// <summary>Projekt/Aktivität und Beschreibung, auf die ein Anlege-Schritt bucht; null, wenn sie nicht (mehr) eingerichtet sind.</summary>
+    public static (KimaiTimesheetTarget Target, string? Description)? Resolve(
+        PlannedStep step, TimeCorrectionRequest request, RuntimeSettings settings, EmployeeSettings employee)
+    {
+        if (step.Kind == PlannedStepKind.CreatePause)
+        {
+            return WorkTargetResolver.ResolvePause(settings, employee) is { } pause ? (pause, pause.Description) : null;
+        }
+
+        if (request.Kind == TimeCorrectionKind.AddPause)
+        {
+            // Rest-Arbeit: wie das ursprüngliche Timesheet.
+            var original = request.Original!;
+            return (new KimaiTimesheetTarget(original.ProjectId, original.ActivityId, original.Description ?? "", original.Billable, null, null),
+                original.Description);
+        }
+
+        return WorkTargetResolver.Resolve(settings, employee, request.TaskId) is { } work
+            ? (work, TimeCorrectionPlan.AddedShiftDescription)
+            : null;
+    }
+
+    /// <summary>
+    /// Ist <paramref name="entry"/> genau das, was <paramref name="step"/> anlegt (Beginn, Ende, Aktivität)?
+    /// Ein bloß zeitgleicher Eintrag auf anderer Aktivität gehört nicht dazu.
+    /// </summary>
+    public static bool IsCreatedBy(KimaiTimesheetEntryDto entry, PlannedStep step, int activityId)
+        => entry.Begin == step.Begin && entry.End == step.End && entry.ActivityId == activityId;
 }
 
 /// <summary>
