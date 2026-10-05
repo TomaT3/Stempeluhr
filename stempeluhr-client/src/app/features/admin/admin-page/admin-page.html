@@ -47,6 +47,7 @@
       <button type="button" (click)="scrollToSection('kimai')">Kimai &amp; Zugang</button>
       <button type="button" (click)="scrollToSection('booking')">Buchungsvorgaben</button>
       <button type="button" (click)="scrollToSection('nfc')">NFC-Kartenleser</button>
+      <button type="button" (click)="scrollToSection('telegram')">Telegram-Freigabe</button>
       <button type="button" (click)="scrollToSection('employees')">Mitarbeiter</button>
     </nav>
     <div class="admin-layout">
@@ -165,6 +166,31 @@
         }
       </section>
 
+      <section class="admin-section" id="telegram">
+        <div class="section-head"><span class="section-number">04</span><div><h2>Telegram-Freigabe</h2><p>Korrekturanträge per Knopf genehmigen oder ablehnen</p></div></div>
+        <div class="form-grid">
+          <label>
+            Korrektur-Chat-ID
+            <input
+              [value]="settings.telegramCorrectionChatId ?? ''"
+              (input)="updateTelegramCorrectionChatId($any($event.target).value)"
+              placeholder="leer = nur Admin-Seite"
+              autocomplete="off"
+              spellcheck="false">
+          </label>
+          <label>
+            Entscheiden dürfen (User-IDs)
+            <input
+              [value]="telegramApproverText(settings)"
+              (input)="updateTelegramApproverUserIds($any($event.target).value)"
+              placeholder="leer = jedes Mitglied des Chats"
+              autocomplete="off"
+              spellcheck="false">
+          </label>
+        </div>
+        <p class="task-admin-hint">Mehrere User-IDs mit Komma trennen. Bot-Token und Stempel-Chat stehen in der settings.json; so findest du die IDs: README, Abschnitt Telegram.</p>
+      </section>
+
       @if (kimaiUsers().length > 0) {
         <section class="admin-section" id="import">
           <h2>Kimai-Mitarbeiter übernehmen</h2>
@@ -181,7 +207,7 @@
       }
 
       <section class="admin-section employee-admin-list" id="employees">
-        <div class="section-head"><span class="section-number">04</span><div><h2>Mitarbeiter <span class="count">{{ settings.employees.length }}</span></h2><p>Zugang, Buchungsregeln und Tätigkeiten pro Person</p></div></div>
+        <div class="section-head"><span class="section-number">05</span><div><h2>Mitarbeiter<span class="count">{{ settings.employees.length }}</span></h2><p>Zugang, Buchungsregeln und Tätigkeiten pro Person</p></div></div>
         <div class="admin-actions">
           <button type="button" (click)="importKimaiUsers()">Aus Kimai laden</button>
           <button type="button" (click)="addEmployee()">Mitarbeiter hinzufügen</button>

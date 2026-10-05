@@ -138,8 +138,13 @@ export class AdminPage implements OnDestroy {
       return;
     }
 
+    if (settings.telegramApproverUserIds !== undefined && this.parseApproverUserIds(this.telegramApproverText(settings)) === null) {
+      this.adminMessage.set('Telegram-User-IDs müssen Zahlen sein, getrennt durch Komma.');
+      return;
+    }
+
     const password = this.adminPassword().trim();
-    const newPassword = ((settings as AdminSettings & { adminPassword?: string }).adminPassword ?? '').trim();
+    const newPassword =((settings as AdminSettings & { adminPassword?: string }).adminPassword ?? '').trim();
     this.adminBusy.set(true);
     this.adminApi.saveSettings(password, this.toUpdatePayload(settings)).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: saved => {
@@ -321,6 +326,20 @@ export class AdminPage implements OnDestroy {
 
   updatePauseActivityId(value: string): void {
     this.updateSettings(settings => ({ ...settings, pauseActivityId: this.toNumber(value) }));
+  }
+
+  updateTelegramCorrectionChatId(value: string): void {
+    this.updateSettings(settings => ({ ...settings, telegramCorrectionChatId: value }));
+  }
+
+  /** Die Eingabe bleibt als Text erhalten, damit „12, “ beim Tippen nicht umgeschrieben wird. */
+  updateTelegramApproverUserIds(value: string): void {
+    this.updateSettings(settings => ({ ...settings, telegramApproverText: value }) as AdminSettings);
+  }
+
+  telegramApproverText(settings: AdminSettings): string {
+    return (settings as AdminSettings & { telegramApproverText?: string }).telegramApproverText
+      ?? (settings.telegramApproverUserIds ?? []).join(', ');
   }
 
   updateEmployee(index: number, patch: Partial<AdminEmployee>): void {
@@ -670,6 +689,11 @@ export class AdminPage implements OnDestroy {
       defaultProjectId: settings.defaultProjectId,
       defaultActivityId: settings.defaultActivityId,
       pauseActivityId: settings.pauseActivityId,
+      // null (nicht geladen) lässt den Wert unverändert, leer löscht ihn.
+      telegramCorrectionChatId: settings.telegramCorrectionChatId ?? null,
+      telegramApproverUserIds: settings.telegramApproverUserIds === undefined
+        ? null
+        : this.parseApproverUserIds(this.telegramApproverText(settings)),
       employees: settings.employees.map(employee => ({
         id: employee.id,
         kimaiUserId: employee.kimaiUserId,
@@ -808,6 +832,15 @@ export class AdminPage implements OnDestroy {
       tasks: [],
       defaultTaskLabel: null,
     };
+  }
+
+  /** Komma-, Semikolon- oder Leerzeichen-getrennte Zahlen; null bei etwas anderem. */
+  private parseApproverUserIds(text: string): number[] | null {
+    const tokens = text.split(/[\s,;]+/).filter(token => token.length > 0);
+    if (!tokens.every(token => /^\d+$/.test(token) && Number.isSafeInteger(Number(token)))) {
+      return null;
+    }
+    return [...new Set(tokens.map(Number))];
   }
 
   toNumber(value: string): number | null {
