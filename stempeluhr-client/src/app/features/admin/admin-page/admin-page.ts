@@ -21,6 +21,7 @@ import { VersionBadge } from '../../../shared/components/version-badge/version-b
 })
 export class AdminPage implements OnDestroy {
   private static readonly NfcTerminalStorageKey = 'stempeluhr.admin.nfcTerminalId';
+  private static readonly SessionExpiredMessage = 'Admin-Passwort ungültig. Bitte neu anmelden.';
 
   private readonly adminApi = inject(AdminApi);
   private readonly destroyRef = inject(DestroyRef);
@@ -134,15 +135,20 @@ export class AdminPage implements OnDestroy {
       return;
     }
 
+    const password = this.adminPassword().trim();
     const newPassword = ((settings as AdminSettings & { adminPassword?: string }).adminPassword ?? '').trim();
     this.adminBusy.set(true);
-    this.adminApi.saveSettings(this.adminPassword(), this.toUpdatePayload(settings)).subscribe({
+    this.adminApi.saveSettings(password, this.toUpdatePayload(settings)).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: saved => {
+        // Das Backend hat das Passwort angenommen - auch nach einer
+        // Neueingabe, weil die alte Sitzung abgelaufen war.
+        this.adminSession.remember(password);
+        this.adminPassword.set(password);
         this.adminSettings.set(this.withEditableTokens(saved));
         this.adminMessage.set('Gespeichert');
         this.adminDirty.set(false);
-        if (newPassword && newPassword !== this.adminPassword()) {
-          this.adoptNewAdminPassword(newPassword);
+        if (newPassword && newPassword !== password) {
+          this.adoptNewAdminPassword(password, newPassword);
           return;
         }
 
@@ -150,7 +156,11 @@ export class AdminPage implements OnDestroy {
         this.loadAdminEmployeeStatuses();
       },
       error: (error: HttpErrorResponse) => {
-        this.adminMessage.set(error.status === 409 || error.status === 400 ? this.conflictMessage(error) : 'Speichern fehlgeschlagen');
+        if (this.forgetRejectedPassword(error, password)) {
+          this.adminMessage.set('Admin-Passwort ungültig. Bitte Passwort eingeben und erneut speichern – die Änderungen bleiben erhalten.');
+        } else {
+          this.adminMessage.set(error.status === 409 || error.status === 400 ? this.conflictMessage(error) : 'Speichern fehlgeschlagen');
+        }
         this.adminBusy.set(false);
       },
     });
@@ -162,15 +172,18 @@ export class AdminPage implements OnDestroy {
       return;
     }
 
+    const password = this.adminPassword();
     this.adminBusy.set(true);
-    this.adminApi.importKimaiUsers(this.adminPassword(), settings.baseUrl).subscribe({
+    this.adminApi.importKimaiUsers(password, settings.baseUrl).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: users => {
         this.kimaiUsers.set(users);
         this.adminMessage.set(`${users.length} Kimai-Mitarbeiter geladen`);
         this.adminBusy.set(false);
       },
-      error: () => {
-        this.adminMessage.set('Kimai-Mitarbeiter konnten nicht geladen werden');
+      error: (error: HttpErrorResponse) => {
+        this.adminMessage.set(this.forgetRejectedPassword(error, password)
+          ? AdminPage.SessionExpiredMessage
+          : 'Kimai-Mitarbeiter konnten nicht geladen werden');
         this.adminBusy.set(false);
       },
     });
@@ -492,9 +505,15 @@ export class AdminPage implements OnDestroy {
    * Konfiguration (Admin__Password) gesetztes Passwort hat beim Backend
    * Vorrang - dann bleibt das bisherige gültig und die Sitzung unverändert.
    */
-  private adoptNewAdminPassword(newPassword: string): void {
-    this.adminApi.getEmployeeStatuses(newPassword).subscribe({
+  private adoptNewAdminPassword(savedWith: string, newPassword: string): void {
+    this.adminApi.getEmployeeStatuses(newPassword).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: statuses => {
+        // Nach einer Abmeldung darf die Prüfung die Sitzung nicht neu anlegen.
+        if (this.adminSession.password() !== savedWith) {
+          this.adminBusy.set(false);
+          return;
+        }
+
         this.adminSession.remember(newPassword);
         this.adminPassword.set(newPassword);
         this.adminStatuses.set(statuses);
@@ -518,10 +537,31 @@ export class AdminPage implements OnDestroy {
   }
 
   private loadAdminEmployeeStatuses(): void {
-    this.adminApi.getEmployeeStatuses(this.adminPassword()).subscribe({
+    const password = this.adminPassword();
+    this.adminApi.getEmployeeStatuses(password).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: statuses => this.adminStatuses.set(statuses),
-      error: () => this.adminStatuses.set([]),
+      error: (error: HttpErrorResponse) => {
+        this.adminStatuses.set([]);
+        if (this.forgetRejectedPassword(error, password)) {
+          this.adminMessage.set(AdminPage.SessionExpiredMessage);
+        }
+      },
     });
+  }
+
+  /**
+   * Ein 401 für die gerade verwendeten Zugangsdaten beendet die Sitzung, damit
+   * das Anmeldefeld wieder erscheint. Die bewusste Probe eines neuen
+   * Passworts (adoptNewAdminPassword) läuft nicht hierüber.
+   */
+  private forgetRejectedPassword(error: HttpErrorResponse, usedPassword: string): boolean {
+    if (error.status !== 401 || this.adminPassword() !== usedPassword) {
+      return false;
+    }
+
+    this.adminSession.clear();
+    this.adminPassword.set('');
+    return true;
   }
 
   private loadKimaiActivities(showMessage: boolean): void {
@@ -534,7 +574,8 @@ export class AdminPage implements OnDestroy {
       this.adminBusy.set(true);
     }
 
-    this.adminApi.importKimaiActivities(this.adminPassword(), settings.baseUrl).subscribe({
+    const password = this.adminPassword();
+    this.adminApi.importKimaiActivities(password, settings.baseUrl).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: activities => {
         this.kimaiActivities.set(activities);
         if (showMessage) {
@@ -542,9 +583,13 @@ export class AdminPage implements OnDestroy {
           this.adminBusy.set(false);
         }
       },
-      error: () => {
-        if (showMessage) {
+      error: (error: HttpErrorResponse) => {
+        if (this.forgetRejectedPassword(error, password)) {
+          this.adminMessage.set(AdminPage.SessionExpiredMessage);
+        } else if (showMessage) {
           this.adminMessage.set('Kimai-Aktivitaeten konnten nicht geladen werden');
+        }
+        if (showMessage) {
           this.adminBusy.set(false);
         }
       },
@@ -561,7 +606,8 @@ export class AdminPage implements OnDestroy {
       this.adminBusy.set(true);
     }
 
-    this.adminApi.importKimaiProjects(this.adminPassword(), settings.baseUrl).subscribe({
+    const password = this.adminPassword();
+    this.adminApi.importKimaiProjects(password, settings.baseUrl).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: projects => {
         this.kimaiProjects.set(projects);
         if (showMessage) {
@@ -569,9 +615,13 @@ export class AdminPage implements OnDestroy {
           this.adminBusy.set(false);
         }
       },
-      error: () => {
-        if (showMessage) {
+      error: (error: HttpErrorResponse) => {
+        if (this.forgetRejectedPassword(error, password)) {
+          this.adminMessage.set(AdminPage.SessionExpiredMessage);
+        } else if (showMessage) {
           this.adminMessage.set('Kimai-Projekte konnten nicht geladen werden');
+        }
+        if (showMessage) {
           this.adminBusy.set(false);
         }
       },

@@ -110,6 +110,68 @@ describe('AdminPage', () => {
     fixture.destroy();
   });
 
+  it('drops the password check when the page is left before it answers', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'old-password');
+    const { fixture, component, http } = await createPage();
+    flushLogin(http, 'old-password');
+
+    component.updateAdminPassword('new-password');
+    component.saveAdminSettings();
+    http.expectOne('/api/admin/settings').flush(emptySettings);
+    const probe = http.expectOne('/api/admin/employee-statuses');
+
+    fixture.destroy();
+    TestBed.inject(AdminSession).clear();
+
+    expect(probe.cancelled).toBe(true);
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+  });
+
+  it('ends the session when the old password is refused after a failed password check', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'old-password');
+    const { fixture, component, http } = await createPage();
+    flushLogin(http, 'old-password');
+
+    component.updateAdminPassword('new-password');
+    component.saveAdminSettings();
+    http.expectOne('/api/admin/settings').flush(emptySettings);
+    http.expectOne('/api/admin/employee-statuses').error(new ProgressEvent('error'));
+    http.expectOne('/api/admin/employee-statuses').flush(null, { status: 401, statusText: 'Unauthorized' });
+    fixture.detectChanges();
+
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+    expect(component.adminPassword()).toBe('');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.admin-login input[type="password"]')).not.toBeNull();
+    fixture.destroy();
+  });
+
+  it('keeps unsaved edits when saving is refused and logs in again by saving with a new entry', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'old-password');
+    const { fixture, component, http } = await createPage();
+    flushLogin(http, 'old-password');
+
+    component.updateBaseUrl('https://kimai.changed.test');
+    component.saveAdminSettings();
+    http.expectOne('/api/admin/settings').flush(null, { status: 401, statusText: 'Unauthorized' });
+    fixture.detectChanges();
+
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+    expect(component.adminDirty()).toBe(true);
+    expect(component.adminSettings()?.baseUrl).toBe('https://kimai.changed.test');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.admin-login input[type="password"]')).not.toBeNull();
+
+    component.adminPassword.set('current-password');
+    component.saveAdminSettings();
+    const save = http.expectOne('/api/admin/settings');
+    expect(save.request.headers.get('X-Admin-Password')).toBe('current-password');
+    save.flush({ ...emptySettings, baseUrl: 'https://kimai.changed.test' });
+    http.expectOne('/api/admin/employee-statuses').flush([]);
+
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBe('current-password');
+    expect(component.adminDirty()).toBe(false);
+    fixture.destroy();
+  });
+
   it('shows saved selections only after settings and Kimai lists have loaded', async () => {
     localStorage.removeItem('stempeluhr.admin.nfcTerminalId');
     await TestBed.configureTestingModule({
