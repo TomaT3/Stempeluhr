@@ -1,0 +1,39 @@
+:host {
+  display: block;
+  width: min(680px, 100%);
+}
+
+/* Am Terminal füllt der Knopf die Spalte, /clock begrenzt die Breite wie die anderen Knöpfe. */
+:host(.layout-terminal) {
+  width: auto;
+}
+
+button {
+  width: 100%;
+  min-height: 56px;
+  padding: 6px 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+  font: inherit;
+  font-size: clamp(0.9rem, 2vw, 1.1rem);
+  font-weight: 850;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+:host(.layout-terminal) button {
+  min-height: 44px;
+}
+
+button.forgot-hint {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-surface);
+  color: var(--color-danger-text);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

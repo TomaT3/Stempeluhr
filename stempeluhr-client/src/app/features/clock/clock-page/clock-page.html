@@ -62,6 +62,19 @@
 
     @if (!isUnlocked()) {
       <p class="message">Bitte erneut mit PIN anmelden.</p>
+    } @else if (correctionOpen()) {
+      <!-- Der Ablauf ersetzt Status und Stempelknöpfe; Name und Zurück bleiben stehen. -->
+      @if (correctionAuth(); as auth) {
+        <app-correction-flow
+          layout="clock"
+          [auth]="auth"
+          [source]="correctionSource"
+          [tasks]="employeeTasks()"
+          [defaultTaskLabel]="defaultTaskLabel()"
+          [start]="correctionStart()"
+          (closed)="onCorrectionClosed()"
+          (timedOut)="onCorrectionTimedOut()" />
+      }
     } @else if (clockState.status(); as clockStatus) {
       <app-status-badge
         [text]="clockStatus.stateText"
@@ -96,6 +109,17 @@
           </div>
         }
       </dl>
+
+      @if (forgotToStop()) {
+        <!-- Seit über 12 h eingestempelt: stempelt normal aus und öffnet
+             danach "Ausstempeln nachtragen" für genau diesen Abschnitt. -->
+        <app-correction-entry
+          layout="clock"
+          variant="hint"
+          label="Vergessen auszustempeln?"
+          [disabled]="actionsBlocked()"
+          (pressed)="stopAndCorrect()" />
+      }
 
       @if (startChoiceVisible()) {
         <ng-container [ngTemplateOutlet]="startChoice" />
@@ -196,6 +220,15 @@
           </button>
         </div>
       }
+    }
+
+    @if (isUnlocked() && !correctionOpen()) {
+      <!-- Korrektur beantragen: nur online (keine Queue). -->
+      <app-correction-entry
+        layout="clock"
+        [label]="correctionLabel()"
+        [disabled]="correctionBlocked()"
+        (pressed)="openCorrection()" />
     }
 
     @if (message()) {

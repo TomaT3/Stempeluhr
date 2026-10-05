@@ -4,7 +4,7 @@ import { SwUpdate } from '@angular/service-worker';
 import { Observable, Subscription, finalize, map, timeout } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
-import { ClockAction, ClockStatus, Employee, EmployeeTask, HoursOverview, isOnDefaultTask } from '../../core/models/kiosk.models';
+import { ClockAction, ClockStatus, CorrectionAuth, Employee, EmployeeTask, HoursOverview, isOnDefaultTask } from '../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../core/models/offline.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
@@ -26,6 +26,7 @@ import {
   withOfflineLabel,
 } from '../../core/services/offline-cache';
 import { OfflineQueueService } from '../../core/services/offline-queue';
+import type { CorrectionStart } from './correction-flow/correction-flow';
 
 /** Wartezeit zwischen Versions-Hinweis und Auto-Reload (Mitarbeiter kann abbrechen). */
 const VERSION_RELOAD_DELAY_MS = 3000;
@@ -50,6 +51,8 @@ const CHOICE_TAP_GUARD_MS = 400;
 const RESET_MS = 2200;
 /** Dasselbe, wenn die Antwort eine Warnung trägt (z. B. abgelehnter Wechsel, Issue #56). */
 const WARNING_RESET_MS = 6000;
+/** Läuft ein Abschnitt länger, bietet die Statuszeile „Vergessen auszustempeln?“ an. */
+const FORGOT_STOP_AFTER_SECONDS = 12 * 3600;
 
 /** A stamp as captured at button press (see sendClockAction). */
 interface PendingStamp {
@@ -180,6 +183,30 @@ export abstract class ClockWorkflow implements OnDestroy {
     return this.clockState.status() !== null || this.startChoiceOpen();
   });
 
+  /**
+   * Korrekturablauf (Epic #94) offen. Gehört zur Sitzung wie die Auswahlen:
+   * jeder Identitätswechsel, back() und jede Aktion schließt ihn, und mit
+   * der Komponente enden ihre laufenden Anfragen - eine verspätete Antwort
+   * erreicht nie einen anderen Mitarbeiter.
+   */
+  readonly correctionOpen = signal(false);
+  /** Anmeldung des Ablaufs, beim Öffnen eingefroren wie bei einem Stempel. */
+  readonly correctionAuth = signal<CorrectionAuth | null>(null);
+  /** Gesetzt, wenn der Ablauf gleich bei „Ausstempeln nachtragen“ für ein Timesheet startet. */
+  readonly correctionStart = signal<CorrectionStart | null>(null);
+  /**
+   * Korrekturen gibt es nur online (keine Queue), und nur ohne laufende
+   * Aktion oder wartende Stempel: sonst fehlten dem Antrag deren Zeiten.
+   */
+  readonly correctionBlocked = computed(() => this.isOffline() || this.actionsBlocked());
+  readonly correctionLabel = computed(() => (this.isOffline() ? 'Korrektur nur online' : 'Korrektur'));
+  /** Eingestempelt seit über 12 h: vermutlich das Ausstempeln vergessen. */
+  readonly forgotToStop = computed(() => {
+    const status = this.clockState.status();
+    return this.isUnlocked() && status?.state === 'working' && status.activeTimesheetId !== null
+      && this.clockState.elapsed() >= FORGOT_STOP_AFTER_SECONDS;
+  });
+
   private resetTimer: number | null = null;
   /** Erreichbarkeits-Poll des Kiosks (nur mit terminalId). */
   private connectivityPollTimer: number | null = null;
@@ -230,6 +257,8 @@ export abstract class ClockWorkflow implements OnDestroy {
    */
   private pendingResetOnRecovery = false;
   private readonly terminalId = this.readTerminalId();
+  /** `source` der Korrekturanträge: Terminal-ID oder `clock`. */
+  readonly correctionSource = this.terminalId ?? 'clock';
   private catalogTimer: number | null = null;
   private catalogRequest: Subscription | null = null;
   /** Auto-Reload: Timer-Handle für den verzögerten Reload bei Server-Update. */
@@ -406,9 +435,13 @@ export abstract class ClockWorkflow implements OnDestroy {
     }, VERSION_RETRY_MS);
   }
 
-  /** Kein Mitarbeiter angemeldet, keine laufende Aktion, keine PIN-Eingabe. */
+  /**
+   * Kein Mitarbeiter angemeldet, keine laufende Aktion, keine PIN-Eingabe -
+   * und kein Korrekturablauf (er gehört zu einer Sitzung, zählt aber
+   * ausdrücklich nicht als Ruhezustand).
+   */
   private isIdle(): boolean {
-    return !this.selectedEmployee() && !this.isBusy() && this.pin().length === 0;
+    return !this.selectedEmployee() && !this.isBusy() && this.pin().length === 0 && !this.correctionOpen();
   }
 
   /** True im echten Release-Build; getrennt gehalten, damit Tests den Guard überschreiben können. */
@@ -577,6 +610,62 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
   }
 
+  /**
+   * Öffnet den Korrekturablauf in der Sitzung. Mit `start` gleich bei
+   * „Ausstempeln nachtragen“ für ein Timesheet („Vergessen auszustempeln?“).
+   */
+  openCorrection(start: CorrectionStart | null = null): void {
+    if (!this.selectedEmployee() || !this.isUnlocked() || this.correctionBlocked()) {
+      return;
+    }
+    // Ein Reset nach einer Aktion (2,2 s) würde den Ablauf unter dem Finger schließen.
+    if (this.resetTimer) {
+      window.clearTimeout(this.resetTimer);
+      this.resetTimer = null;
+    }
+    this.taskPickerOpen.set(false);
+    this.startChoiceOpen.set(false);
+    this.correctionAuth.set({
+      employeeId: this.selectedEmployee()!.id,
+      pin: this.pin(),
+      nfcCardId: this.nfcCardId,
+    });
+    this.correctionStart.set(start);
+    this.message.set('');
+    this.correctionOpen.set(true);
+  }
+
+  /** Zurück in die Sitzung; der Mitarbeiter bleibt angemeldet. */
+  closeCorrection(): void {
+    this.correctionOpen.set(false);
+    this.correctionAuth.set(null);
+    this.correctionStart.set(null);
+  }
+
+  /** „Fertig“ oder „Zurück“ im Ablauf: zurück in die Sitzung, ohne den Hinweis davor („bitte Ende eintragen“). */
+  onCorrectionClosed(): void {
+    this.closeCorrection();
+    this.message.set('');
+  }
+
+  /** 2 min ohne Tipp im Korrekturablauf: zurück in den Ruhezustand. */
+  onCorrectionTimedOut(): void {
+    this.back();
+  }
+
+  /**
+   * „Vergessen auszustempeln?“: stempelt über den normalen Stop-Pfad aus
+   * (inklusive Offline-Queue) und öffnet nur nach einem online gelungenen
+   * Stop „Ausstempeln nachtragen“ für genau dieses Timesheet.
+   */
+  stopAndCorrect(): void {
+    const timesheetId = this.clockState.status()?.activeTimesheetId ?? null;
+    if (timesheetId === null) {
+      return;
+    }
+    this.sendClockAction('stop', null, timesheetId);
+  }
+
   /** Zurück von der Einstempel-Auswahl zu Ein-/Ausstempeln (unbekannter Status). */
   closeStartChoice(): void {
     this.startChoiceOpen.set(false);
@@ -635,6 +724,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.replayStatusRequest = null;
     this.taskPickerOpen.set(false);
     this.startChoiceOpen.set(false);
+    this.closeCorrection();
     // Die Auswahl direkt nach einem Login bucht ohne Verzögerung.
     this.choiceTapGuardUntil = 0;
     this.sessionGeneration++;
@@ -1069,7 +1159,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
   }
 
-  private sendClockAction(action: ClockAction, taskId: string | null = null): void {
+  private sendClockAction(action: ClockAction, taskId: string | null = null, correctTimesheetId: number | null = null): void {
     if (this.actionsBlocked()) return;
     // Zweiter Tipp kurz nach dem Öffnen einer Auswahl: nicht buchen, die
     // Auswahl bleibt offen. Gilt für jede Aktion - kommt währenddessen der
@@ -1079,6 +1169,9 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
     this.isBusy.set(true);
     this.resetSessionChoices();
+    // Nach dem Stop „Vergessen auszustempeln?“ gehört das Ergebnis nur der
+    // Sitzung, die ihn ausgelöst hat.
+    const generation = this.sessionGeneration;
     // Capture the stamp time AND the acting identity SYNCHRONOUSLY at button
     // press: a request reports its failure only after up to its timeout - and
     // in between a new scan (handleLocalScan), a back() or another unlock may
@@ -1118,6 +1211,14 @@ export abstract class ClockWorkflow implements OnDestroy {
         // länger stehen lassen, sonst geht sie im Weggehen unter.
         this.audioFeedback.playBeeps(status.warning ? 2 : 1);
         this.loadHoursOverview(stamp.pin);
+        if (correctTimesheetId !== null && !status.warning && generation === this.sessionGeneration
+          && this.selectedEmployee()?.id === stamp.employeeId) {
+          // Online ausgestempelt: gleich das tatsächliche Ende eintragen,
+          // statt in den Ruhezustand zu gehen.
+          this.openCorrection({ kind: 'setEnd', timesheetId: correctTimesheetId });
+          this.message.set('Ausgestempelt – bitte das tatsächliche Ende eintragen.');
+          return;
+        }
         this.scheduleReset(status.warning ? WARNING_RESET_MS : RESET_MS);
       },
       error: (err) => {

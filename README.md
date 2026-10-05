@@ -209,8 +209,8 @@ Mitarbeiter vergessen, die Pause oder das Ausstempeln zu stempeln. Kimai-Zugang
 bekommen sie bewusst nicht; stattdessen beantragen sie die Korrektur, und erst
 nach der Freigabe durch Chef oder Admin schreibt die API sie in Kimai. Entschieden
 wird auf der Admin-Seite `/admin/corrections` oder per Knopf in einem eigenen
-Telegram-Chat ([Einrichtung](#korrekturanträge-per-telegram-freigeben)); Kiosk
-und `/clock` (#98) folgen in einem eigenen Schritt (Epic #94).
+Telegram-Chat ([Einrichtung](#korrekturanträge-per-telegram-freigeben));
+beantragt wird am Kiosk und auf `/clock`.
 
 **Ablauf:** Der Mitarbeiter wählt in der Liste der letzten 31 Tage einen Eintrag
 (nach Schichten gruppiert, eine Nachtschicht über Mitternacht bleibt eine
@@ -293,6 +293,31 @@ ausgehen. Korrigierte Pausen-Einträge (`setEnd`, `changeTimes`) stehen als
 Liste neu und zeigt das Ergebnis; während eine Aktion läuft, sind die Knöpfe
 gesperrt. Die Seite ist für das Handy ausgelegt, damit der Chef unterwegs
 freigeben kann.
+
+**Kiosk und `/clock`:** Nach der Anmeldung (PIN **oder** Karte) steht in der
+Sitzung der Knopf „Korrektur“. Er ist offline gesperrt („Korrektur nur online“),
+ebenso solange Stempel des Mitarbeiters auf die Übertragung warten. Der Ablauf
+(`features/clock/correction-flow`) ersetzt am Terminal die Stempelknöpfe und die
+Stundenkarte in ihrer Spalte, auf `/clock` Status und Stempelknöpfe; Name und
+Abmelden bleiben stehen. Er läuft in Schritten: Art („Pause nachtragen“,
+„Ausstempeln nachtragen“, „Schicht nachtragen“, „Zeiten ändern“, „Meine Anträge“),
+Eintrag (die Schichten der API, neueste zuerst, in einer intern scrollenden Liste;
+bei Pause nur gestoppte Arbeit, sonst jeder gestoppte Eintrag, nie einer mit
+offenem Antrag), Zeiten mit dem Stepper `shared/components/time-stepper` (Tag ±,
+Stunde ±, Minute ±5 und ±1, vorbelegt, außerhalb der Regeln gesperrt),
+Zusammenfassung Vorher → Nachher und Absenden. Nur `/clock` hat ein
+Kommentarfeld (höchstens 300 Zeichen); das Terminal hat keine Tastatur. Bei einer
+400-Antwort bleibt der Mitarbeiter in der Zusammenfassung und sieht die
+Servermeldung. „Meine Anträge“ zeigt Status (bei Ablehnung mit Grund) und
+Vorher → Nachher und bietet für offene Anträge „Zurückziehen“. Läuft ein Abschnitt
+länger als 12 h, zeigt die Statuszeile „Vergessen auszustempeln?“: Der Knopf
+stempelt über den normalen Stop-Pfad (`/api/kiosk/clock`, mit Offline-Queue) aus
+und öffnet nur nach einem online gelungenen Stop „Ausstempeln nachtragen“ für genau
+dieses Timesheet. Die Komponente lebt so lange wie die Sitzung: Neue Anmeldung,
+X und Abbruch zerstören sie samt laufender Anfragen, eine verspätete Antwort
+erreicht keinen anderen Mitarbeiter. Nach 2 min ohne Tipp geht der Kiosk in den
+Ruhezustand; der Auto-Reload bei neuer Version wartet, bis niemand mehr im Ablauf
+ist.
 
 ### Telegram-Benachrichtigung (optional)
 

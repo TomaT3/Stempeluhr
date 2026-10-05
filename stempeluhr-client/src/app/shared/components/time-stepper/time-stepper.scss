@@ -1,0 +1,72 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.stepper {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px;
+}
+
+.unit {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.unit-name {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.value {
+  display: grid;
+  place-items: center;
+  min-height: 44px;
+  color: var(--color-text);
+  font-size: clamp(1.25rem, 3vw, 1.7rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+}
+
+/* „Mo 05.10.“ ist der längste Wert und bekommt die breiteste Spalte. */
+.unit-day .value {
+  font-size: clamp(0.95rem, 2.2vw, 1.15rem);
+}
+
+.step-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+/* 48 px hoch: auch mit nassen oder behandschuhten Fingern zu treffen. */
+.step {
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 4px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 1.3rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.step:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

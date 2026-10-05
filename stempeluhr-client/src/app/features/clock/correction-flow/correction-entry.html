@@ -1,0 +1,8 @@
+<button
+  type="button"
+  [class.correction-entry]="variant() === 'entry'"
+  [class.forgot-hint]="variant() === 'hint'"
+  [disabled]="disabled()"
+  (click)="pressed.emit()">
+  {{ label() }}
+</button>

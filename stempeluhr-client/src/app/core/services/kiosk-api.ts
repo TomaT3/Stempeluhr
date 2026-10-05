@@ -2,7 +2,18 @@ import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { timeout } from 'rxjs';
 
-import { ClockAction, ClockStatus, HealthStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent } from '../models/kiosk.models';
+import {
+  ClockAction,
+  ClockStatus,
+  CorrectionAuth,
+  CorrectionTimesheets,
+  HealthStatus,
+  HoursOverview,
+  KioskCorrection,
+  KioskEmployeeSession,
+  NfcClockEvent,
+  SubmitCorrection,
+} from '../models/kiosk.models';
 
 /** Timeout für den read-only identify-Call (Kiosk bleibt sonst stumm bei hängendem Backend). */
 export const IDENTIFY_TIMEOUT_MS = 10_000;
@@ -25,6 +36,11 @@ export const REQUEST_TIMEOUT_MS = 8_000;
  */
 export function isTransientHttpStatus(status: number): boolean {
   return status === 0 || status >= 500 || status === 408 || status === 429;
+}
+
+/** Nur die Anmeldefelder: die Karten-Session schickt `pin` leer. */
+function authBody(auth: CorrectionAuth): CorrectionAuth {
+  return { employeeId: auth.employeeId, pin: auth.pin, nfcCardId: auth.nfcCardId };
 }
 
 @Injectable({
@@ -81,6 +97,34 @@ export class KioskApi {
 
   hoursOverview(pin: string) {
     return this.http.post<HoursOverview>('/api/kiosk/hours', { pin }).pipe(timeout(REQUEST_TIMEOUT_MS));
+  }
+
+  /**
+   * Korrekturanträge (nur online, keine Offline-Queue). Alle vier Aufrufe
+   * melden mit Mitarbeiter-ID plus PIN oder Karten-ID an wie `clock`; die
+   * Zeiten sind lokale Zeit `yyyy-MM-ddTHH:mm` in der Kimai-Zeitzone. Fehler
+   * eines unzulässigen Antrags kommen als 400 `{ message }` auf Deutsch.
+   */
+  correctionTimesheets(auth: CorrectionAuth) {
+    return this.http
+      .post<CorrectionTimesheets>('/api/kiosk/corrections/timesheets', authBody(auth))
+      .pipe(timeout(REQUEST_TIMEOUT_MS));
+  }
+
+  submitCorrection(correction: SubmitCorrection) {
+    return this.http.post<KioskCorrection>('/api/kiosk/corrections', correction).pipe(timeout(REQUEST_TIMEOUT_MS));
+  }
+
+  /** Eigene Anträge der letzten 31 Tage. */
+  myCorrections(auth: CorrectionAuth) {
+    return this.http.post<KioskCorrection[]>('/api/kiosk/corrections/mine', authBody(auth)).pipe(timeout(REQUEST_TIMEOUT_MS));
+  }
+
+  /** Zieht einen eigenen offenen Antrag zurück (404 fremd/unbekannt, 409 schon entschieden). */
+  withdrawCorrection(auth: CorrectionAuth, id: string) {
+    return this.http
+      .post<KioskCorrection>(`/api/kiosk/corrections/${encodeURIComponent(id)}/withdraw`, authBody(auth))
+      .pipe(timeout(REQUEST_TIMEOUT_MS));
   }
 
   /** Server-Version (aus der AssemblyInformationalVersion, im Container = Release-Tag). */
