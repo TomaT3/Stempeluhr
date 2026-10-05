@@ -125,3 +125,50 @@ export interface AdminRejectedOfflineEvent {
   message: string;
   resolvedAt: string | null;
 }
+
+export type TimeCorrectionKind = 'addPause' | 'setEnd' | 'addShift' | 'changeTimes';
+
+export type TimeCorrectionStatus = 'pending' | 'applied' | 'rejected' | 'failed' | 'withdrawn' | 'resolvedManually';
+
+/**
+ * Korrekturantrag. Zeiten sind lokale Zeit (`yyyy-MM-ddTHH:mm`) in der
+ * Kimai-Zeitzone des Mitarbeiters (`timeZone`), `createdAt`/`decidedAt`
+ * dagegen absolute Zeitpunkte.
+ */
+export interface AdminTimeCorrection {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  kind: TimeCorrectionKind;
+  status: TimeCorrectionStatus;
+  /** Terminal-ID oder `clock`. */
+  source: string;
+  createdAt: string;
+  comment: string | null;
+  timeZone: string;
+  timesheetId: number | null;
+  begin: string | null;
+  end: string | null;
+  pauseBegin: string | null;
+  pauseEnd: string | null;
+  taskId: string | null;
+  taskLabel: string | null;
+  /**
+   * Timesheet zum Zeitpunkt des Antrags (fehlt bei `addShift`). `setEnd` und
+   * `changeTimes` gibt es auch für Pausen-Einträge.
+   */
+  original: {
+    begin: string;
+    end: string | null;
+    description: string | null;
+    kind: 'work' | 'pause';
+    /** „Pause“, „Arbeit“ oder die Bezeichnung der Tätigkeit. */
+    label: string;
+  } | null;
+  decidedAt: string | null;
+  decidedBy: string | null;
+  decisionNote: string | null;
+  /** Kimai-Meldung eines gescheiterten Antrags. */
+  error: string | null;
+  appliedSteps: string[];
+}

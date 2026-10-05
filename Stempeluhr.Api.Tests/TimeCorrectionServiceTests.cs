@@ -83,12 +83,27 @@ public sealed class TimeCorrectionServiceTests : IDisposable
         Assert.Equal("vergessen", dto.Comment);
         Assert.Equal("terminal-1", dto.Source);
         Assert.Equal("2026-10-05T06:00", dto.Original!.Begin);
+        Assert.Equal("work", dto.Original.Kind);
         var stored = _store.Find(dto.Id)!;
         Assert.Equal(At(8), stored.PauseBegin);
         Assert.Equal(sheet.Id, stored.TimesheetId);
         Assert.Equal(new TimeCorrectionOriginal(At(6), At(11), WorkActivity, WorkProject, "Stempeluhr", true), stored.Original);
         Assert.Empty(_kimai.Writes);
         Assert.Equal(["submitted:Pending"], _notifier.Events);
+    }
+
+    [Fact]
+    public async Task Submit_ChangeTimesOfAPause_MarksTheOriginalAsPause()
+    {
+        // setEnd/changeTimes sind auch für Pausen-Einträge erlaubt: Die Admin-Seite
+        // darf eine längere Pause nicht als längere Arbeit anzeigen.
+        var pause = _kimai.Add(At(8), At(8, 30), PauseActivity);
+
+        var dto = await Submitted(Submit("changeTimes", pause.Id, begin: At(8), end: At(8, 35)));
+
+        Assert.Equal("pause", dto.Original!.Kind);
+        Assert.Equal("Pause", dto.Original.Label);
+        Assert.Equal("pause", _service.List(openOnly: true).Single().Original!.Kind);
     }
 
     [Fact]

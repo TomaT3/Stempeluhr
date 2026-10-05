@@ -6,6 +6,7 @@ import {
   AdminRejectedOfflineEvent,
   AdminSettings,
   AdminTerminalStatus,
+  AdminTimeCorrection,
   KimaiActivity,
   KimaiProject,
   KimaiUser,
@@ -64,6 +65,32 @@ export class AdminApi {
 
   resolveRejectedOfflineEvent(adminPassword: string, eventId: string) {
     return this.http.put<void>(`/api/admin/rejected-offline-events/${encodeURIComponent(eventId)}/resolved`, {},
+      { headers: this.headers(adminPassword) });
+  }
+
+  /** `open`: Status pending und failed; `all`: auch die abgeschlossenen. */
+  getCorrections(adminPassword: string, status: 'open' | 'all') {
+    return this.http.get<AdminTimeCorrection[]>('/api/admin/corrections',
+      { headers: this.headers(adminPassword), params: { status } });
+  }
+
+  approveCorrection(adminPassword: string, id: string) {
+    return this.http.post<AdminTimeCorrection>(`/api/admin/corrections/${encodeURIComponent(id)}/approve`, {},
+      { headers: this.headers(adminPassword) });
+  }
+
+  rejectCorrection(adminPassword: string, id: string, note: string) {
+    return this.http.post<AdminTimeCorrection>(`/api/admin/corrections/${encodeURIComponent(id)}/reject`,
+      { note: note || null }, { headers: this.headers(adminPassword) });
+  }
+
+  retryCorrection(adminPassword: string, id: string) {
+    return this.http.post<AdminTimeCorrection>(`/api/admin/corrections/${encodeURIComponent(id)}/retry`, {},
+      { headers: this.headers(adminPassword) });
+  }
+
+  resolveCorrection(adminPassword: string, id: string) {
+    return this.http.put<AdminTimeCorrection>(`/api/admin/corrections/${encodeURIComponent(id)}/resolved`, {},
       { headers: this.headers(adminPassword) });
   }
 

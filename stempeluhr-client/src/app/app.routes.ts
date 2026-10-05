@@ -1,6 +1,7 @@
 import { Routes } from '@angular/router';
 
 import { AdminPage } from './features/admin/admin-page/admin-page';
+import { CorrectionsPage } from './features/admin/corrections-page/corrections-page';
 import { EmployeeStatusPage } from './features/admin/employee-status-page/employee-status-page';
 import { RejectedOfflinePage } from './features/admin/rejected-offline-page/rejected-offline-page';
 import { TerminalStatusPage } from './features/admin/terminal-status-page/terminal-status-page';
@@ -15,5 +16,6 @@ export const routes: Routes = [
   { path: 'admin/status', component: EmployeeStatusPage, title: 'Mitarbeiterstatus' },
   { path: 'admin/terminals', component: TerminalStatusPage, title: 'Terminalstatus' },
   { path: 'admin/offline-rejections', component: RejectedOfflinePage, title: 'Abgelehnte Offline-Stempel' },
+  { path: 'admin/corrections', component: CorrectionsPage, title: 'Korrekturanträge' },
   { path: '**', redirectTo: 'clock' },
 ];

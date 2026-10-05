@@ -41,6 +41,8 @@ export class AdminPage implements OnDestroy {
   readonly adminBusy = signal(false);
   readonly adminDirty = signal(false);
   readonly initialLoading = signal(false);
+  /** Offene Korrekturanträge (pending und failed) für den Quick-Link. */
+  readonly openCorrections = signal(0);
 
   private nfcPollTimer: number | null = null;
 
@@ -98,6 +100,7 @@ export class AdminPage implements OnDestroy {
         this.adminBusy.set(false);
         this.initialLoading.set(false);
         this.loadAdminEmployeeStatuses();
+        this.loadOpenCorrections();
         this.startNfcPolling();
       },
       error: (error: HttpErrorResponse) => {
@@ -487,6 +490,7 @@ export class AdminPage implements OnDestroy {
     this.adminPassword.set('');
     this.adminSettings.set(null);
     this.adminStatuses.set([]);
+    this.openCorrections.set(0);
     this.kimaiProjects.set([]);
     this.kimaiActivities.set([]);
     this.kimaiUsers.set([]);
@@ -534,6 +538,14 @@ export class AdminPage implements OnDestroy {
       window.clearInterval(this.nfcPollTimer);
       this.nfcPollTimer = null;
     }
+  }
+
+  private loadOpenCorrections(): void {
+    // Nur ein Hinweis: Fehler blenden die Zahl aus, die Sitzung behandelt loadAdminEmployeeStatuses.
+    this.adminApi.getCorrections(this.adminPassword(), 'open').pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: corrections => this.openCorrections.set(corrections.length),
+      error: () => this.openCorrections.set(0),
+    });
   }
 
   private loadAdminEmployeeStatuses(): void {

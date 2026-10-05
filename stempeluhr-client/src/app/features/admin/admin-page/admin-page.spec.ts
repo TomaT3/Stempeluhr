@@ -32,15 +32,30 @@ describe('AdminPage', () => {
     return { fixture, component: fixture.componentInstance, http: TestBed.inject(HttpTestingController) };
   }
 
-  function flushLogin(http: HttpTestingController, password: string): void {
+  function flushLogin(http: HttpTestingController, password: string, openCorrections: unknown[] = []): void {
     const request = http.expectOne('/api/admin/settings');
     expect(request.request.headers.get('X-Admin-Password')).toBe(password);
     request.flush(emptySettings);
     http.expectOne('/api/admin/kimai-projects').flush([]);
     http.expectOne('/api/admin/kimai-activities').flush([]);
     http.expectOne('/api/admin/employee-statuses').flush([]);
+    const corrections = http.expectOne(request => request.url === '/api/admin/corrections');
+    expect(corrections.request.params.get('status')).toBe('open');
+    corrections.flush(openCorrections);
     http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
   }
+
+  it('shows the number of open correction requests on the quick link', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'test-password');
+    const { fixture, http } = await createPage();
+    flushLogin(http, 'test-password', [{ id: 'a' }, { id: 'b' }]);
+    fixture.detectChanges();
+
+    const link = (fixture.nativeElement as HTMLElement).querySelector('a[href="/admin/corrections"]');
+    expect(link?.textContent).toContain('Korrekturanträge');
+    expect(link?.querySelector('.count-badge')?.textContent?.trim()).toBe('2');
+    fixture.destroy();
+  });
 
   it('logs in with Enter in the password field', async () => {
     const { fixture, http } = await createPage();
@@ -213,6 +228,7 @@ describe('AdminPage', () => {
       { id: 74, name: 'Pause', parentTitle: null, projectId: null, visible: true },
     ]);
     http.expectOne('/api/admin/employee-statuses').flush([]);
+    http.expectOne(request => request.url === '/api/admin/corrections').flush([]);
     fixture.detectChanges();
 
     const selects = page.querySelectorAll<HTMLSelectElement>('#booking select');
@@ -249,6 +265,7 @@ describe('AdminPage', () => {
     http.expectOne('/api/admin/kimai-projects').flush('Kimai nicht konfiguriert', { status: 400, statusText: 'Bad Request' });
     http.expectOne('/api/admin/kimai-activities').flush('Kimai nicht konfiguriert', { status: 400, statusText: 'Bad Request' });
     http.expectOne('/api/admin/employee-statuses').flush([]);
+    http.expectOne(request => request.url === '/api/admin/corrections').flush([]);
     fixture.detectChanges();
 
     const page = fixture.nativeElement as HTMLElement;
@@ -290,6 +307,7 @@ describe('AdminPage', () => {
     ]);
     http.expectOne('/api/admin/kimai-activities').flush([]);
     http.expectOne('/api/admin/employee-statuses').flush([]);
+    http.expectOne(request => request.url === '/api/admin/corrections').flush([]);
     http.expectOne('/api/health').flush({});
     http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
 

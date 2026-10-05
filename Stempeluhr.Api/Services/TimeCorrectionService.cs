@@ -759,17 +759,35 @@ public sealed class TimeCorrectionService(
         TimeZoneInfo timeZone,
         HashSet<int> withOpenRequest)
     {
-        var isPause = settings.PauseActivityId is not null && entry.ActivityId == settings.PauseActivityId;
-        var label = isPause
-            ? "Pause"
-            : WorkTargetResolver.MatchTask(employee, entry.ProjectId, entry.ActivityId)?.Label ?? "Arbeit";
+        var (kind, label) = EntryKindAndLabel(settings, employee, entry.ProjectId, entry.ActivityId);
         return new CorrectionEntryDto(
             entry.Id,
             Local(entry.Begin!.Value, timeZone),
             Local(entry.End, timeZone),
-            isPause ? "pause" : "work",
+            kind,
             label,
             withOpenRequest.Contains(entry.Id));
+    }
+
+    /// <summary>"pause" bei der Pausen-Aktivität, sonst "work" mit der Bezeichnung der passenden Tätigkeit.</summary>
+    private static (string Kind, string Label) EntryKindAndLabel(
+        RuntimeSettings settings, EmployeeSettings? employee, int? projectId, int? activityId)
+    {
+        if (settings.PauseActivityId is not null && activityId == settings.PauseActivityId)
+        {
+            return ("pause", "Pause");
+        }
+
+        var task = employee is not null ? WorkTargetResolver.MatchTask(employee, projectId, activityId) : null;
+        return ("work", task?.Label ?? "Arbeit");
+    }
+
+    private static CorrectionOriginalDto ToOriginalDto(
+        TimeCorrectionOriginal original, RuntimeSettings settings, EmployeeSettings? employee, TimeZoneInfo timeZone)
+    {
+        var (kind, label) = EntryKindAndLabel(settings, employee, original.ProjectId, original.ActivityId);
+        return new CorrectionOriginalDto(
+            Local(original.Begin, timeZone), Local(original.End, timeZone), original.Description, kind, label);
     }
 
     /// <summary>
@@ -801,7 +819,7 @@ public sealed class TimeCorrectionService(
             request.TaskId,
             taskLabel,
             request.Original is { } original
-                ? new CorrectionOriginalDto(Local(original.Begin, timeZone), Local(original.End, timeZone), original.Description)
+                ? ToOriginalDto(original, settings, employee, timeZone)
                 : null,
             request.DecidedAt,
             request.DecidedBy,
