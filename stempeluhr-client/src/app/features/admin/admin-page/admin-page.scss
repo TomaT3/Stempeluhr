@@ -112,6 +112,19 @@ button {
   padding: 16px;
 }
 
+.session-state {
+  align-self: center;
+  color: #435064;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .admin-login button,
 .admin-actions button,
 .admin-link-button,

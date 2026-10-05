@@ -4,9 +4,13 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 
 import { AdminTerminalStatus } from '../../../core/models/admin.models';
+import { AdminSession } from '../../../core/services/admin-session';
 import { TerminalStatusPage } from './terminal-status-page';
 
 describe('TerminalStatusPage', () => {
+  beforeEach(() => sessionStorage.clear());
+  afterEach(() => sessionStorage.clear());
+
   async function setup() {
     await TestBed.configureTestingModule({
       imports: [TerminalStatusPage],
@@ -57,7 +61,46 @@ describe('TerminalStatusPage', () => {
     expect(rows[0].textContent).toContain('Unterspannung (seit Start)');
     expect(rows[1].textContent).toContain('Noch nie gemeldet');
     expect(rows[1].textContent).toContain('Zuletzt gemeldet nie');
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBe('test-password');
+    expect(page.querySelector('input[type="password"]')).toBeNull();
     fixture.destroy();
+  });
+
+  it('loads right away when already logged in on another admin page', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'kept-password');
+    await TestBed.configureTestingModule({
+      imports: [TerminalStatusPage],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(TerminalStatusPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    const request = http.expectOne('/api/admin/terminal-statuses');
+    expect(request.request.headers.get('X-Admin-Password')).toBe('kept-password');
+    request.flush([]);
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('input[type="password"]')).toBeNull();
+    fixture.destroy();
+  });
+
+  it('stops refreshing and forgets the session on logout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { fixture, http, page } = await setup();
+      http.expectOne('/api/admin/terminal-statuses').flush([]);
+
+      fixture.componentInstance.logout();
+      fixture.detectChanges();
+
+      expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+      expect(page.querySelector('input[type="password"]')).not.toBeNull();
+      vi.advanceTimersByTime(TerminalStatusPage.RefreshIntervalMs * 2);
+      http.expectNone('/api/admin/terminal-statuses');
+      fixture.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports a wrong password without showing a list', async () => {

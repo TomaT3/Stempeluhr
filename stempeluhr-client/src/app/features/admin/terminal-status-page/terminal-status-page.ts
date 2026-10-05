@@ -3,9 +3,11 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { Component, computed, DestroyRef, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 
 import { AdminTerminalReport, AdminTerminalState, AdminTerminalStatus } from '../../../core/models/admin.models';
 import { AdminApi } from '../../../core/services/admin-api';
+import { AdminSession } from '../../../core/services/admin-session';
 
 const StateLabels: Record<AdminTerminalState, string> = {
   online: 'Online',
@@ -41,8 +43,10 @@ export class TerminalStatusPage {
   private readonly destroyRef = inject(DestroyRef);
   private readonly tick = signal(Date.now());
   private refreshId: number | undefined;
+  private request: Subscription | undefined;
 
-  readonly adminPassword = signal('');
+  readonly adminSession = inject(AdminSession);
+  readonly adminPassword = signal(this.adminSession.password());
   readonly statuses = signal<AdminTerminalStatus[]>([]);
   readonly isBusy = signal(false);
   readonly message = signal('');
@@ -57,6 +61,10 @@ export class TerminalStatusPage {
       window.clearInterval(tickId);
       window.clearInterval(this.refreshId);
     });
+
+    if (this.adminSession.isLoggedIn()) {
+      this.loadStatuses();
+    }
   }
 
   loadStatuses(): void {
@@ -69,8 +77,10 @@ export class TerminalStatusPage {
     this.isBusy.set(true);
     this.message.set('');
     // A late answer after leaving the page must not start a new refresh timer.
-    this.adminApi.getTerminalStatuses(password).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+    this.request?.unsubscribe();
+    this.request = this.adminApi.getTerminalStatuses(password).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: statuses => {
+        this.adminSession.remember(password);
         this.statuses.set(statuses);
         this.hasLoaded.set(true);
         this.isBusy.set(false);
@@ -79,15 +89,30 @@ export class TerminalStatusPage {
       error: (error: HttpErrorResponse) => {
         // A short backend outage keeps the last list and the refresh running.
         if (error.status === 401 || !this.hasLoaded()) {
-          window.clearInterval(this.refreshId);
-          this.refreshId = undefined;
+          this.stopRefresh();
           this.statuses.set([]);
           this.hasLoaded.set(false);
+        }
+        if (error.status === 401) {
+          this.adminSession.clear();
+          this.adminPassword.set('');
         }
         this.message.set(this.errorMessage(error));
         this.isBusy.set(false);
       },
     });
+  }
+
+  logout(): void {
+    // Eine noch laufende Antwort darf die Sitzung nicht wieder anlegen.
+    this.request?.unsubscribe();
+    this.stopRefresh();
+    this.adminSession.clear();
+    this.adminPassword.set('');
+    this.statuses.set([]);
+    this.hasLoaded.set(false);
+    this.message.set('');
+    this.isBusy.set(false);
   }
 
   stateLabel(status: AdminTerminalStatus): string {
@@ -127,6 +152,11 @@ export class TerminalStatusPage {
     if (!this.isBusy()) {
       this.loadStatuses();
     }
+  }
+
+  private stopRefresh(): void {
+    window.clearInterval(this.refreshId);
+    this.refreshId = undefined;
   }
 
   private duration(seconds: number): string {

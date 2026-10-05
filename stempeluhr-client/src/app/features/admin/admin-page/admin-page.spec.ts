@@ -4,9 +4,174 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 
 import { AdminSettings } from '../../../core/models/admin.models';
+import { AdminSession } from '../../../core/services/admin-session';
 import { AdminPage } from './admin-page';
 
 describe('AdminPage', () => {
+  beforeEach(() => sessionStorage.clear());
+  afterEach(() => sessionStorage.clear());
+
+  const emptySettings: AdminSettings = {
+    baseUrl: 'https://kimai.example.test',
+    hasAdminPassword: true,
+    hasAdminApiToken: true,
+    defaultProjectId: null,
+    defaultActivityId: null,
+    pauseActivityId: null,
+    employees: [],
+  };
+
+  async function createPage() {
+    localStorage.removeItem('stempeluhr.admin.nfcTerminalId');
+    await TestBed.configureTestingModule({
+      imports: [AdminPage],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(AdminPage);
+    return { fixture, component: fixture.componentInstance, http: TestBed.inject(HttpTestingController) };
+  }
+
+  function flushLogin(http: HttpTestingController, password: string): void {
+    const request = http.expectOne('/api/admin/settings');
+    expect(request.request.headers.get('X-Admin-Password')).toBe(password);
+    request.flush(emptySettings);
+    http.expectOne('/api/admin/kimai-projects').flush([]);
+    http.expectOne('/api/admin/kimai-activities').flush([]);
+    http.expectOne('/api/admin/employee-statuses').flush([]);
+    http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
+  }
+
+  it('logs in with Enter in the password field', async () => {
+    const { fixture, http } = await createPage();
+    fixture.detectChanges();
+    const page = fixture.nativeElement as HTMLElement;
+
+    const input = page.querySelector<HTMLInputElement>('.admin-login input[type="password"]')!;
+    input.value = 'test-password';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter' }));
+
+    flushLogin(http, 'test-password');
+    fixture.detectChanges();
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBe('test-password');
+    expect(page.querySelector('.admin-login input')).toBeNull();
+    expect(page.querySelector('.admin-editor')).not.toBeNull();
+    fixture.destroy();
+  });
+
+  it('loads the settings right away when already logged in', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'kept-password');
+    const { fixture, http } = await createPage();
+
+    flushLogin(http, 'kept-password');
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('.admin-editor')).not.toBeNull();
+
+    fixture.componentInstance.logout();
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+    expect(fixture.componentInstance.adminSettings()).toBeNull();
+    fixture.destroy();
+  });
+
+  it('continues with a newly saved admin password once the backend accepts it', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'old-password');
+    const { fixture, component, http } = await createPage();
+    flushLogin(http, 'old-password');
+
+    component.updateAdminPassword(' new-password ');
+    component.saveAdminSettings();
+    http.expectOne('/api/admin/settings').flush(emptySettings);
+    const probe = http.expectOne('/api/admin/employee-statuses');
+    expect(probe.request.headers.get('X-Admin-Password')).toBe('new-password');
+    probe.flush([]);
+
+    expect(component.adminPassword()).toBe('new-password');
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBe('new-password');
+    expect(component.adminBusy()).toBe(false);
+    fixture.destroy();
+  });
+
+  it('keeps the old password when the configured one takes precedence', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'old-password');
+    const { fixture, component, http } = await createPage();
+    flushLogin(http, 'old-password');
+
+    component.updateAdminPassword('new-password');
+    component.saveAdminSettings();
+    http.expectOne('/api/admin/settings').flush(emptySettings);
+    http.expectOne('/api/admin/employee-statuses').flush(null, { status: 401, statusText: 'Unauthorized' });
+
+    const reload = http.expectOne('/api/admin/employee-statuses');
+    expect(reload.request.headers.get('X-Admin-Password')).toBe('old-password');
+    reload.flush([]);
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBe('old-password');
+    expect(component.adminMessage()).toContain('Serverkonfiguration');
+    fixture.destroy();
+  });
+
+  it('drops the password check when the page is left before it answers', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'old-password');
+    const { fixture, component, http } = await createPage();
+    flushLogin(http, 'old-password');
+
+    component.updateAdminPassword('new-password');
+    component.saveAdminSettings();
+    http.expectOne('/api/admin/settings').flush(emptySettings);
+    const probe = http.expectOne('/api/admin/employee-statuses');
+
+    fixture.destroy();
+    TestBed.inject(AdminSession).clear();
+
+    expect(probe.cancelled).toBe(true);
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+  });
+
+  it('ends the session when the old password is refused after a failed password check', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'old-password');
+    const { fixture, component, http } = await createPage();
+    flushLogin(http, 'old-password');
+
+    component.updateAdminPassword('new-password');
+    component.saveAdminSettings();
+    http.expectOne('/api/admin/settings').flush(emptySettings);
+    http.expectOne('/api/admin/employee-statuses').error(new ProgressEvent('error'));
+    http.expectOne('/api/admin/employee-statuses').flush(null, { status: 401, statusText: 'Unauthorized' });
+    fixture.detectChanges();
+
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+    expect(component.adminPassword()).toBe('');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.admin-login input[type="password"]')).not.toBeNull();
+    fixture.destroy();
+  });
+
+  it('keeps unsaved edits when saving is refused and logs in again by saving with a new entry', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'old-password');
+    const { fixture, component, http } = await createPage();
+    flushLogin(http, 'old-password');
+
+    component.updateBaseUrl('https://kimai.changed.test');
+    component.saveAdminSettings();
+    http.expectOne('/api/admin/settings').flush(null, { status: 401, statusText: 'Unauthorized' });
+    fixture.detectChanges();
+
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+    expect(component.adminDirty()).toBe(true);
+    expect(component.adminSettings()?.baseUrl).toBe('https://kimai.changed.test');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.admin-login input[type="password"]')).not.toBeNull();
+
+    component.adminPassword.set('current-password');
+    component.saveAdminSettings();
+    const save = http.expectOne('/api/admin/settings');
+    expect(save.request.headers.get('X-Admin-Password')).toBe('current-password');
+    save.flush({ ...emptySettings, baseUrl: 'https://kimai.changed.test' });
+    http.expectOne('/api/admin/employee-statuses').flush([]);
+
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBe('current-password');
+    expect(component.adminDirty()).toBe(false);
+    fixture.destroy();
+  });
+
   it('shows saved selections only after settings and Kimai lists have loaded', async () => {
     localStorage.removeItem('stempeluhr.admin.nfcTerminalId');
     await TestBed.configureTestingModule({

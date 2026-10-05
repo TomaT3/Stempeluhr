@@ -1,11 +1,19 @@
 <section class="rejections">
   <div class="toolbar">
     <a routerLink="/admin">&lt; Admin</a>
-    <label>Admin-Passwort
-      <input type="password" [value]="adminPassword()" (input)="adminPassword.set($any($event.target).value)"
-        (keyup.enter)="load()" autocomplete="current-password">
-    </label>
-    <button type="button" (click)="load()" [disabled]="isBusy()">Aktualisieren</button>
+    @if (adminSession.isLoggedIn()) {
+      <span>Als Admin angemeldet</span>
+      <div class="session-actions">
+        <button type="button" (click)="load()" [disabled]="isBusy()">Aktualisieren</button>
+        <button type="button" (click)="logout()">Abmelden</button>
+      </div>
+    } @else {
+      <label>Admin-Passwort
+        <input type="password" [value]="adminPassword()" (input)="adminPassword.set($any($event.target).value)"
+          (keyup.enter)="load()" autocomplete="current-password">
+      </label>
+      <button type="button" (click)="load()" [disabled]="isBusy()">Anmelden</button>
+    }
   </div>
   <h1>Abgelehnte Offline-Stempel</h1>
   <p>Nach dem manuellen Nachtrag in Kimai den Eintrag als nachgetragen markieren. Die Historie bleibt erhalten.</p>

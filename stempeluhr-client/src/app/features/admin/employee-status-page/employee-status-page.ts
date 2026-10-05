@@ -2,9 +2,11 @@ import { DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, computed, DestroyRef, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 
 import { AdminEmployeeStatus } from '../../../core/models/admin.models';
 import { AdminApi } from '../../../core/services/admin-api';
+import { AdminSession } from '../../../core/services/admin-session';
 import { StatusBadge } from '../../../shared/components/status-badge/status-badge';
 import { DurationPipe } from '../../../shared/pipes/duration-pipe';
 
@@ -19,8 +21,10 @@ export class EmployeeStatusPage {
   private readonly destroyRef = inject(DestroyRef);
   private readonly tick = signal(Date.now());
   private loadedAt = Date.now();
+  private request: Subscription | undefined;
 
-  readonly adminPassword = signal('');
+  readonly adminSession = inject(AdminSession);
+  readonly adminPassword = signal(this.adminSession.password());
   readonly statuses = signal<AdminEmployeeStatus[]>([]);
   readonly isBusy = signal(false);
   readonly message = signal('');
@@ -31,7 +35,14 @@ export class EmployeeStatusPage {
 
   constructor() {
     const intervalId = window.setInterval(() => this.tick.set(Date.now()), 1000);
-    this.destroyRef.onDestroy(() => window.clearInterval(intervalId));
+    this.destroyRef.onDestroy(() => {
+      window.clearInterval(intervalId);
+      this.request?.unsubscribe();
+    });
+
+    if (this.adminSession.isLoggedIn()) {
+      this.loadStatuses();
+    }
   }
 
   loadStatuses(): void {
@@ -43,20 +54,37 @@ export class EmployeeStatusPage {
 
     this.isBusy.set(true);
     this.message.set('');
-    this.adminApi.getEmployeeStatuses(password).subscribe({
+    this.request?.unsubscribe();
+    this.request = this.adminApi.getEmployeeStatuses(password).subscribe({
       next: statuses => {
+        this.adminSession.remember(password);
         this.loadedAt = Date.now();
         this.statuses.set(statuses);
         this.hasLoaded.set(true);
         this.isBusy.set(false);
       },
       error: (error: HttpErrorResponse) => {
+        if (error.status === 401) {
+          this.adminSession.clear();
+          this.adminPassword.set('');
+        }
         this.statuses.set([]);
         this.hasLoaded.set(false);
         this.message.set(this.errorMessage(error));
         this.isBusy.set(false);
       },
     });
+  }
+
+  logout(): void {
+    // Eine noch laufende Antwort darf die Sitzung nicht wieder anlegen.
+    this.request?.unsubscribe();
+    this.adminSession.clear();
+    this.adminPassword.set('');
+    this.statuses.set([]);
+    this.hasLoaded.set(false);
+    this.message.set('');
+    this.isBusy.set(false);
   }
 
   durationFor(status: AdminEmployeeStatus): number {
