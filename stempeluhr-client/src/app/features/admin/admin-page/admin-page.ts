@@ -1,12 +1,14 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { DatePipe } from '@angular/common';
-import { Component, OnDestroy, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnDestroy, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterLink } from '@angular/router';
 import { catchError, forkJoin, of, switchMap } from 'rxjs';
 
 import { AdminEmployee, AdminEmployeeStatus, AdminEmployeeTask, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../../../core/models/admin.models';
 import { NfcClockEvent } from '../../../core/models/kiosk.models';
 import { AdminApi } from '../../../core/services/admin-api';
+import { AdminSession } from '../../../core/services/admin-session';
 import { Avatar } from '../../../shared/components/avatar/avatar';
 import { StatusBadge } from '../../../shared/components/status-badge/status-badge';
 import { VersionBadge } from '../../../shared/components/version-badge/version-badge';
@@ -21,8 +23,10 @@ export class AdminPage implements OnDestroy {
   private static readonly NfcTerminalStorageKey = 'stempeluhr.admin.nfcTerminalId';
 
   private readonly adminApi = inject(AdminApi);
+  private readonly destroyRef = inject(DestroyRef);
 
-  readonly adminPassword = signal('');
+  readonly adminSession = inject(AdminSession);
+  readonly adminPassword = signal(this.adminSession.password());
   readonly adminSettings = signal<AdminSettings | null>(null);
   readonly adminStatuses = signal<AdminEmployeeStatus[]>([]);
   readonly kimaiActivities = signal<KimaiActivity[]>([]);
@@ -39,8 +43,19 @@ export class AdminPage implements OnDestroy {
 
   private nfcPollTimer: number | null = null;
 
+  constructor() {
+    if (this.adminSession.isLoggedIn()) {
+      this.loadAdminSettings();
+    }
+  }
+
   loadAdminSettings(): void {
-    const password = this.adminPassword();
+    const password = this.adminPassword().trim();
+    if (!password) {
+      this.adminMessage.set('Bitte Admin-Passwort eingeben.');
+      return;
+    }
+
     // Schlägt das Neuladen fehl (falsches Passwort, Netzwerk), wird der
     // bisherige Stand samt ungespeicherter Eingaben wiederhergestellt.
     const previous = {
@@ -50,10 +65,7 @@ export class AdminPage implements OnDestroy {
       dirty: this.adminDirty(),
       polling: this.nfcPollTimer !== null,
     };
-    if (this.nfcPollTimer !== null) {
-      window.clearInterval(this.nfcPollTimer);
-      this.nfcPollTimer = null;
-    }
+    this.stopNfcPolling();
     this.adminBusy.set(true);
     this.initialLoading.set(true);
     this.adminSettings.set(null);
@@ -69,8 +81,12 @@ export class AdminPage implements OnDestroy {
         projects: this.adminApi.importKimaiProjects(password, settings.baseUrl).pipe(catchError(() => of(null))),
         activities: this.adminApi.importKimaiActivities(password, settings.baseUrl).pipe(catchError(() => of(null))),
       })),
+      // Nach dem Verlassen der Seite darf keine späte Antwort mehr das NFC-Polling starten.
+      takeUntilDestroyed(this.destroyRef),
     ).subscribe({
       next: ({ settings, projects, activities }) => {
+        this.adminSession.remember(password);
+        this.adminPassword.set(password);
         this.kimaiProjects.set(projects ?? []);
         this.kimaiActivities.set(activities ?? []);
         this.adminSettings.set(this.withEditableTokens(settings));
@@ -88,6 +104,10 @@ export class AdminPage implements OnDestroy {
         this.kimaiProjects.set(previous.projects);
         this.kimaiActivities.set(previous.activities);
         this.adminDirty.set(previous.dirty);
+        if (error.status === 401) {
+          this.adminSession.clear();
+          this.adminPassword.set('');
+        }
         this.adminMessage.set(this.adminLoginErrorMessage(error));
         this.adminBusy.set(false);
         this.initialLoading.set(false);
@@ -114,12 +134,18 @@ export class AdminPage implements OnDestroy {
       return;
     }
 
+    const newPassword = ((settings as AdminSettings & { adminPassword?: string }).adminPassword ?? '').trim();
     this.adminBusy.set(true);
     this.adminApi.saveSettings(this.adminPassword(), this.toUpdatePayload(settings)).subscribe({
       next: saved => {
         this.adminSettings.set(this.withEditableTokens(saved));
         this.adminMessage.set('Gespeichert');
         this.adminDirty.set(false);
+        if (newPassword && newPassword !== this.adminPassword()) {
+          this.adoptNewAdminPassword(newPassword);
+          return;
+        }
+
         this.adminBusy.set(false);
         this.loadAdminEmployeeStatuses();
       },
@@ -438,9 +464,56 @@ export class AdminPage implements OnDestroy {
     }
   }
 
+  logout(): void {
+    if (this.adminDirty() && !window.confirm('Ungespeicherte Änderungen verwerfen und abmelden?')) {
+      return;
+    }
+
+    this.stopNfcPolling();
+    this.adminSession.clear();
+    this.adminPassword.set('');
+    this.adminSettings.set(null);
+    this.adminStatuses.set([]);
+    this.kimaiProjects.set([]);
+    this.kimaiActivities.set([]);
+    this.kimaiUsers.set([]);
+    this.latestNfcEvent.set(null);
+    this.nfcMessage.set('');
+    this.adminMessage.set('');
+    this.adminDirty.set(false);
+  }
+
   ngOnDestroy(): void {
-    if (this.nfcPollTimer) {
+    this.stopNfcPolling();
+  }
+
+  /**
+   * Gilt das neue Passwort, laufen alle weiteren Aufrufe damit. Ein per
+   * Konfiguration (Admin__Password) gesetztes Passwort hat beim Backend
+   * Vorrang - dann bleibt das bisherige gültig und die Sitzung unverändert.
+   */
+  private adoptNewAdminPassword(newPassword: string): void {
+    this.adminApi.getEmployeeStatuses(newPassword).subscribe({
+      next: statuses => {
+        this.adminSession.remember(newPassword);
+        this.adminPassword.set(newPassword);
+        this.adminStatuses.set(statuses);
+        this.adminBusy.set(false);
+      },
+      error: (error: HttpErrorResponse) => {
+        if (error.status === 401) {
+          this.adminMessage.set('Gespeichert. Das Admin-Passwort aus der Serverkonfiguration hat Vorrang und bleibt gültig.');
+        }
+        this.adminBusy.set(false);
+        this.loadAdminEmployeeStatuses();
+      },
+    });
+  }
+
+  private stopNfcPolling(): void {
+    if (this.nfcPollTimer !== null) {
       window.clearInterval(this.nfcPollTimer);
+      this.nfcPollTimer = null;
     }
   }
 

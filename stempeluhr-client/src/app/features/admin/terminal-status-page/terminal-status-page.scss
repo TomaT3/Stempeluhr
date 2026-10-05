@@ -86,6 +86,25 @@ button:disabled {
   opacity: 0.7;
 }
 
+.session-state {
+  align-self: center;
+  color: #435064;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+button.logout {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-primary);
+}
+
 .status-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

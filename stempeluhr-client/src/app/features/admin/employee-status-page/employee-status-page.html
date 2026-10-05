@@ -2,16 +2,24 @@
   <div class="status-toolbar">
     <a class="back-link" routerLink="/admin">&lt; Admin</a>
     <div class="status-login">
-      <label>
-        Admin-Passwort
-        <input
-          type="password"
-          [value]="adminPassword()"
-          (input)="adminPassword.set($any($event.target).value)"
-          (keyup.enter)="loadStatuses()"
-          autocomplete="current-password">
-      </label>
-      <button type="button" (click)="loadStatuses()" [disabled]="isBusy()">Aktualisieren</button>
+      @if (adminSession.isLoggedIn()) {
+        <span class="session-state">Als Admin angemeldet</span>
+        <div class="session-actions">
+          <button type="button" (click)="loadStatuses()" [disabled]="isBusy()">Aktualisieren</button>
+          <button type="button" class="logout" (click)="logout()">Abmelden</button>
+        </div>
+      } @else {
+        <label>
+          Admin-Passwort
+          <input
+            type="password"
+            [value]="adminPassword()"
+            (input)="adminPassword.set($any($event.target).value)"
+            (keyup.enter)="loadStatuses()"
+            autocomplete="current-password">
+        </label>
+        <button type="button" (click)="loadStatuses()" [disabled]="isBusy()">Anmelden</button>
+      }
     </div>
   </div>
 

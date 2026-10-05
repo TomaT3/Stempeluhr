@@ -7,16 +7,25 @@
     </div>
   </header>
   <div class="admin-login">
-    <label>
-      Admin-Passwort
-      <input
-        type="password"
-        [value]="adminPassword()"
-        (input)="adminPassword.set($any($event.target).value)"
-        [disabled]="adminBusy()"
-        autocomplete="current-password">
-    </label>
-    <button type="button" (click)="loadAdminSettings()" [disabled]="adminBusy()">{{ adminBusy() && initialLoading() ? 'Lade Daten…' : 'Einstellungen laden' }}</button>
+    @if (adminSession.isLoggedIn()) {
+      <span class="session-state">Als Admin angemeldet</span>
+      <div class="session-actions">
+        <button type="button" (click)="loadAdminSettings()" [disabled]="adminBusy()">{{ adminBusy() && initialLoading() ? 'Lade Daten…' : 'Neu laden' }}</button>
+        <button type="button" (click)="logout()" [disabled]="adminBusy()">Abmelden</button>
+      </div>
+    } @else {
+      <label>
+        Admin-Passwort
+        <input
+          type="password"
+          [value]="adminPassword()"
+          (input)="adminPassword.set($any($event.target).value)"
+          (keyup.enter)="loadAdminSettings()"
+          [disabled]="adminBusy()"
+          autocomplete="current-password">
+      </label>
+      <button type="button" (click)="loadAdminSettings()" [disabled]="adminBusy()">{{ adminBusy() && initialLoading() ? 'Lade Daten…' : 'Anmelden' }}</button>
+    }
   </div>
 
   @if (adminMessage()) {
