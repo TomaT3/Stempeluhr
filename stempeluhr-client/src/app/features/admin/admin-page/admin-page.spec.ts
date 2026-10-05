@@ -32,10 +32,12 @@ describe('AdminPage', () => {
     return { fixture, component: fixture.componentInstance, http: TestBed.inject(HttpTestingController) };
   }
 
-  function flushLogin(http: HttpTestingController, password: string, openCorrections: unknown[] = []): void {
+  function flushLogin(
+    http: HttpTestingController, password: string, openCorrections: unknown[] = [], settings: AdminSettings = emptySettings,
+  ): void {
     const request = http.expectOne('/api/admin/settings');
     expect(request.request.headers.get('X-Admin-Password')).toBe(password);
-    request.flush(emptySettings);
+    request.flush(settings);
     http.expectOne('/api/admin/kimai-projects').flush([]);
     http.expectOne('/api/admin/kimai-activities').flush([]);
     http.expectOne('/api/admin/employee-statuses').flush([]);
@@ -87,6 +89,98 @@ describe('AdminPage', () => {
     expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
     expect(fixture.componentInstance.adminSettings()).toBeNull();
     fixture.destroy();
+  });
+
+  describe('Telegram approval settings', () => {
+    const withTelegram: AdminSettings = {
+      ...emptySettings,
+      telegramCorrectionChatId: '-1001234567890',
+      telegramApproverUserIds: [11, 22],
+    };
+
+    async function openPage(settings: AdminSettings) {
+      sessionStorage.setItem(AdminSession.StorageKey, 'pw');
+      const page = await createPage();
+      flushLogin(page.http, 'pw', [], settings);
+      page.fixture.detectChanges();
+      return page;
+    }
+
+    function savedPayload(http: HttpTestingController): Record<string, unknown> {
+      const request = http.expectOne('/api/admin/settings');
+      expect(request.request.method).toBe('PUT');
+      const body = request.request.body as Record<string, unknown>;
+      request.flush(withTelegram);
+      http.expectOne('/api/admin/employee-statuses').flush([]);
+      return body;
+    }
+
+    it('shows the correction chat and the approver ids in their fields', async () => {
+      const { fixture } = await openPage(withTelegram);
+
+      const inputs = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>('#telegram input'));
+      expect(inputs.map(input => input.value)).toEqual(['-1001234567890', '11, 22']);
+      fixture.destroy();
+    });
+
+    it('sends unchanged values back and edits them as text', async () => {
+      const { fixture, component, http } = await openPage(withTelegram);
+
+      component.saveAdminSettings();
+      expect(savedPayload(http)).toMatchObject({
+        telegramCorrectionChatId: '-1001234567890',
+        telegramApproverUserIds: [11, 22],
+      });
+
+      component.updateTelegramCorrectionChatId(' -42 ');
+      component.updateTelegramApproverUserIds('33, 44;55  33');
+      expect(component.telegramApproverText()).toBe('33, 44;55  33');
+      component.saveAdminSettings();
+      expect(savedPayload(http)).toMatchObject({
+        telegramCorrectionChatId: ' -42 ',
+        telegramApproverUserIds: [33, 44, 55],
+      });
+      fixture.destroy();
+    });
+
+    it('clears both fields with empty values', async () => {
+      const { fixture, component, http } = await openPage(withTelegram);
+
+      component.updateTelegramCorrectionChatId('');
+      component.updateTelegramApproverUserIds('');
+      component.saveAdminSettings();
+
+      expect(savedPayload(http)).toMatchObject({
+        telegramCorrectionChatId: '',
+        telegramApproverUserIds: [],
+      });
+      fixture.destroy();
+    });
+
+    for (const input of ['11, @chef', '0', '11, 0', '-5']) {
+      it(`does not save approver ids that are not positive numbers ("${input}")`, async () => {
+        const { fixture, component, http } = await openPage(withTelegram);
+
+        component.updateTelegramApproverUserIds(input);
+        component.saveAdminSettings();
+
+        http.expectNone('/api/admin/settings');
+        expect(component.adminMessage()).toContain('Telegram-User-IDs müssen positive Zahlen sein');
+        fixture.destroy();
+      });
+    }
+
+    it('leaves the values alone when the backend does not know the fields', async () => {
+      const { fixture, component, http } = await openPage(emptySettings);
+
+      component.saveAdminSettings();
+
+      expect(savedPayload(http)).toMatchObject({
+        telegramCorrectionChatId: null,
+        telegramApproverUserIds: null,
+      });
+      fixture.destroy();
+    });
   });
 
   it('continues with a newly saved admin password once the backend accepts it', async () => {

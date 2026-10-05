@@ -43,6 +43,8 @@ export class AdminPage implements OnDestroy {
   readonly initialLoading = signal(false);
   /** Offene Korrekturanträge (pending und failed) für den Quick-Link. */
   readonly openCorrections = signal(0);
+  /** Eingabe der Freigeber-IDs als Text, damit „12, “ beim Tippen nicht umgeschrieben wird. */
+  readonly telegramApproverText = signal('');
 
   private nfcPollTimer: number | null = null;
 
@@ -93,6 +95,7 @@ export class AdminPage implements OnDestroy {
         this.kimaiProjects.set(projects ?? []);
         this.kimaiActivities.set(activities ?? []);
         this.adminSettings.set(this.withEditableTokens(settings));
+        this.telegramApproverText.set(this.approverUserIdsToText(settings));
         this.adminMessage.set(projects === null || activities === null
           ? 'Kimai-Projekte oder Aktivitäten konnten nicht geladen werden. Bitte Verbindung und Token prüfen und die Listen aktualisieren.'
           : '');
@@ -138,6 +141,11 @@ export class AdminPage implements OnDestroy {
       return;
     }
 
+    if (settings.telegramApproverUserIds !== undefined && this.parseApproverUserIds(this.telegramApproverText()) === null) {
+      this.adminMessage.set('Telegram-User-IDs müssen positive Zahlen sein, getrennt durch Komma.');
+      return;
+    }
+
     const password = this.adminPassword().trim();
     const newPassword = ((settings as AdminSettings & { adminPassword?: string }).adminPassword ?? '').trim();
     this.adminBusy.set(true);
@@ -148,6 +156,7 @@ export class AdminPage implements OnDestroy {
         this.adminSession.remember(password);
         this.adminPassword.set(password);
         this.adminSettings.set(this.withEditableTokens(saved));
+        this.telegramApproverText.set(this.approverUserIdsToText(saved));
         this.adminMessage.set('Gespeichert');
         this.adminDirty.set(false);
         if (newPassword && newPassword !== password) {
@@ -321,6 +330,15 @@ export class AdminPage implements OnDestroy {
 
   updatePauseActivityId(value: string): void {
     this.updateSettings(settings => ({ ...settings, pauseActivityId: this.toNumber(value) }));
+  }
+
+  updateTelegramCorrectionChatId(value: string): void {
+    this.updateSettings(settings => ({ ...settings, telegramCorrectionChatId: value }));
+  }
+
+  updateTelegramApproverUserIds(value: string): void {
+    this.telegramApproverText.set(value);
+    this.adminDirty.set(true);
   }
 
   updateEmployee(index: number, patch: Partial<AdminEmployee>): void {
@@ -670,6 +688,11 @@ export class AdminPage implements OnDestroy {
       defaultProjectId: settings.defaultProjectId,
       defaultActivityId: settings.defaultActivityId,
       pauseActivityId: settings.pauseActivityId,
+      // null (nicht geladen) lässt den Wert unverändert, leer löscht ihn.
+      telegramCorrectionChatId: settings.telegramCorrectionChatId ?? null,
+      telegramApproverUserIds: settings.telegramApproverUserIds === undefined
+        ? null
+        : this.parseApproverUserIds(this.telegramApproverText()),
       employees: settings.employees.map(employee => ({
         id: employee.id,
         kimaiUserId: employee.kimaiUserId,
@@ -808,6 +831,23 @@ export class AdminPage implements OnDestroy {
       tasks: [],
       defaultTaskLabel: null,
     };
+  }
+
+  private approverUserIdsToText(settings: AdminSettings): string {
+    return (settings.telegramApproverUserIds ?? []).join(', ');
+  }
+
+  /**
+   * Komma-, Semikolon- oder Leerzeichen-getrennte positive Zahlen; null bei
+   * etwas anderem. Auch 0 ist ungültig: der Server würde sie ablehnen, und eine
+   * leere Liste hieße „jedes Mitglied darf entscheiden“.
+   */
+  private parseApproverUserIds(text: string): number[] | null {
+    const tokens = text.split(/[\s,;]+/).filter(token => token.length > 0);
+    if (!tokens.every(token => /^[1-9]\d*$/.test(token) && Number.isSafeInteger(Number(token)))) {
+      return null;
+    }
+    return [...new Set(tokens.map(Number))];
   }
 
   toNumber(value: string): number | null {

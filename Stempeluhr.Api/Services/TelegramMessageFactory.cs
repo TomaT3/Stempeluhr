@@ -1,3 +1,5 @@
+using Stempeluhr.Api.Models;
+
 namespace Stempeluhr.Api.Services;
 
 /// <summary>
@@ -66,6 +68,169 @@ public static class TelegramMessageFactory
         var start = TimeZoneInfo.ConvertTime(startUtc, timeZone);
         return $"⚠️ {employeeName} · über {WorkTimeLimitCalculator.ShiftLimit.TotalHours:0} Std. in der Schicht "
             + $"seit {start:dd.MM. HH:mm} ({FormatDuration(workedSeconds)} Std.)";
+    }
+
+    // ---- Korrekturanträge ----
+
+    private static readonly string[] WeekdayNames = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+
+    /// <summary>
+    /// Neuer Antrag mit Art, Eintrag, Vorher → Nachher und Kommentar. Alle
+    /// Zeiten in der Zeitzone des Mitarbeiters, mit Wochentag und Datum:
+    /// Nachtschichten gehen über Mitternacht. <paramref name="originalIsPause"/>:
+    /// der betroffene Eintrag ist eine Pause, keine Arbeit.
+    /// </summary>
+    public static string BuildCorrectionRequest(
+        TimeCorrectionRequest request, TimeZoneInfo timeZone, string? taskLabel = null, bool originalIsPause = false)
+    {
+        string Zoned(DateTimeOffset value) => FormatCorrectionTime(value, timeZone);
+        string Range(DateTimeOffset begin, DateTimeOffset? end) => FormatCorrectionRange(begin, end, timeZone);
+        var entryLabel = originalIsPause ? "Pause" : "Schicht";
+
+        var lines = new List<string> { $"📝 Korrekturantrag · {request.EmployeeName}", DescribeCorrectionKind(request.Kind) };
+        var original = request.Original;
+        switch (request.Kind)
+        {
+            case TimeCorrectionKind.AddPause:
+                if (original is not null) lines.Add($"{entryLabel}: {Range(original.Begin, original.End)}");
+                if (request.PauseBegin is { } pauseBegin) lines.Add($"Pause: {Range(pauseBegin, request.PauseEnd)}");
+                break;
+            case TimeCorrectionKind.SetEnd:
+                if (original is not null) lines.Add($"{entryLabel}: {Range(original.Begin, original.End)}");
+                lines.Add($"Ende: {(original?.End is { } oldEnd ? Zoned(oldEnd) : "offen")} → {(request.End is { } newEnd ? Zoned(newEnd) : "?")}");
+                break;
+            case TimeCorrectionKind.AddShift:
+                if (request.Begin is { } shiftBegin) lines.Add($"Schicht: {Range(shiftBegin, request.End)}");
+                lines.Add($"Tätigkeit: {(string.IsNullOrWhiteSpace(taskLabel) ? DefaultTaskName : taskLabel)}");
+                if (request.PauseBegin is { } shiftPauseBegin) lines.Add($"Pause: {Range(shiftPauseBegin, request.PauseEnd)}");
+                break;
+            default:
+                if (original is not null) lines.Add($"{entryLabel}: {Range(original.Begin, original.End)}");
+                if (request.Begin is { } changedBegin)
+                {
+                    lines.Add($"Beginn: {(original is null ? "?" : Zoned(original.Begin))} → {Zoned(changedBegin)}");
+                }
+                if (request.End is { } changedEnd)
+                {
+                    lines.Add($"Ende: {(original?.End is { } previousEnd ? Zoned(previousEnd) : "offen")} → {Zoned(changedEnd)}");
+                }
+                break;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Comment))
+        {
+            lines.Add($"Kommentar: {request.Comment}");
+        }
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// Der Antragstext mit dem Ergebnis statt der Knöpfe (für
+    /// <c>editMessageText</c>). Ein offener Antrag bleibt ohne Ergebniszeile.
+    /// </summary>
+    public static string BuildCorrectionDecision(
+        TimeCorrectionRequest request, TimeZoneInfo timeZone, string? taskLabel = null, bool originalIsPause = false)
+    {
+        var body = BuildCorrectionRequest(request, timeZone, taskLabel, originalIsPause);
+        var at = request.DecidedAt is { } decidedAt ? TimeZoneInfo.ConvertTime(decidedAt, timeZone).ToString("dd.MM. HH:mm") : null;
+        var by = string.IsNullOrWhiteSpace(request.DecidedBy) ? "Admin" : request.DecidedBy;
+        var when = at is null ? string.Empty : $" · {at}";
+        var result = request.Status switch
+        {
+            TimeCorrectionStatus.Applied => $"✅ Genehmigt von {by}{when} – in Kimai eingetragen",
+            TimeCorrectionStatus.Rejected => $"❌ Abgelehnt von {by}{when}"
+                + (string.IsNullOrWhiteSpace(request.DecisionNote) ? string.Empty : $"\nGrund: {request.DecisionNote}"),
+            TimeCorrectionStatus.Failed => $"⚠️ Nicht in Kimai eingetragen: {ShortenCorrectionError(request.Error)} – bitte in Kimai nachtragen"
+                + $" (genehmigt von {by}{when})",
+            TimeCorrectionStatus.Withdrawn => $"↩️ Zurückgezogen{when}",
+            TimeCorrectionStatus.ResolvedManually => $"☑️ Von {by}{when} manuell in Kimai nachgetragen",
+            _ => null,
+        };
+        return result is null ? body : $"{body}\n\n{result}";
+    }
+
+    /// <summary>Kurzfassung für <c>answerCallbackQuery</c> bei einem schon entschiedenen Antrag.</summary>
+    public static string BuildCorrectionAlreadyDecided(TimeCorrectionRequest request)
+    {
+        var by = string.IsNullOrWhiteSpace(request.DecidedBy) ? "Admin" : request.DecidedBy;
+        var result = request.Status switch
+        {
+            TimeCorrectionStatus.Applied => $"Genehmigt von {by}",
+            TimeCorrectionStatus.Rejected => $"Abgelehnt von {by}",
+            TimeCorrectionStatus.Failed => $"Genehmigt von {by}, Kimai hat nicht gebucht",
+            TimeCorrectionStatus.Withdrawn => "Zurückgezogen",
+            TimeCorrectionStatus.ResolvedManually => $"Manuell erledigt von {by}",
+            _ => "Offen",
+        };
+        return $"Bereits entschieden: {result}";
+    }
+
+    /// <summary>Inline-Tastatur eines offenen Antrags: Genehmigen und Ablehnen.</summary>
+    public static object BuildCorrectionKeyboard(string id) => new
+    {
+        inline_keyboard = new[]
+        {
+            new[]
+            {
+                new { text = "✅ Genehmigen", callback_data = TelegramCorrectionCallback.Format(TelegramCorrectionAction.AskApprove, id) },
+                new { text = "❌ Ablehnen", callback_data = TelegramCorrectionCallback.Format(TelegramCorrectionAction.AskReject, id) },
+            },
+        },
+    };
+
+    /// <summary>Zweiter Schritt: bestätigen oder zurück.</summary>
+    public static object BuildCorrectionConfirmKeyboard(string id, bool approve) => new
+    {
+        inline_keyboard = new[]
+        {
+            new[]
+            {
+                new
+                {
+                    text = approve ? "Ja, genehmigen" : "Ja, ablehnen",
+                    callback_data = TelegramCorrectionCallback.Format(
+                        approve ? TelegramCorrectionAction.Approve : TelegramCorrectionAction.Reject, id),
+                },
+                new { text = "Zurück", callback_data = TelegramCorrectionCallback.Format(TelegramCorrectionAction.Back, id) },
+            },
+        },
+    };
+
+    private static string DescribeCorrectionKind(TimeCorrectionKind kind) => kind switch
+    {
+        TimeCorrectionKind.AddPause => "Pause nachtragen",
+        TimeCorrectionKind.SetEnd => "Ausstempeln nachtragen",
+        TimeCorrectionKind.AddShift => "Schicht nachtragen",
+        _ => "Beginn/Ende ändern",
+    };
+
+    /// <summary>"Mo 06.10. 22:00": mit Wochentag, weil Schichten über Mitternacht gehen.</summary>
+    private static string FormatCorrectionTime(DateTimeOffset value, TimeZoneInfo timeZone)
+    {
+        var local = TimeZoneInfo.ConvertTime(value, timeZone);
+        return $"{WeekdayNames[(int)local.DayOfWeek]} {local:dd.MM. HH:mm}";
+    }
+
+    /// <summary>"Mo 06.10. 22:00 – Di 07.10. 06:10"; am selben Tag steht das Ende nur mit der Uhrzeit.</summary>
+    private static string FormatCorrectionRange(DateTimeOffset begin, DateTimeOffset? end, TimeZoneInfo timeZone)
+    {
+        var from = FormatCorrectionTime(begin, timeZone);
+        if (end is not { } until)
+        {
+            return $"{from} – offen";
+        }
+
+        var localBegin = TimeZoneInfo.ConvertTime(begin, timeZone);
+        var localEnd = TimeZoneInfo.ConvertTime(until, timeZone);
+        return localBegin.Date == localEnd.Date
+            ? $"{from} – {localEnd:HH:mm}"
+            : $"{from} – {FormatCorrectionTime(until, timeZone)}";
+    }
+
+    private static string ShortenCorrectionError(string? error)
+    {
+        var text = string.IsNullOrWhiteSpace(error) ? "unbekannter Fehler" : error.Trim();
+        return text.Length <= 300 ? text : text[..300] + "…";
     }
 
     private static string FormatDuration(int seconds) => $"{seconds / 3600}:{seconds % 3600 / 60:00}";

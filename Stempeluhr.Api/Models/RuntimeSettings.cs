@@ -43,6 +43,27 @@ public sealed class RuntimeSettings
     public bool TelegramAlertsEnabled =>
         !string.IsNullOrWhiteSpace(TelegramBotToken) && !string.IsNullOrWhiteSpace(TelegramAlertChat);
 
+    /// <summary>
+    /// Eigener Chat für Korrekturanträge mit den Knöpfen Genehmigen/Ablehnen.
+    /// Leer: keine Telegram-Freigabe (und kein Poller), es gilt nur die Admin-Seite.
+    /// </summary>
+    public string? TelegramCorrectionChatId { get; init; }
+
+    /// <summary>
+    /// Telegram-User-IDs, die Korrekturanträge entscheiden dürfen. Leer: jedes
+    /// Mitglied von <see cref="TelegramCorrectionChatId"/>.
+    /// </summary>
+    private readonly List<long> telegramApproverUserIds = [];
+    public List<long> TelegramApproverUserIds
+    {
+        get => telegramApproverUserIds;
+        init => telegramApproverUserIds = value ?? [];
+    }
+
+    [JsonIgnore]
+    public bool TelegramCorrectionsEnabled =>
+        !string.IsNullOrWhiteSpace(TelegramBotToken) && !string.IsNullOrWhiteSpace(TelegramCorrectionChatId);
+
     /// <summary>Optional InfluxDB for terminal metrics over time, e.g. <c>http://192.168.1.10:8086</c>.</summary>
     public string? InfluxUrl { get; init; }
 

@@ -53,6 +53,8 @@ public sealed class TimeCorrectionServiceTests : IDisposable
     private async Task<TimeCorrectionDto> Submitted(SubmitCorrectionRequest request)
     {
         var result = await _service.SubmitAsync(request);
+        // Die Meldung läuft im Hintergrund: erst abwarten, damit die Tests deterministisch bleiben.
+        await _service.WhenNotificationsCompleteAsync();
         Assert.True(result.Outcome == CorrectionOutcome.Ok, result.Message);
         return result.Value!;
     }
@@ -648,6 +650,7 @@ public sealed class TimeCorrectionServiceTests : IDisposable
 
         var withdrawn = await _service.WithdrawAsync(MaxAuth, dto.Id);
         Assert.Equal(TimeCorrectionStatus.Withdrawn, withdrawn.Value!.Status);
+        await _service.WhenNotificationsCompleteAsync();
         Assert.Equal(["submitted:Pending", "decided:Withdrawn"], _notifier.Events);
 
         // Withdrawn requests cannot be approved any more, nor withdrawn twice.

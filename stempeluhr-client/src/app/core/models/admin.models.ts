@@ -58,6 +58,10 @@ export interface AdminSettings {
   defaultProjectId: number | null;
   defaultActivityId: number | null;
   pauseActivityId: number | null;
+  /** Chat für Korrekturanträge mit Genehmigen/Ablehnen-Knöpfen; leer = nur die Admin-Seite. */
+  telegramCorrectionChatId?: string | null;
+  /** Telegram-User-IDs, die Korrekturanträge entscheiden dürfen; leer = jedes Mitglied des Chats. */
+  telegramApproverUserIds?: number[];
   employees: AdminEmployee[];
 }
 
