@@ -173,6 +173,46 @@ public sealed class KimaiClientTests
     }
 
     [Fact]
+    public async Task GetCurrentUserIdAsync_ReadsTheIdFromUsersMe_AndCachesItPerToken()
+    {
+        var employee = new EmployeeSettings { Id = "cache-test", ApiToken = "token-cache-test" };
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.OK, """{"id":7,"timezone":"Europe/Berlin"}"""));
+        var client = CreateClient(handler);
+
+        Assert.Equal(7, await client.GetCurrentUserIdAsync(Settings, employee));
+        Assert.Equal(7, await client.GetCurrentUserIdAsync(Settings, employee));
+
+        Assert.Equal("GET /api/users/me", Assert.Single(handler.Requests));
+
+        // A replaced token must not inherit the cached id.
+        var other = new EmployeeSettings { Id = "cache-test", ApiToken = "another-token" };
+        var otherHandler = new ScriptedHandler(Resp(HttpStatusCode.OK, """{"id":9}"""));
+        Assert.Equal(9, await CreateClient(otherHandler).GetCurrentUserIdAsync(Settings, other));
+    }
+
+    [Fact]
+    public async Task GetCurrentUserIdAsync_WithoutIdInTheAnswer_ReturnsNullAndDoesNotCache()
+    {
+        var employee = new EmployeeSettings { Id = "no-id", ApiToken = "token-no-id" };
+        var handler = new ScriptedHandler(
+            Resp(HttpStatusCode.OK, """{"timezone":"Europe/Berlin"}"""),
+            Resp(HttpStatusCode.OK, """{"id":11}"""));
+        var client = CreateClient(handler);
+
+        Assert.Null(await client.GetCurrentUserIdAsync(Settings, employee));
+        Assert.Equal(11, await client.GetCurrentUserIdAsync(Settings, employee));
+    }
+
+    [Fact]
+    public async Task GetCurrentUserIdAsync_KimaiError_ThrowsInsteadOfPassingForNoRestriction()
+    {
+        var employee = new EmployeeSettings { Id = "kimai-error", ApiToken = "token-kimai-error" };
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.InternalServerError));
+
+        await Assert.ThrowsAsync<KimaiApiException>(() => CreateClient(handler).GetCurrentUserIdAsync(Settings, employee));
+    }
+
+    [Fact]
     public async Task GetTimesheetsAsync_BuildsDateRangeQuery_AndParsesEntries()
     {
         var handler = new ScriptedHandler(

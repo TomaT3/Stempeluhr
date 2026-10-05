@@ -85,6 +85,7 @@ public static class KioskRateLimiters
 {
     public const string SyncKey = "kiosk-sync";
     public const string IdentifyKey = "kiosk-identify";
+    public const string CorrectionKey = "kiosk-corrections";
 
     public static IServiceCollection AddKioskRateLimiters(this IServiceCollection services)
     {
@@ -96,6 +97,10 @@ public static class KioskRateLimiters
         // minute, but 60/min still caps brute-forcing card ids (4-byte UIDs) and
         // protects Kimai from a request flood (each identify hits GetStatusAsync).
         services.AddKeyedSingleton(IdentifyKey, (_, _) => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 60));
+        // Correction requests: a few calls per request (shift list, submit,
+        // own requests), each of them hits Kimai - and the PIN or card is the
+        // only credential, so the IP budget also caps guessing.
+        services.AddKeyedSingleton(CorrectionKey, (_, _) => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 30));
         return services;
     }
 }

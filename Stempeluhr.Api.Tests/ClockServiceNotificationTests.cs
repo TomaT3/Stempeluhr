@@ -655,6 +655,7 @@ public sealed class ClockServiceNotificationTests
         public Task<ClockStatusDto> GetStatusAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) =>
             Task.FromResult(_statuses.Count > 0 ? _statuses.Dequeue() : ClockedOut);
 
+        public Task<int?> GetCurrentUserIdAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)
         {
             TimezoneLookupCount++;

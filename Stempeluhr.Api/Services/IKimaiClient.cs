@@ -72,6 +72,18 @@ public interface IKimaiClient
         EmployeeSettings employee,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the Kimai user id of the token owner (<c>/api/users/me</c>), or
+    /// null if Kimai's answer carries none. The id of a token cannot change,
+    /// so it is cached per employee and token. Unlike the timezone lookup this
+    /// throws on Kimai errors: it backs the "own timesheets only" check, and a
+    /// failed lookup must never pass for "no restriction".
+    /// </summary>
+    Task<int?> GetCurrentUserIdAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyCollection<KimaiUserDto>> GetUsersAsync(
         string baseUrl,
         string apiToken,
