@@ -153,8 +153,18 @@ export interface AdminTimeCorrection {
   pauseEnd: string | null;
   taskId: string | null;
   taskLabel: string | null;
-  /** Timesheet zum Zeitpunkt des Antrags (fehlt bei `addShift`). */
-  original: { begin: string; end: string | null; description: string | null } | null;
+  /**
+   * Timesheet zum Zeitpunkt des Antrags (fehlt bei `addShift`). `setEnd` und
+   * `changeTimes` gibt es auch für Pausen-Einträge.
+   */
+  original: {
+    begin: string;
+    end: string | null;
+    description: string | null;
+    kind: 'work' | 'pause';
+    /** „Pause“, „Arbeit“ oder die Bezeichnung der Tätigkeit. */
+    label: string;
+  } | null;
   decidedAt: string | null;
   decidedBy: string | null;
   decisionNote: string | null;

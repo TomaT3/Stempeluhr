@@ -71,8 +71,11 @@
               <dt>Kimai-Meldung</dt>
               <dd class="error">{{ entry.error || 'Keine Meldung' }}</dd>
               @if (entry.appliedSteps.length) {
-                <dt>Fortschritt</dt>
-                <dd>{{ entry.appliedSteps.length }} Schritt(e) schon in Kimai. „Erneut versuchen“ setzt dort fort.</dd>
+                <dt>Schon in Kimai</dt>
+                <dd class="partial">
+                  {{ appliedSteps(entry) }}. Der Eintrag in Kimai ist also schon geändert: Für die manuelle Nacharbeit
+                  vom aktuellen Stand in Kimai ausgehen. „Erneut versuchen“ setzt beim offenen Schritt fort.
+                </dd>
               }
             }
           </dl>

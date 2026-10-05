@@ -99,7 +99,8 @@ dt { color: var(--color-muted); }
 dd { margin: 0; overflow-wrap: anywhere; }
 dd small { color: var(--color-muted); }
 .line { display: block; }
-.error { color: var(--color-danger-text); }
+.error, .partial { color: var(--color-danger-text); }
+.partial { font-weight: 600; }
 
 .reject { display: grid; gap: 8px; }
 .reject label { display: grid; gap: 4px; }

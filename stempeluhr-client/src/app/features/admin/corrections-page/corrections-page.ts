@@ -32,6 +32,17 @@ const StatusLabels: Record<TimeCorrectionStatus, string> = {
   resolvedManually: 'Manuell erledigt',
 };
 
+const StepLabels: Record<string, string> = {
+  shorten: 'Eintrag gekürzt',
+  end: 'Ende geändert',
+  times: 'Zeiten geändert',
+  pause: 'Pause angelegt',
+  rest: 'Rest-Arbeit angelegt',
+  work: 'Arbeit angelegt',
+  work1: 'Arbeit vor der Pause angelegt',
+  work2: 'Arbeit nach der Pause angelegt',
+};
+
 const Weekdays = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 
 @Component({
@@ -152,9 +163,14 @@ export class CorrectionsPage {
     return entry.timeZone && entry.timeZone !== this.browserTimeZone ? entry.timeZone : null;
   }
 
+  /** Schritte, die Kimai bei einem gescheiterten Antrag schon ausgeführt hat. */
+  appliedSteps(entry: AdminTimeCorrection): string {
+    return entry.appliedSteps.map(step => StepLabels[step] ?? step).join(', ');
+  }
+
   before(entry: AdminTimeCorrection): CorrectionLine[] {
     const original = entry.original;
-    return original ? [{ label: 'Arbeit', range: this.range(original.begin, original.end) }] : [];
+    return original ? [{ label: original.label, range: this.range(original.begin, original.end) }] : [];
   }
 
   after(entry: AdminTimeCorrection): CorrectionLine[] {
@@ -164,12 +180,13 @@ export class CorrectionsPage {
         if (!original || !entry.pauseBegin || !entry.pauseEnd) {
           return [];
         }
-        return this.split('Arbeit', original.begin, original.end, entry.pauseBegin, entry.pauseEnd);
+        return this.split(original.label, original.begin, original.end, entry.pauseBegin, entry.pauseEnd);
+      // Auch für Pausen-Einträge: die Bezeichnung kommt aus dem Original.
       case 'setEnd':
-        return original ? [{ label: 'Arbeit', range: this.range(original.begin, entry.end ?? original.end) }] : [];
+        return original ? [{ label: original.label, range: this.range(original.begin, entry.end ?? original.end) }] : [];
       case 'changeTimes':
         return original
-          ? [{ label: 'Arbeit', range: this.range(entry.begin ?? original.begin, entry.end ?? original.end) }]
+          ? [{ label: original.label, range: this.range(entry.begin ?? original.begin, entry.end ?? original.end) }]
           : [];
       case 'addShift': {
         if (!entry.begin) {
@@ -277,8 +294,13 @@ export class CorrectionsPage {
         return `${name}: Als manuell erledigt markiert.`;
       case 'withdrawn':
         return `${name}: Der Antrag wurde inzwischen zurückgezogen.`;
-      case 'failed':
-        return `${name}: Kimai hat nicht gebucht – ${result.error ?? 'unbekannter Fehler'}`;
+      case 'failed': {
+        // Failed heißt nicht "nichts gebucht": Schritte vor dem Fehler sind schon in Kimai.
+        const reason = result.error ?? 'unbekannter Fehler';
+        return result.appliedSteps.length
+          ? `${name}: Nicht vollständig in Kimai gebucht – ${reason}. Schon in Kimai: ${this.appliedSteps(result)}.`
+          : `${name}: Nicht in Kimai gebucht – ${reason}`;
+      }
       default:
         return `${name}: Antrag ist noch offen.`;
     }

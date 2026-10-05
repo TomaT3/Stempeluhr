@@ -151,7 +151,11 @@ public sealed record CorrectionTimesheetsDto(string TimeZone, IReadOnlyList<Corr
 public sealed record CorrectionOriginalDto(
     string Begin,
     string? End,
-    string? Description);
+    string? Description,
+    // "work" oder "pause", wie bei CorrectionEntryDto: auch Pausen-Einträge
+    // lassen sich mit setEnd/changeTimes korrigieren.
+    string Kind,
+    string Label);
 
 /// <summary>Ein Antrag für Kiosk und Admin-Seite; Zeiten lokal (<c>yyyy-MM-ddTHH:mm</c>) mit Zeitzonenname.</summary>
 public sealed record TimeCorrectionDto(

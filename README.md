@@ -284,7 +284,11 @@ Antrags und die Entscheidung mit Grund bzw. Kimai-Meldung. Die Zeiten stehen in
 der Kimai-Zeitzone des Mitarbeiters; liegt das Gerät in einer anderen Zone,
 steht sie dabei. Offene Anträge lassen sich genehmigen oder ablehnen (der
 optionale Grund erscheint nach „Ablehnen“), fehlgeschlagene erneut versuchen
-oder als „Manuell in Kimai erledigt“ markieren. Nach jeder Aktion lädt die
+oder als „Manuell in Kimai erledigt“ markieren. Ist ein Antrag nur zum Teil
+gebucht (z. B. Eintrag schon gekürzt, Pause fehlt), nennt die Seite die schon
+erledigten Schritte, denn die Nacharbeit muss vom aktuellen Stand in Kimai
+ausgehen. Korrigierte Pausen-Einträge (`setEnd`, `changeTimes`) stehen als
+„Pause“ da (`original.kind`/`original.label` im DTO). Nach jeder Aktion lädt die
 Liste neu und zeigt das Ergebnis; während eine Aktion läuft, sind die Knöpfe
 gesperrt. Die Seite ist für das Handy ausgelegt, damit der Chef unterwegs
 freigeben kann.

@@ -17,7 +17,7 @@ describe('CorrectionsPage', () => {
       createdAt: '2026-10-05T07:00:00Z', comment: null, timeZone: 'Europe/Berlin', timesheetId: 17,
       begin: null, end: null, pauseBegin: '2026-10-04T12:00', pauseEnd: '2026-10-04T12:30',
       taskId: null, taskLabel: null,
-      original: { begin: '2026-10-04T08:00', end: '2026-10-04T16:00', description: null },
+      original: { begin: '2026-10-04T08:00', end: '2026-10-04T16:00', description: null, kind: 'work', label: 'Arbeit' },
       decidedAt: null, decidedBy: null, decisionNote: null, error: null, appliedSteps: [],
       ...overrides,
     };
@@ -86,6 +86,22 @@ describe('CorrectionsPage', () => {
     fixture.destroy();
   });
 
+  it('labels a corrected pause as pause, not as work', async () => {
+    const { fixture, http, page } = await setup();
+
+    expectList(http, 'open').flush([correction({
+      kind: 'changeTimes', pauseBegin: null, pauseEnd: null, begin: null, end: '2026-10-04T12:35',
+      original: { begin: '2026-10-04T12:00', end: '2026-10-04T12:30', description: null, kind: 'pause', label: 'Pause' },
+    })]);
+    fixture.detectChanges();
+
+    const text = page.textContent ?? '';
+    expect(text).toContain('Pause So 04.10.2026 12:00–12:30');
+    expect(text).toContain('Pause So 04.10.2026 12:00–12:35');
+    expect(text).not.toContain('Arbeit So');
+    fixture.destroy();
+  });
+
   it('switches between open and all requests', async () => {
     const { fixture, http, page } = await setup();
     expectList(http, 'open').flush([]);
@@ -128,14 +144,31 @@ describe('CorrectionsPage', () => {
     fixture.detectChanges();
 
     button(page, 'Genehmigen').click();
+    const failed = correction({ status: 'failed', error: 'Sperrzeitraum' });
+    http.expectOne('/api/admin/corrections/c1/approve').flush(failed);
+    expectList(http, 'open').flush([failed]);
+    fixture.detectChanges();
+
+    expect(page.textContent).toContain('Anna: Nicht in Kimai gebucht – Sperrzeitraum');
+    expect(page.querySelector('.partial')).toBeNull();
+    fixture.destroy();
+  });
+
+  it('points out steps already applied in Kimai after a partial failure', async () => {
+    const { fixture, http, page } = await setup();
+    expectList(http, 'open').flush([correction()]);
+    fixture.detectChanges();
+
+    button(page, 'Genehmigen').click();
     const failed = correction({ status: 'failed', error: 'Sperrzeitraum', appliedSteps: ['shorten'] });
     http.expectOne('/api/admin/corrections/c1/approve').flush(failed);
     expectList(http, 'open').flush([failed]);
     fixture.detectChanges();
 
     const text = page.textContent ?? '';
-    expect(text).toContain('Kimai hat nicht gebucht – Sperrzeitraum');
-    expect(text).toContain('1 Schritt(e) schon in Kimai');
+    expect(text).toContain('Anna: Nicht vollständig in Kimai gebucht – Sperrzeitraum. Schon in Kimai: Eintrag gekürzt.');
+    expect(text).not.toContain('Nicht in Kimai gebucht');
+    expect(page.querySelector('.partial')?.textContent).toContain('vom aktuellen Stand in Kimai ausgehen');
     expect(button(page, 'Erneut versuchen')).toBeTruthy();
     expect(button(page, 'Manuell in Kimai erledigt')).toBeTruthy();
     fixture.destroy();
