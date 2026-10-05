@@ -3,6 +3,11 @@
  * ohne Offset): so schickt und liefert die API Korrekturzeiten. Die Werte
  * werden als „UTC-Millisekunden der Wanduhr“ gerechnet, damit Schritte weder
  * von der Zeitzone des Geräts noch von der Sommerzeit des Geräts abhängen.
+ *
+ * Die Zeitumstellung der Kimai-Zone kennt diese Rechnung nicht: In der Nacht
+ * der Umstellung können Grenzen und Dauern auf dem Client um 1 h danebenliegen.
+ * Maßgeblich ist die Prüfung im Server (er lehnt nicht existierende Uhrzeiten
+ * ab und rechnet Dauern in echter Zeit).
  */
 
 export const MINUTE_MS = 60_000;

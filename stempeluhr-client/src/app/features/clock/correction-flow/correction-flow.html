@@ -58,7 +58,9 @@
           [max]="boundsOf(current).max"
           (valueChange)="setField(current, $event)" />
       }
-      @if (unchanged() && isLastField()) {
+      @if (invalid(); as problem) {
+        <p class="flow-note flow-warn" role="status">{{ problem }}</p>
+      } @else if (unchanged() && isLastField()) {
         <p class="flow-note">Keine Änderung eingestellt.</p>
       }
     }
@@ -152,11 +154,11 @@
     }
     @case ('time') {
       <button class="flow-button" type="button" (click)="back()">Zurück</button>
-      <button class="flow-button primary" type="button" [disabled]="isBusy() || (unchanged() && isLastField())" (click)="next()">Weiter</button>
+      <button class="flow-button primary" type="button" [disabled]="isBusy() || (isLastField() && (unchanged() || invalid() !== null))" (click)="next()">Weiter</button>
     }
     @case ('summary') {
       <button class="flow-button" type="button" [disabled]="isBusy()" (click)="back()">Zurück</button>
-      <button class="flow-button primary" type="button" [disabled]="isBusy() || unchanged()" (click)="submit()">
+      <button class="flow-button primary" type="button" [disabled]="isBusy() || unchanged() || invalid() !== null" (click)="submit()">
         {{ isBusy() ? 'Sendet …' : 'Absenden' }}
       </button>
     }

@@ -345,6 +345,88 @@ describe('CorrectionFlow', () => {
       expect((root().querySelector('.minute-later-1') as HTMLButtonElement).disabled).toBe(true);
     });
 
+    describe('Zeiten ändern bei einem Eintrag über 16 Stunden (vergessenes Ausstempeln)', () => {
+      const long: CorrectionTimesheets = {
+        timeZone: 'Europe/Berlin',
+        shifts: [{
+          begin: '2026-10-04T08:00',
+          end: '2026-10-05T04:00',
+          entries: [{ id: 31, begin: '2026-10-04T08:00', end: '2026-10-05T04:00', kind: 'work', label: 'Arbeit', hasOpenRequest: false }],
+        }],
+      };
+
+      const next = () => ([...root().querySelectorAll('button')] as HTMLButtonElement[]).find(button => button.textContent?.trim() === 'Weiter')!;
+      const absenden = () => ([...root().querySelectorAll('button')] as HTMLButtonElement[]).find(button => button.textContent?.trim() === 'Absenden')!;
+      const disabled = (selector: string) => (root().querySelector(selector) as HTMLButtonElement).disabled;
+
+      beforeEach(() => {
+        correctionTimesheets.mockReturnValue(of(long));
+        create();
+        press('Zeiten ändern');
+        pressEntry('08:00 – Mo 05.10. 04:00');
+      });
+
+      it('says why and lets the begin move towards the range until it fits', () => {
+        expect(title()).toBe('Beginn');
+        expect(stepper()).toEqual(['So 04.10.', '08', '00']);
+        expect(root().querySelector('.flow-warn')?.textContent).toContain('höchstens 16 Stunden');
+        // Begin starts 4 h below its minimum (end - 16 h = 12:00): only later is possible.
+        expect(disabled('.hour-earlier')).toBe(true);
+        expect(disabled('.hour-later')).toBe(false);
+
+        for (let i = 0; i < 4; i++) {
+          pressSelector('.hour-later');
+        }
+        expect(stepper()).toEqual(['So 04.10.', '12', '00']);
+        expect(root().querySelector('.flow-warn')).toBeNull();
+
+        press('Weiter');
+        expect(title()).toBe('Ende');
+        expect(next().disabled).toBe(false);
+        press('Weiter');
+        expect(lines()).toEqual(['Arbeit So 04.10. 08:00 – Mo 05.10. 04:00', 'Arbeit So 04.10. 12:00 – Mo 05.10. 04:00']);
+        expect(absenden().disabled).toBe(false);
+        absenden().click();
+
+        expect(submitCorrection).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          kind: 'changeTimes', timesheetId: 31, begin: '2026-10-04T12:00', end: null,
+        }));
+      });
+
+      it('or the end is shortened instead - Weiter at the last field waits until it fits', () => {
+        // The begin stays: Weiter is allowed on the first field.
+        expect(next().disabled).toBe(false);
+        press('Weiter');
+
+        expect(title()).toBe('Ende');
+        expect(stepper()).toEqual(['Mo 05.10.', '04', '00']);
+        // End is 4 h above its maximum (begin + 16 h = 00:00): only earlier is possible.
+        expect(disabled('.hour-later')).toBe(true);
+        expect(disabled('.hour-earlier')).toBe(false);
+        expect(next().disabled).toBe(true);
+        expect(root().querySelector('.flow-warn')?.textContent).toContain('höchstens 16 Stunden');
+
+        for (let i = 0; i < 4; i++) {
+          pressSelector('.hour-earlier');
+        }
+        expect(stepper()).toEqual(['Mo 05.10.', '00', '00']);
+        expect(next().disabled).toBe(false);
+        press('Weiter');
+        absenden().click();
+
+        expect(submitCorrection).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          kind: 'changeTimes', timesheetId: 31, begin: null, end: '2026-10-05T00:00',
+        }));
+      });
+
+      it('cannot be sent unchanged', () => {
+        press('Weiter');
+        expect(next().disabled).toBe(true);
+        fixture.componentInstance.submit();
+        expect(submitCorrection).not.toHaveBeenCalled();
+      });
+    });
+
     it('Zurück walks back through the steps and keeps the entered times', () => {
       create();
       press('Zeiten ändern');

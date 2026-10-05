@@ -62,6 +62,44 @@ describe('TimeStepper', () => {
     expect(fixture.componentInstance.value()).toBe('2026-10-05T08:00');
   });
 
+  describe('value outside of min/max at the start', () => {
+    const disabled = (selector: string) => (fixture.nativeElement.querySelector(selector) as HTMLButtonElement).disabled;
+
+    it('below min: only steps towards the range, never further away or across it', () => {
+      create('2026-10-05T08:00', { min: '2026-10-05T12:00', max: '2026-10-05T13:00' });
+
+      expect(disabled('.hour-later')).toBe(false);
+      expect(disabled('.minute-later-5')).toBe(false);
+      expect(disabled('.hour-earlier')).toBe(true);
+      expect(disabled('.minute-earlier-1')).toBe(true);
+      // A day forward jumps far above max: farther away than now.
+      expect(disabled('.day-later')).toBe(true);
+
+      for (let i = 0; i < 4; i++) {
+        press('.hour-later');
+      }
+      expect(fixture.componentInstance.value()).toBe('2026-10-05T12:00');
+      // Inside now: the bounds hold again.
+      expect(disabled('.hour-earlier')).toBe(true);
+      expect(disabled('.hour-later')).toBe(false);
+    });
+
+    it('above max: only steps back towards the range', () => {
+      create('2026-10-05T16:00', { min: '2026-10-05T08:00', max: '2026-10-05T12:00' });
+
+      expect(disabled('.hour-earlier')).toBe(false);
+      expect(disabled('.day-earlier')).toBe(true);
+      expect(disabled('.hour-later')).toBe(true);
+      expect(disabled('.minute-later-1')).toBe(true);
+
+      for (let i = 0; i < 4; i++) {
+        press('.hour-earlier');
+      }
+      expect(fixture.componentInstance.value()).toBe('2026-10-05T12:00');
+      expect(disabled('.hour-later')).toBe(true);
+    });
+  });
+
   it('locks everything while disabled', () => {
     create('2026-10-05T08:00', { disabled: true });
 

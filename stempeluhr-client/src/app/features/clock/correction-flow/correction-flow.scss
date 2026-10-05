@@ -174,6 +174,10 @@ dd {
   font-weight: 800;
 }
 
+.flow-warn {
+  color: var(--color-danger-text);
+}
+
 .flow-sent {
   padding: 12px 4px;
   font-size: clamp(1.1rem, 2.6vw, 1.4rem);

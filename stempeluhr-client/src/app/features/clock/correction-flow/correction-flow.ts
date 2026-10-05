@@ -240,6 +240,13 @@ export class CorrectionFlow implements OnInit {
     return change ? afterLines(change) : [];
   });
 
+  /**
+   * Die Regeln der API für die eingestellten Zeiten (TimeCorrectionValidator),
+   * damit „Weiter“ und „Absenden“ erst gehen, wenn alles im Bereich liegt -
+   * auch wenn ein Wert schon außerhalb gestartet ist (Eintrag über 16 h).
+   */
+  protected readonly invalid = computed<string | null>(() => this.validationMessage());
+
   /** `changeTimes` ohne geänderte Zeit ist kein Antrag. */
   protected readonly unchanged = computed(() => this.kind() === 'changeTimes' && !this.sentBegin() && !this.sentEnd());
 
@@ -433,7 +440,7 @@ export class CorrectionFlow implements OnInit {
   submit(): void {
     this.touch();
     const kind = this.kind();
-    if (!kind || this.isBusy() || this.unchanged()) {
+    if (!kind || this.isBusy() || this.unchanged() || this.invalid()) {
       return;
     }
     const change = this.change()!;
@@ -533,6 +540,56 @@ export class CorrectionFlow implements OnInit {
   private clamp(value: LocalDateTime, bounds: { min: LocalDateTime | null; max: LocalDateTime | null }): LocalDateTime {
     const capped = bounds.max === null ? value : earlier(value, bounds.max);
     return bounds.min === null ? capped : later(capped, bounds.min);
+  }
+
+  private validationMessage(): string | null {
+    const kind = this.kind();
+    const entry = this.entry();
+    const begin = this.begin();
+    const end = this.end();
+    const pauseBegin = this.pauseBegin();
+    const pauseEnd = this.pauseEnd();
+    const pauseError = (): string | null => {
+      if (pauseEnd <= pauseBegin) {
+        return 'Das Ende der Pause muss nach ihrem Beginn liegen.';
+      }
+      return minutesBetween(pauseBegin, pauseEnd) > MAX_PAUSE_MINUTES ? 'Eine Pause darf höchstens 4 Stunden dauern.' : null;
+    };
+    switch (kind) {
+      case 'addPause':
+        if (!entry?.end) {
+          return null;
+        }
+        return pauseError() ?? (pauseBegin > entry.begin && pauseEnd <= entry.end ? null : 'Die Pause muss innerhalb des Eintrags liegen.');
+      case 'setEnd':
+        if (!entry?.end) {
+          return null;
+        }
+        if (end <= entry.begin) {
+          return 'Das Ende muss nach dem Beginn liegen.';
+        }
+        return end < entry.end ? null : 'Das neue Ende muss vor dem bisherigen Ende liegen.';
+      case 'changeTimes':
+        if (end <= begin) {
+          return 'Das Ende muss nach dem Beginn liegen.';
+        }
+        return minutesBetween(begin, end) > MAX_SHIFT_MINUTES
+          ? 'Ein Eintrag darf höchstens 16 Stunden dauern. Bitte Beginn oder Ende anpassen.'
+          : null;
+      case 'addShift':
+        if (end <= begin) {
+          return 'Das Ende muss nach dem Beginn liegen.';
+        }
+        if (minutesBetween(begin, end) > MAX_SHIFT_MINUTES) {
+          return 'Eine Schicht darf höchstens 16 Stunden dauern.';
+        }
+        if (!this.withPause()) {
+          return null;
+        }
+        return pauseError() ?? (pauseBegin > begin && pauseEnd < end ? null : 'Die Pause muss innerhalb der Schicht liegen.');
+      default:
+        return null;
+    }
   }
 
   /** Vorbelegung bei der Wahl eines vorhandenen Eintrags. */
