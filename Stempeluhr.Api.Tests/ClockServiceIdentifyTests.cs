@@ -102,6 +102,7 @@ public sealed class ClockServiceIdentifyTests
             throw new NotSupportedException();
         }
 
+        public Task<int?> GetCurrentUserIdAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) =>
             Task.FromResult<string?>("Europe/Berlin");
         public Task StartAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget t, CancellationToken ct = default) { LastStamped = true; throw new NotSupportedException(); }

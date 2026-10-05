@@ -84,6 +84,7 @@ cat > "$WORK/settings.json" <<EOF
   "defaultProjectId": 1,
   "defaultActivityId": 1,
   "pauseActivityId": 2,
+  "adminPassword": "e2e-admin",
   "terminalTokens": { "test-terminal": "integration-terminal-token" },
   "employees": [
     { "id": "test-max",  "displayName": "Max Mustermann", "pin": "1234", "nfcCardId": "04A2B3C4",
@@ -347,6 +348,100 @@ assert_status '"displayName":"Max Mustermann"' "$R" "Admin sieht den zugeordnete
 R=$(curl -s -m 5 -X POST "$API_URL/api/nfc/clock/sync" -H 'Content-Type: application/json' -d '{"events":[]}')
 [[ "$R" != *'"results"'* ]] && ok "Alter NFC-Toggle-Endpunkt ist entfernt" \
   || bad "/api/nfc/clock/sync liefert noch ein Sync-Ergebnis"
+
+# ------------------------------------------------- Test 3c: Korrekturanträge
+say "Test 3c: Korrekturantrag \"Pause nachtragen\" absenden und über die Admin-API genehmigen"
+
+# Ein abgeschlossener Eintrag vor 12 Tagen, 04:00-06:00 Berliner Zeit: weit weg
+# von allen anderen Buchungen des Tests und vor der Zeitumstellung um 02:00.
+CORR_DAY=$(TZ=Europe/Berlin date -d "12 days ago" +%F)
+CORR_BEGIN=$(TZ=Europe/Berlin date -d "$CORR_DAY 04:00" +%Y-%m-%dT%H:%M:%S%:z)
+CORR_END=$(TZ=Europe/Berlin date -d "$CORR_DAY 06:00" +%Y-%m-%dT%H:%M:%S%:z)
+corr_sheet() { # begin end user
+  curl -s -m 10 -X POST "$KIMAI_URL/api/timesheets?full=true" -H 'Content-Type: application/json'     -d "{\"begin\":\"$1\",\"end\":\"$2\",\"project\":1,\"activity\":1,\"description\":\"E2E\",\"user\":$3}" | grep -oP '"id": *\K[0-9]+' | head -1
+}
+corr_post() { # path json [extra curl args...]
+  local path="$1" json="$2"; shift 2
+  curl -s -m 15 -X POST "$API_URL$path" -H 'Content-Type: application/json'     -H "X-Forwarded-For: $(next_client_ip)" "$@" -d "$json"
+}
+corr_code() { # path json [extra curl args...]
+  local path="$1" json="$2"; shift 2
+  curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "$API_URL$path" -H 'Content-Type: application/json'     -H "X-Forwarded-For: $(next_client_ip)" "$@" -d "$json"
+}
+SHEET_ID=$(corr_sheet "$CORR_BEGIN" "$CORR_END" 1)
+FOREIGN_ID=$(corr_sheet "$CORR_BEGIN" "$CORR_END" 12)
+[[ -n "$SHEET_ID" && -n "$FOREIGN_ID" ]] && ok "Testeintrag $SHEET_ID und fremder Eintrag $FOREIGN_ID angelegt" || bad "Testeinträge nicht angelegt"
+
+SUBMIT="{\"employeeId\":\"test-max\",\"pin\":\"1234\",\"kind\":\"addPause\",\"timesheetId\":$SHEET_ID,\"pauseBegin\":\"${CORR_DAY}T04:30\",\"pauseEnd\":\"${CORR_DAY}T05:00\",\"source\":\"e2e\"}"
+
+[ "$(corr_code /api/kiosk/corrections "${SUBMIT/1234/9999}")" = "401" ]   && ok "Falsche PIN -> 401" || bad "Falsche PIN erwartet 401"
+CARD_OF_ANNA="{\"employeeId\":\"test-max\",\"nfcCardId\":\"04D5E6F7\",\"kind\":\"addPause\",\"timesheetId\":$SHEET_ID}"
+[ "$(corr_code /api/kiosk/corrections "$CARD_OF_ANNA")" = "401" ]   && ok "Karte eines anderen Mitarbeiters -> 401" || bad "Fremde Karte erwartet 401"
+FOREIGN_SUBMIT="${SUBMIT/\"timesheetId\":$SHEET_ID/\"timesheetId\":$FOREIGN_ID}"
+[ "$(corr_code /api/kiosk/corrections "$FOREIGN_SUBMIT")" = "400" ]   && ok "Fremdes Timesheet wird abgelehnt (400)" || bad "Fremdes Timesheet erwartet 400"
+
+R=$(corr_post /api/kiosk/corrections/timesheets '{"employeeId":"test-max","pin":"1234"}')
+assert_status "\"id\":$SHEET_ID," "$R" "Auswahlliste enthält den eigenen Eintrag"
+[[ "$R" != *"\"id\":$FOREIGN_ID,"* ]] && ok "... aber nicht den fremden" || bad "Fremder Eintrag in der Auswahlliste"
+
+R=$(corr_post /api/kiosk/corrections "$SUBMIT")
+assert_status '"status":"pending"' "$R" "Antrag wird angenommen"
+CORR_ID=$(echo "$R" | grep -oP '"id":"\K[0-9a-f]+' | head -1)
+BEFORE=$(curl -s "$KIMAI_URL/_bookings" | grep -o '"id"' | wc -l)
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$API_URL/api/admin/corrections/$CORR_ID/approve")" = "401" ]   && ok "Genehmigen ohne Admin-Passwort -> 401" || bad "Genehmigen ohne Passwort erwartet 401"
+R=$(curl -s -m 10 -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/corrections")
+assert_status "\"id\":\"$CORR_ID\"" "$R" "Admin-Liste zeigt den offenen Antrag"
+
+R=$(curl -s -m 30 -X POST -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/corrections/$CORR_ID/approve")
+assert_status '"status":"applied"' "$R" "Admin genehmigt: Antrag ist angewendet"
+R=$(curl -s -m 30 -X POST -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/corrections/$CORR_ID/approve")
+assert_status '"status":"applied"' "$R" "Doppeltes Genehmigen liefert den Stand"
+
+# Arbeit bis 04:30, Pause 04:30-05:00, Rest-Arbeit 05:00-06:00 - und nur das,
+# kein zweites Mal gebucht.
+python3 - "$KIMAI_URL" "$SHEET_ID" "$CORR_DAY" <<'PY' && ok "/_bookings: Arbeit, Pause und Rest-Arbeit, nichts doppelt" || bad "/_bookings zeigt nicht Arbeit, Pause und Rest-Arbeit"
+import json, sys, urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
+base, sheet_id, day = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+sheets = json.load(urllib.request.urlopen(base + "/_bookings"))["timesheets"]
+berlin = ZoneInfo("Europe/Berlin")
+def hm(value):
+    return datetime.fromisoformat(value).astimezone(berlin).strftime("%H:%M")
+mine = sorted((hm(s["begin"]), hm(s["end"]), s["activity"], s["id"] == sheet_id)
+              for s in sheets if s["begin"] and datetime.fromisoformat(s["begin"]).astimezone(berlin).strftime("%Y-%m-%d") == day
+              and s.get("user", 1) == 1)
+expected = [("04:00", "04:30", 1, True), ("04:30", "05:00", 2, False), ("05:00", "06:00", 1, False)]
+print(mine)
+sys.exit(0 if mine == expected else 1)
+PY
+AFTER=$(curl -s "$KIMAI_URL/_bookings" | grep -o '"id"' | wc -l)
+[ "$((AFTER - BEFORE))" = "2" ] && ok "Genau zwei neue Timesheets (Pause, Rest-Arbeit)" || bad "Erwartet 2 neue Timesheets, waren $((AFTER - BEFORE))"
+
+R=$(corr_post /api/kiosk/corrections/mine '{"employeeId":"test-max","pin":"1234"}')
+assert_status '"status":"applied"' "$R" "Mitarbeiter sieht den Antrag als angewendet"
+[ "$(corr_code "/api/kiosk/corrections/$CORR_ID/withdraw" '{"employeeId":"test-max","pin":"1234"}')" = "409" ]   && ok "Zurückziehen nach der Entscheidung -> 409" || bad "Zurückziehen erwartet 409"
+[ "$(corr_code "/api/kiosk/corrections/$CORR_ID/withdraw" '{"employeeId":"test-anna","pin":"4321"}')" = "404" ]   && ok "Fremden Antrag zurückziehen -> 404" || bad "Fremden Antrag zurückziehen erwartet 404"
+
+# Ablehnen (mit und ohne Notiz): bucht nichts, spätere Genehmigung ist ein No-op.
+SHIFT="{\"employeeId\":\"test-max\",\"pin\":\"1234\",\"kind\":\"addShift\",\"begin\":\"${CORR_DAY}T07:00\",\"end\":\"${CORR_DAY}T08:00\"}"
+BEFORE=$(curl -s "$KIMAI_URL/_bookings" | grep -o '"id"' | wc -l)
+for NOTE in '{"note":"Bitte mit dem Chef sprechen"}' ''; do
+  R=$(corr_post /api/kiosk/corrections "$SHIFT")
+  REJECT_ID=$(echo "$R" | grep -oP '"id":"\K[0-9a-f]+' | head -1)
+  if [[ -n "$NOTE" ]]; then
+    R=$(curl -s -m 10 -X POST -H 'X-Admin-Password: e2e-admin' -H 'Content-Type: application/json' -d "$NOTE" "$API_URL/api/admin/corrections/$REJECT_ID/reject")
+    assert_status '"decisionNote":"Bitte mit dem Chef sprechen"' "$R" "Ablehnen mit Notiz speichert den Grund"
+  else
+    R=$(curl -s -m 10 -X POST -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/corrections/$REJECT_ID/reject")
+  fi
+  assert_status '"status":"rejected"' "$R" "Antrag abgelehnt"
+done
+R=$(curl -s -m 30 -X POST -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/corrections/$REJECT_ID/approve")
+assert_status '"status":"rejected"' "$R" "Genehmigen nach dem Ablehnen bleibt abgelehnt"
+AFTER=$(curl -s "$KIMAI_URL/_bookings" | grep -o '"id"' | wc -l)
+[ "$AFTER" = "$BEFORE" ] && ok "Abgelehnte Anträge buchen nichts" || bad "Abgelehnte Anträge haben gebucht ($BEFORE -> $AFTER)"
 
 # ------------------------------------------------- Test 4: Agent-Level-Offline-Identifikation
 # Grenze: Ein vollständiges Browser-/Angular-E2E ist hier nicht machbar - der

@@ -5,6 +5,8 @@ namespace Stempeluhr.Api.Api;
 
 public static class AdminEndpoints
 {
+    private const string AdminDecider = "Admin";
+
     public static IEndpointRouteBuilder MapAdminEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/admin/rejected-offline-events", (
@@ -25,6 +27,58 @@ public static class AdminEndpoints
             }
             return rejectedEvents.Resolve(eventId) ? Results.Ok() : Results.NotFound();
         });
+
+        // Korrekturanträge. Entscheidet der Admin, steht als Entscheider "Admin"
+        // im Antrag; Kimai-Fehler beim Genehmigen kommen als 200 mit Status Failed.
+        app.MapGet("/api/admin/corrections", (
+            string? status,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            ITimeCorrectionService corrections) =>
+            authorization.IsAdmin(request)
+                ? Results.Ok(corrections.List(openOnly: !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase)))
+                : Results.Unauthorized());
+
+        app.MapPost("/api/admin/corrections/{id}/approve", async (
+            string id,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            ITimeCorrectionService corrections,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await corrections.ApproveAsync(id, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
+
+        app.MapPost("/api/admin/corrections/{id}/reject", async (
+            string id,
+            HttpRequest request,
+            RejectCorrectionRequest? body,
+            IAdminAuthorizationService authorization,
+            ITimeCorrectionService corrections,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await corrections.RejectAsync(id, body?.Note, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
+
+        app.MapPost("/api/admin/corrections/{id}/retry", async (
+            string id,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            ITimeCorrectionService corrections,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await corrections.RetryAsync(id, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
+
+        app.MapPut("/api/admin/corrections/{id}/resolved", async (
+            string id,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            ITimeCorrectionService corrections,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await corrections.ResolveManuallyAsync(id, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
 
         app.MapGet("/api/admin/settings", (
             HttpRequest request,

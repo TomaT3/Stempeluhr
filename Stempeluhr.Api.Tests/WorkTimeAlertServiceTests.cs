@@ -295,6 +295,7 @@ public sealed class WorkTimeAlertServiceTests : IDisposable
                 Timesheets.TryGetValue(employee.Id, out var entries) ? entries : []);
         }
 
+        public Task<int?> GetCurrentUserIdAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) =>
             Task.FromResult<string?>("Europe/Berlin");
 

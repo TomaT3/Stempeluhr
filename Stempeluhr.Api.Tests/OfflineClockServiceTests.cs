@@ -2441,6 +2441,7 @@ public sealed class OfflineClockServiceTests
         /// <summary>Runs while the lookup is "in flight", e.g. an admin action.</summary>
         public Action? DuringTimezoneLookup { get; set; }
 
+        public Task<int?> GetCurrentUserIdAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<string?> GetCurrentUserTimezoneAsync(
             RuntimeSettings settings,
             EmployeeSettings employee,

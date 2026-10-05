@@ -4,7 +4,8 @@
 Simuliert die Kimai-REST-Endpoints, die der StempeluhrKimaiClient nutzt:
 - GET  /api/timesheets/active        -> aktives Timesheet (Array)
 - GET  /api/timesheets?begin=&end=   -> Timesheet-Liste (Pagination, ohne user = Token-Inhaber)
-- GET  /api/timesheets/{id}          -> einzelnes Timesheet (404 für unbekannte IDs)
+- GET  /api/timesheets/{id}          -> einzelnes Timesheet (404 für unbekannte IDs;
+                                        "user" = Besitzer, hier immer der Token-Inhaber 1)
 - POST /api/timesheets?full=true     -> Timesheet erstellen (begin und end akzeptiert;
                                         ohne end bleibt der Eintrag laufend)
 - PATCH /api/timesheets/{id}         -> begin/end nachtragen
@@ -35,6 +36,7 @@ LOG_PATH = "fake_kimai_log.jsonl"
 # Zeitzone des Token-Inhabers (/api/users/me). Ohne Zeitzonen-Daten (Windows
 # ohne tzdata) bleibt nur die Systemzeit.
 USER_TIMEZONE = "Europe/Berlin"
+USER_ID = 1
 try:
     USER_TZ: ZoneInfo | None = ZoneInfo(USER_TIMEZONE)
 except ZoneInfoNotFoundError:
@@ -86,6 +88,8 @@ def to_list_dto(sheet: dict) -> dict:
         "project": {"id": project} if isinstance(project, int) else project,
         "description": sheet.get("description"),
         "billable": sheet.get("billable", True),
+        # Alle Buchungen gehören dem Token-Inhaber (/api/users/me, id 1).
+        "user": sheet.get("user", USER_ID),
     }
 
 
@@ -114,7 +118,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/users/me"):
             # Kimai: Zeitraum-Abfragen interpretiert naive Datetimes in der
             # Zeitzone des Token-Inhabers - die API erfragt sie hier.
-            self._send(200, {"id": 1, "username": "api", "timezone": USER_TIMEZONE})
+            self._send(200, {"id": USER_ID, "username": "api", "timezone": USER_TIMEZONE})
             return
         if self.path.startswith("/api/timesheets/active"):
             with LOCK:
@@ -155,7 +159,9 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 filtered = [
                     t for t in TIMESHEETS
-                    if (begin_q is None or to_local_naive(t["begin"]) >= begin_q)
+                    # Ohne user-Filter liefert Kimai nur die Timesheets des Token-Inhabers.
+                    if t.get("user", USER_ID) == USER_ID
+                    and (begin_q is None or to_local_naive(t["begin"]) >= begin_q)
                     and (end_q is None or to_local_naive(t["begin"]) <= end_q)
                     # state=stopped: nur beendete Timesheets (letzter gestoppter
                     # Eintrag für Pausenende/Nachtrag).
@@ -188,6 +194,9 @@ class Handler(BaseHTTPRequestHandler):
                     "activity": body.get("activity"),
                     "description": body.get("description"),
                     "billable": body.get("billable", True),
+                    # Nur für Tests: ein Eintrag eines anderen Benutzers (Kimai
+                    # setzt den Besitzer sonst selbst auf den Token-Inhaber).
+                    "user": body.get("user", USER_ID),
                 }
                 NEXT_ID += 1
                 TIMESHEETS.append(sheet)

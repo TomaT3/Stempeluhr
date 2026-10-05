@@ -10,6 +10,9 @@ builder.Services.AddSingleton<IRuntimeSettingsStore, RuntimeSettingsStore>();
 builder.Services.AddSingleton(sp => new RejectedOfflineEventStore(
     Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "rejected-offline-events.json"),
     sp.GetRequiredService<ILogger<RejectedOfflineEventStore>>()));
+builder.Services.AddSingleton(sp => new TimeCorrectionStore(
+    Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "time-corrections.json"),
+    sp.GetRequiredService<ILogger<TimeCorrectionStore>>()));
 builder.Services.AddSingleton<IEmployeeService, EmployeeService>();
 builder.Services.AddSingleton<IAdminAuthorizationService, AdminAuthorizationService>();
 builder.Services.AddSingleton<INfcClockEventStore, NfcClockEventStore>();
@@ -28,6 +31,10 @@ builder.Services.AddKioskRateLimiters();
 // Failed-PIN lock per employee (issue #8); shared by live and replay paths.
 builder.Services.AddSingleton<PinAttemptGuard>();
 builder.Services.AddScoped<IClockService, ClockService>();
+// Korrekturanträge: Singleton wegen der Sperren pro Antrag; der Notifier ist
+// bis zur Telegram-Anbindung (Issue 5) ein No-op.
+builder.Services.AddSingleton<ITimeCorrectionNotifier, NoOpTimeCorrectionNotifier>();
+builder.Services.AddSingleton<ITimeCorrectionService, TimeCorrectionService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 // Telegram-Notifier: Singleton + named HttpClient. Die Notify-Task läuft
 // bewusst nach dem Request-Ende (fire-and-forget) - ein scope-gebundener

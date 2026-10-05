@@ -315,6 +315,34 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         }
     }
 
+    // The typed client is transient, the id of a token never changes: one
+    // process-wide cache. The key carries the token, so a replaced token (or
+    // another Kimai) can never inherit a stale id.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> UserIdCache = new();
+
+    /// <inheritdoc />
+    public async Task<int?> GetCurrentUserIdAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        CancellationToken cancellationToken = default)
+    {
+        var key = $"{settings.BaseUrl}|{employee.Id}|{employee.ApiToken}";
+        if (UserIdCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var user = await SendAsync<JsonElement>(
+            settings.BaseUrl, employee.ApiToken, HttpMethod.Get, "api/users/me", null, cancellationToken);
+        if (GetId(user, "id") is not { } id)
+        {
+            return null;
+        }
+
+        UserIdCache[key] = id;
+        return id;
+    }
+
     private const int BackdateRetryCount = 3;
 
     private static bool IsTransientBackdateFailure(Exception exception)

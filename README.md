@@ -203,6 +203,73 @@ die Kimai für das gewählte Projekt annimmt (globale und die des Projekts).
 Läuft eine Buchung, die zu keiner Tätigkeit passt (z. B. nach dem Löschen
 einer Tätigkeit), bleibt der Wechsel zu jeder Tätigkeit möglich.
 
+### Korrekturanträge
+
+Mitarbeiter vergessen, die Pause oder das Ausstempeln zu stempeln. Kimai-Zugang
+bekommen sie bewusst nicht; stattdessen beantragen sie die Korrektur, und erst
+nach der Freigabe durch Chef oder Admin schreibt die API sie in Kimai. Dieser
+Abschnitt beschreibt die API; die Oberflächen folgen in eigenen Schritten (Epic
+#94: Admin-Seite #97, Kiosk und `/clock` #98, Telegram-Knöpfe #99).
+
+**Ablauf:** Der Mitarbeiter wählt in der Liste der letzten 31 Tage einen Eintrag
+(nach Schichten gruppiert, eine Nachtschicht über Mitternacht bleibt eine
+Schicht) und sendet den Antrag ab. Er bleibt `pending`, bis der Admin ihn
+genehmigt oder ablehnt (oder der Mitarbeiter ihn zurückzieht). Beim Genehmigen
+wird das Timesheet neu gelesen, die Regeln werden erneut geprüft, dann folgen
+die Schritte in Kimai. Anträge liegen in `data/time-corrections.json`: alle
+offenen (`pending`, `failed`) bleiben, von den abgeschlossenen die letzten 1000.
+
+**Arten:**
+
+| Art | Eingabe | In Kimai |
+| --- | --- | --- |
+| `addPause` | gestopptes Arbeits-Timesheet, Pause von/bis darin | Ende auf Pausenbeginn kürzen, Pause anlegen, Rest-Arbeit bis zum alten Ende anlegen (mit Projekt, Aktivität, Beschreibung und `billable` des Originals; entfällt, wenn die Pause am alten Ende endet) |
+| `setEnd` | Timesheet, tatsächliches Ende (vor dem aktuellen) | Ende ändern |
+| `addShift` | Beginn, Ende, Tätigkeit, optional Pause | Arbeit (bei Pause in zwei Teilen) und Pause anlegen, Beschreibung „Nachgetragen (Korrekturantrag)“ |
+| `changeTimes` | gestopptes Timesheet, neuer Beginn und/oder neues Ende | Beginn/Ende ändern |
+
+**Regeln** (beim Absenden und beim Genehmigen): nur eigene Timesheets der
+letzten 31 Tage; keine Zeit in der Zukunft (2 Minuten Toleranz); Ende nach
+Beginn, höchstens 16 h pro Schicht und 4 h pro Pause; keine Überlappung mit
+anderen Timesheets (angrenzend ist erlaubt); pro Timesheet höchstens ein
+offener Antrag. „Eigen“ prüft die API über die Kimai-Benutzer-ID des Tokens
+(`/api/users/me`) gegen den Besitzer des Timesheets, denn Kimai liefert fremde
+Einträge auch an Tokens mit `view_other_timesheet`. Fehlt eine der IDs, wird
+abgelehnt statt geraten. Gebucht wird mit dem **Mitarbeiter-Token**, das
+Admin-Token bleibt rein lesend. Es gibt keine Offline-Queue: ist Kimai nicht
+erreichbar, antwortet das Absenden mit 503.
+
+**Idempotenz und `Failed`:** Jede Entscheidung läuft unter einer Sperre pro
+Antrag. Wer einen schon entschiedenen Antrag erneut genehmigt oder ablehnt (zwei
+Admins, Doppelklick), bekommt den Stand zurück und löst keine zweite Buchung
+aus. Jeder erledigte Schritt wird gespeichert (`appliedSteps`); vor dem Anlegen
+sucht die API in Kimai nach einem Eintrag mit genau diesem Beginn, Ende und
+dieser Aktivität und überspringt den Schritt, wenn er schon existiert. Lehnt
+Kimai ab (Erfassungsmodus, Sperrzeitraum, fehlende Berechtigung) oder hat sich
+der Eintrag seit dem Antrag geändert („Eintrag wurde inzwischen geändert“), wird
+der Antrag `failed` und behält den Grund; der Genehmigen-Aufruf antwortet
+trotzdem mit 200. Der Admin kann dann **erneut versuchen** (setzt beim offenen
+Schritt fort, bucht nichts doppelt) oder von Hand in Kimai nachtragen und den
+Antrag **als erledigt markieren**.
+
+**Endpunkte:**
+
+- Kiosk (Auth wie `/api/kiosk/clock`: `employeeId` plus `pin` **oder**
+  `nfcCardId`; falsche PINs zählen im PIN-Schutz, 5 pro Mitarbeiter sperren; zusätzlich
+  30 Aufrufe pro Minute und Client-IP):
+  `POST /api/kiosk/corrections/timesheets` (Auswahlliste),
+  `POST /api/kiosk/corrections` (absenden; Zeiten als lokale Zeit
+  `yyyy-MM-ddTHH:mm` in der Kimai-Zeitzone des Mitarbeiters),
+  `POST /api/kiosk/corrections/mine` (eigene Anträge der letzten 31 Tage),
+  `POST /api/kiosk/corrections/{id}/withdraw` (nur eigene `pending`-Anträge,
+  sonst 404 bzw. 409). Fehler kommen als 400 `{ "message": … }` auf Deutsch.
+- Admin (Header `X-Admin-Password`, sonst 401):
+  `GET /api/admin/corrections?status=open|all`,
+  `POST /api/admin/corrections/{id}/approve`,
+  `POST /api/admin/corrections/{id}/reject` (`{ "note": … }` optional),
+  `POST /api/admin/corrections/{id}/retry` und
+  `PUT /api/admin/corrections/{id}/resolved` (nur `failed`, sonst 409).
+
 ### Telegram-Benachrichtigung (optional)
 
 Bei jedem echten Live-Stempel (nicht bei No-ops oder erfolgreich übernommenen

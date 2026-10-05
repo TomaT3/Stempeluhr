@@ -198,21 +198,42 @@ public sealed class ClockService(
     private EmployeeContext? FindEmployeeForClockAction(KioskClockRequest request)
     {
         var settings = settingsStore.Load();
-        var employee = Authenticate(settings, request.EmployeeId, () =>
+        var employee = FindEmployeeForClockAction(
+            employees, pinAttempts, settings, request.EmployeeId, request.Pin, request.NfcCardId);
+        return employee is null ? null : new EmployeeContext(settings, employee);
+    }
+
+    /// <summary>
+    /// Auth of every kiosk action that books or changes something:
+    /// <paramref name="employeeId"/> plus PIN <b>or</b> the card of exactly
+    /// that employee, guarded by the failed-PIN lock (issue #8). Shared with
+    /// the correction requests so both use one verdict.
+    /// </summary>
+    /// <exception cref="PinLockedException">The employee is locked.</exception>
+    public static EmployeeSettings? FindEmployeeForClockAction(
+        IEmployeeService employees,
+        PinAttemptGuard? pinAttempts,
+        RuntimeSettings settings,
+        string? employeeId,
+        string? pin,
+        string? nfcCardId)
+    {
+        EmployeeSettings? Verify()
         {
-            var pinEmployee = employees.FindEmployee(settings, new ClockRequest(request.EmployeeId, request.Pin));
+            var pinEmployee = employees.FindEmployee(settings, new ClockRequest(employeeId!, pin));
             if (pinEmployee is not null)
             {
                 return pinEmployee;
             }
 
-            var nfcEmployee = employees.FindEmployeeByNfcCardId(settings, request.NfcCardId);
+            var nfcEmployee = employees.FindEmployeeByNfcCardId(settings, nfcCardId);
             return nfcEmployee is not null
-                && string.Equals(nfcEmployee.Id, request.EmployeeId, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(nfcEmployee.Id, employeeId, StringComparison.OrdinalIgnoreCase)
                 ? nfcEmployee
                 : null;
-        });
-        return employee is null ? null : new EmployeeContext(settings, employee);
+        }
+
+        return pinAttempts is null ? Verify() : pinAttempts.Authenticate(settings, employeeId, Verify);
     }
 
     /// <exception cref="PinLockedException">The employee is locked (issue #8).</exception>
