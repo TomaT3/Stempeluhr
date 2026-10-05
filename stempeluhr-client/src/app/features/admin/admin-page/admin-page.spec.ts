@@ -157,16 +157,18 @@ describe('AdminPage', () => {
       fixture.destroy();
     });
 
-    it('does not save approver ids that are not numbers', async () => {
-      const { fixture, component, http } = await openPage(withTelegram);
+    for (const input of ['11, @chef', '0', '11, 0', '-5']) {
+      it(`does not save approver ids that are not positive numbers ("${input}")`, async () => {
+        const { fixture, component, http } = await openPage(withTelegram);
 
-      component.updateTelegramApproverUserIds('11, @chef');
-      component.saveAdminSettings();
+        component.updateTelegramApproverUserIds(input);
+        component.saveAdminSettings();
 
-      http.expectNone('/api/admin/settings');
-      expect(component.adminMessage()).toContain('Telegram-User-IDs müssen Zahlen sein');
-      fixture.destroy();
-    });
+        http.expectNone('/api/admin/settings');
+        expect(component.adminMessage()).toContain('Telegram-User-IDs müssen positive Zahlen sein');
+        fixture.destroy();
+      });
+    }
 
     it('leaves the values alone when the backend does not know the fields', async () => {
       const { fixture, component, http } = await openPage(emptySettings);

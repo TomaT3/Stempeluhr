@@ -68,12 +68,40 @@ public sealed class AdminSettingsTelegramCorrectionTests
     }
 
     [Fact]
-    public void ToSettings_NewValues_AreTrimmedAndCleaned()
+    public void ToSettings_NewValues_AreTrimmedAndDeduplicated()
     {
-        var result = Update(" -400 ", [33, 33, 0, -5, 44]).ToSettings(Current());
+        var update = Update(" -400 ", [33, 33, 44]);
 
+        var result = update.ToSettings(Current());
+
+        Assert.Null(update.ValidateTelegram());
         Assert.Equal("-400", result.TelegramCorrectionChatId);
         Assert.Equal([33L, 44L], result.TelegramApproverUserIds);
+    }
+
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(-5L)]
+    public void ValidateTelegram_NonPositiveApproverIds_AreRejected(long invalid)
+    {
+        Assert.Equal("Telegram-User-IDs müssen positive Zahlen sein.", Update(null, [33, invalid]).ValidateTelegram());
+    }
+
+    [Fact]
+    public void ValidateTelegram_KeepOrClear_IsValid()
+    {
+        Assert.Null(Update(null, null).ValidateTelegram());
+        Assert.Null(Update(null, []).ValidateTelegram());
+    }
+
+    [Fact]
+    public void ToSettings_InvalidIdsThatSlipThrough_NeverOpenTheApprovalToEveryone()
+    {
+        // Review #103: aus [0] durfte keine leere Liste ("alle dürfen") werden.
+        var result = Update(null, [0]).ToSettings(Current());
+
+        Assert.Equal([0L], result.TelegramApproverUserIds);
+        Assert.NotEmpty(result.TelegramApproverUserIds);
     }
 
     [Theory]

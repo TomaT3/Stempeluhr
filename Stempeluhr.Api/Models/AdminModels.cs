@@ -202,9 +202,11 @@ public sealed record AdminSettingsUpdateDto(
             TelegramCorrectionChatId = TelegramCorrectionChatId is null
                 ? current.TelegramCorrectionChatId
                 : string.IsNullOrWhiteSpace(TelegramCorrectionChatId) ? null : TelegramCorrectionChatId.Trim(),
+            // Ungültige IDs lehnt ValidateTelegram ab. Hier nicht filtern: aus
+            // [0] würde sonst eine leere Liste, und leer heißt "alle dürfen".
             TelegramApproverUserIds = TelegramApproverUserIds is null
                 ? [.. current.TelegramApproverUserIds]
-                : TelegramApproverUserIds.Where(id => id > 0).Distinct().ToList(),
+                : TelegramApproverUserIds.Distinct().ToList(),
             // Same keep-current semantics: the admin UI has no Influx fields.
             InfluxUrl = KeepOrTrim(InfluxUrl, current.InfluxUrl),
             InfluxOrg = KeepOrTrim(InfluxOrg, current.InfluxOrg),
@@ -214,6 +216,15 @@ public sealed record AdminSettingsUpdateDto(
             Employees = employees
         };
     }
+
+    /// <summary>
+    /// Telegram-User-IDs sind positiv. Eine ungültige ID darf die Einschränkung
+    /// nie aufheben, deshalb wird der Save abgelehnt statt sie wegzufiltern.
+    /// </summary>
+    public string? ValidateTelegram() =>
+        TelegramApproverUserIds?.Any(id => id <= 0) == true
+            ? "Telegram-User-IDs müssen positive Zahlen sein."
+            : null;
 
     private static string? KeepOrTrim(string? value, string? current) =>
         string.IsNullOrWhiteSpace(value) ? current : value.Trim();

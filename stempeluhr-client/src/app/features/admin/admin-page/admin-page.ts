@@ -142,7 +142,7 @@ export class AdminPage implements OnDestroy {
     }
 
     if (settings.telegramApproverUserIds !== undefined && this.parseApproverUserIds(this.telegramApproverText()) === null) {
-      this.adminMessage.set('Telegram-User-IDs müssen Zahlen sein, getrennt durch Komma.');
+      this.adminMessage.set('Telegram-User-IDs müssen positive Zahlen sein, getrennt durch Komma.');
       return;
     }
 
@@ -837,10 +837,14 @@ export class AdminPage implements OnDestroy {
     return (settings.telegramApproverUserIds ?? []).join(', ');
   }
 
-  /** Komma-, Semikolon- oder Leerzeichen-getrennte Zahlen; null bei etwas anderem. */
+  /**
+   * Komma-, Semikolon- oder Leerzeichen-getrennte positive Zahlen; null bei
+   * etwas anderem. Auch 0 ist ungültig: der Server würde sie ablehnen, und eine
+   * leere Liste hieße „jedes Mitglied darf entscheiden“.
+   */
   private parseApproverUserIds(text: string): number[] | null {
     const tokens = text.split(/[\s,;]+/).filter(token => token.length > 0);
-    if (!tokens.every(token => /^\d+$/.test(token) && Number.isSafeInteger(Number(token)))) {
+    if (!tokens.every(token => /^[1-9]\d*$/.test(token) && Number.isSafeInteger(Number(token)))) {
       return null;
     }
     return [...new Set(tokens.map(Number))];

@@ -141,6 +141,11 @@ public static class AdminEndpoints
                 return Results.Unauthorized();
             }
 
+            if (update.ValidateTelegram() is { } telegramError)
+            {
+                return Results.BadRequest(new { message = telegramError });
+            }
+
             var current = settingsStore.Load();
             var settings = update.ToSettings(current);
             if (adminService.HasDuplicatePins(settings.Employees))
