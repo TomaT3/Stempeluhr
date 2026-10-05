@@ -135,6 +135,25 @@ public sealed class TelegramTimeCorrectionNotifier(
         }
     }
 
+    /// <summary>
+    /// Übernimmt die Nachricht eines (bereits geprüften) Knopf-Drucks, wenn der
+    /// Antrag noch keine kennt: Telegram kann die Nachricht zugestellt haben,
+    /// während die Antwort auf <c>sendMessage</c> verloren ging (Timeout). Ohne
+    /// das blieben Knöpfe und Ergebnis dieser Nachricht für immer stehen.
+    /// Eine schon bekannte Nachricht bleibt unverändert.
+    /// </summary>
+    public async Task<TimeCorrectionRequest?> AdoptMessageAsync(
+        string id, long chatId, long messageId, CancellationToken cancellationToken = default)
+    {
+        using (await EnterAsync(id, cancellationToken))
+        {
+            var current = store.Find(id);
+            return current is { TelegramMessageId: null }
+                ? store.AttachTelegramMessage(id, chatId, messageId)
+                : current;
+        }
+    }
+
     private async Task<IDisposable> EnterAsync(string id, CancellationToken cancellationToken)
     {
         var gate = _messageGates.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));

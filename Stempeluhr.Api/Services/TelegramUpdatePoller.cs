@@ -236,7 +236,7 @@ public sealed class TelegramUpdatePoller(
         // Falscher Chat (der Bot kann in mehreren Gruppen sein) oder eine
         // Nachricht, die Telegram nicht mehr ausliefert: nichts passiert.
         if (messageChatId is not { } chatId
-            || messageNumber is null
+            || messageNumber is not { } messageId
             || !string.Equals(chatId.ToString(CultureInfo.InvariantCulture), settings.TelegramCorrectionChatId!.Trim(), StringComparison.Ordinal))
         {
             return Denied;
@@ -256,10 +256,14 @@ public sealed class TelegramUpdatePoller(
             return "Unbekannte Aktion";
         }
 
-        if (store.Find(id) is not { } request)
+        if (store.Find(id) is not { } found)
         {
             return "Antrag nicht gefunden";
         }
+
+        // Ging die Antwort auf sendMessage verloren, kennt der Antrag seine
+        // Nachricht nicht: die des (geprüften) Knopf-Drucks übernehmen.
+        var request = await messages.AdoptMessageAsync(id, chatId, messageId, cancellationToken) ?? found;
 
         if (request.Status != TimeCorrectionStatus.Pending)
         {

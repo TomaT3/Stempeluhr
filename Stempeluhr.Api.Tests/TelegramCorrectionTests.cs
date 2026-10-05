@@ -338,6 +338,54 @@ public sealed class TelegramCorrectionTests : IDisposable
         Assert.All(_telegram.CallsTo("editMessageText"), edit => Assert.Contains("❌ Abgelehnt von Admin", edit.Text));
     }
 
+    /// <summary>Telegram stellt die Nachricht zu, die Antwort auf sendMessage geht aber verloren.</summary>
+    private void LoseTheSendMessageAnswer()
+        => _telegram.Responder = call => call.Method == "sendMessage" ? throw new HttpRequestException("response lost") : null;
+
+    [Fact]
+    public async Task Tap_AfterTheSendMessageAnswerWasLost_AdoptsTheMessageAndShowsTheConfirmation()
+    {
+        LoseTheSendMessageAnswer();
+        var dto = await SubmitPauseAsync();
+        Assert.Null(_store.Find(dto.Id)!.TelegramMessageId);
+        _telegram.Responder = null;
+
+        await TapAsync(FakeTelegram.Callback(1, Data(TelegramCorrectionAction.AskApprove, dto.Id)));
+
+        Assert.Equal("Wirklich genehmigen?", AnswerText());
+        var markup = Assert.Single(_telegram.CallsTo("editMessageReplyMarkup"));
+        Assert.Equal(["Ja, genehmigen", "Zurück"], markup.ButtonTexts);
+        Assert.Equal(FakeTelegram.FirstMessageId, markup.Body.GetProperty("message_id").GetInt64());
+        var stored = _store.Find(dto.Id)!;
+        Assert.Equal(FakeTelegram.CorrectionChatNumber, stored.TelegramChatId);
+        Assert.Equal(FakeTelegram.FirstMessageId, stored.TelegramMessageId);
+    }
+
+    [Fact]
+    public async Task ConfirmTap_AfterTheSendMessageAnswerWasLost_ReplacesTheButtonsWithTheResult()
+    {
+        LoseTheSendMessageAnswer();
+        var dto = await SubmitPauseAsync();
+        _telegram.Responder = null;
+
+        await TapAsync(FakeTelegram.Callback(1, Data(TelegramCorrectionAction.Approve, dto.Id)));
+
+        Assert.Equal(TimeCorrectionStatus.Applied, _store.Find(dto.Id)!.Status);
+        var edit = Assert.Single(_telegram.CallsTo("editMessageText"));
+        Assert.Equal(FakeTelegram.FirstMessageId, edit.Body.GetProperty("message_id").GetInt64());
+        Assert.True(edit.KeyboardIsEmpty);
+    }
+
+    [Fact]
+    public async Task Tap_FromAnotherMessage_DoesNotReplaceTheKnownMessage()
+    {
+        var dto = await SubmitPauseAsync();
+
+        await TapAsync(FakeTelegram.Callback(1, Data(TelegramCorrectionAction.AskApprove, dto.Id), messageId: 777));
+
+        Assert.Equal(FakeTelegram.FirstMessageId, _store.Find(dto.Id)!.TelegramMessageId);
+    }
+
     [Fact]
     public async Task DecisionWhileTheMessageIsStillBeingSent_UpdatesTheMessageOnceItExists()
     {
