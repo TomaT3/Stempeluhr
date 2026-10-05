@@ -19,6 +19,7 @@ public sealed class TelegramUpdatePoller(
     TelegramBotApi api,
     ITimeCorrectionService corrections,
     TimeCorrectionStore store,
+    TelegramTimeCorrectionNotifier messages,
     ILogger<TelegramUpdatePoller> logger,
     Func<TimeSpan, CancellationToken, Task>? delay = null) : BackgroundService
 {
@@ -223,7 +224,6 @@ public sealed class TelegramUpdatePoller(
     private async Task<string?> ProcessCallbackAsync(RuntimeSettings settings, JsonElement query, CancellationToken cancellationToken)
     {
         const string Denied = "Keine Berechtigung";
-        var token = settings.TelegramBotToken!;
 
         long? messageChatId = null;
         long? messageNumber = null;
@@ -236,7 +236,7 @@ public sealed class TelegramUpdatePoller(
         // Falscher Chat (der Bot kann in mehreren Gruppen sein) oder eine
         // Nachricht, die Telegram nicht mehr ausliefert: nichts passiert.
         if (messageChatId is not { } chatId
-            || messageNumber is not { } messageId
+            || messageNumber is null
             || !string.Equals(chatId.ToString(CultureInfo.InvariantCulture), settings.TelegramCorrectionChatId!.Trim(), StringComparison.Ordinal))
         {
             return Denied;
@@ -263,20 +263,31 @@ public sealed class TelegramUpdatePoller(
 
         if (request.Status != TimeCorrectionStatus.Pending)
         {
-            return await AlreadyDecidedAsync(token, chatId, messageId, request, settings, cancellationToken);
+            return await AlreadyDecidedAsync(id, request, cancellationToken);
         }
 
         switch (action)
         {
             case TelegramCorrectionAction.AskApprove:
             case TelegramCorrectionAction.AskReject:
-                var approve = action == TelegramCorrectionAction.AskApprove;
-                await EditKeyboardAsync(token, chatId, messageId, TelegramMessageFactory.BuildCorrectionConfirmKeyboard(id, approve), cancellationToken);
-                return approve ? "Wirklich genehmigen?" : "Wirklich ablehnen?";
-
             case TelegramCorrectionAction.Back:
-                await EditKeyboardAsync(token, chatId, messageId, TelegramMessageFactory.BuildCorrectionKeyboard(id), cancellationToken);
-                return null;
+                // Über den Notifier: die Knöpfe wechseln nur, solange der Antrag
+                // dabei noch offen ist, und nie quer zu einem Ergebnis-Edit.
+                var approve = action == TelegramCorrectionAction.AskApprove;
+                var keyboard = action == TelegramCorrectionAction.Back
+                    ? TelegramMessageFactory.BuildCorrectionKeyboard(id)
+                    : TelegramMessageFactory.BuildCorrectionConfirmKeyboard(id, approve);
+                var shown = await messages.ShowButtonsAsync(id, keyboard, cancellationToken) ?? request;
+                if (shown.Status != TimeCorrectionStatus.Pending)
+                {
+                    return Truncate(TelegramMessageFactory.BuildCorrectionAlreadyDecided(shown), 190);
+                }
+                return action switch
+                {
+                    TelegramCorrectionAction.AskApprove => "Wirklich genehmigen?",
+                    TelegramCorrectionAction.AskReject => "Wirklich ablehnen?",
+                    _ => null,
+                };
         }
 
         // Die Antwort der Nachricht (Ergebnis statt Knöpfe) schickt der
@@ -300,30 +311,14 @@ public sealed class TelegramUpdatePoller(
         };
     }
 
-    /// <summary>"Bereits entschieden: …" und die Nachricht auf den Stand bringen (falls sie noch Knöpfe zeigt).</summary>
-    private async Task<string> AlreadyDecidedAsync(
-        string token, long chatId, long messageId, TimeCorrectionRequest request, RuntimeSettings settings, CancellationToken cancellationToken)
+    /// <summary>
+    /// "Bereits entschieden: …" und die Nachricht auf den Stand bringen (falls
+    /// sie noch Knöpfe zeigt) - in derselben Reihenfolge wie alle anderen Edits.
+    /// </summary>
+    private async Task<string> AlreadyDecidedAsync(string id, TimeCorrectionRequest request, CancellationToken cancellationToken)
     {
-        var response = await api.EditMessageTextAsync(
-            token, chatId, messageId, TelegramTimeCorrectionNotifier.Render(request, settings, decided: true), cancellationToken);
-        if (!response.Ok && !response.IsNotModified)
-        {
-            logger.LogWarning(
-                "Telegram correction message for {Id} was not updated ({StatusCode}): {Description}",
-                request.Id, response.StatusCode, response.Description);
-        }
-        return Truncate(TelegramMessageFactory.BuildCorrectionAlreadyDecided(request), 190);
-    }
-
-    private async Task EditKeyboardAsync(string token, long chatId, long messageId, object keyboard, CancellationToken cancellationToken)
-    {
-        var response = await api.EditMessageReplyMarkupAsync(token, chatId, messageId, keyboard, cancellationToken);
-        if (!response.Ok && !response.IsNotModified)
-        {
-            logger.LogWarning(
-                "Telegram correction buttons were not updated ({StatusCode}): {Description}",
-                response.StatusCode, response.Description);
-        }
+        var current = await messages.RefreshAsync(id, cancellationToken) ?? request;
+        return Truncate(TelegramMessageFactory.BuildCorrectionAlreadyDecided(current), 190);
     }
 
     /// <summary>Vorname, sonst Benutzername, so steht es als Entscheider am Antrag.</summary>

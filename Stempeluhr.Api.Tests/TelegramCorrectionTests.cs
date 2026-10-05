@@ -21,6 +21,7 @@ public sealed class TelegramCorrectionTests : IDisposable
     private readonly MutableSettingsStore _settings;
     private readonly TimeCorrectionStore _store;
     private readonly TimeCorrectionService _service;
+    private readonly TelegramTimeCorrectionNotifier _notifier;
     private readonly TelegramUpdatePoller _poller;
     private readonly CapturingLogger<TelegramUpdatePoller> _pollerLog = new();
     private readonly CapturingLogger<TelegramTimeCorrectionNotifier> _notifierLog = new();
@@ -30,10 +31,10 @@ public sealed class TelegramCorrectionTests : IDisposable
         _settings = new MutableSettingsStore(Configured());
         _store = new TimeCorrectionStore(Path.Combine(_directory, "time-corrections.json"));
         var api = new TelegramBotApi(new FakeTelegramClientFactory(_telegram));
-        var notifier = new TelegramTimeCorrectionNotifier(_settings, api, _store, _notifierLog);
+        _notifier = new TelegramTimeCorrectionNotifier(_settings, api, _store, _notifierLog);
         _service = new TimeCorrectionService(
-            _settings, new EmployeeService(), _kimai, _store, notifier, new PinAttemptGuard(clock: new ManualClock(Now)), clock: new ManualClock(Now));
-        _poller = new TelegramUpdatePoller(_settings, api, _service, _store, _pollerLog);
+            _settings, new EmployeeService(), _kimai, _store, _notifier, new PinAttemptGuard(clock: new ManualClock(Now)), clock: new ManualClock(Now));
+        _poller = new TelegramUpdatePoller(_settings, api, _service, _store, _notifier, _pollerLog);
     }
 
     public void Dispose()
@@ -289,6 +290,55 @@ public sealed class TelegramCorrectionTests : IDisposable
     }
 
     [Fact]
+    public async Task SlowFailedEdit_DoesNotOverwriteTheResultOfALaterRetry()
+    {
+        // Antrags-Lock und Notifier-Aufruf sind getrennt: ein langsamer Edit
+        // "Nicht eingetragen" darf nicht nach dem Edit des erfolgreichen
+        // Retry bei Telegram ankommen.
+        var dto = await SubmitPauseAsync();
+        var finished = new List<string>();
+        _telegram.Responder = call =>
+        {
+            if (call.Method == "editMessageText") lock (finished) finished.Add(call.Text);
+            return null;
+        };
+        var hold = new TaskCompletionSource();
+        _telegram.Holds["editMessageText"] = hold;
+        _kimai.Sheets[0].End = At(10);
+
+        var approve = _service.ApproveAsync(dto.Id, "Admin");
+        Assert.True(SpinWait.SpinUntil(() => _telegram.CallsTo("editMessageText").Count == 1, TimeSpan.FromSeconds(10)));
+        Assert.Equal(TimeCorrectionStatus.Failed, _store.Find(dto.Id)!.Status);
+
+        // Nur der erste Edit hängt; der Retry bucht und will danach editieren.
+        _telegram.Holds.TryRemove("editMessageText", out _);
+        _kimai.Sheets[0].End = At(11);
+        var retry = _service.RetryAsync(dto.Id, "Admin");
+        await Task.WhenAny(retry, Task.Delay(TimeSpan.FromMilliseconds(300)));
+
+        hold.SetResult();
+        await Task.WhenAll(approve, retry).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(TimeCorrectionStatus.Applied, _store.Find(dto.Id)!.Status);
+        Assert.EndsWith("– in Kimai eingetragen", finished[^1]);
+    }
+
+    [Fact]
+    public async Task ShowButtons_AfterADecisionMeanwhile_ShowsTheResultInsteadOfButtons()
+    {
+        // Der Poller hat "offen" gelesen, entschieden wurde, bevor er die Knöpfe
+        // tauscht: die Bestätigungsknöpfe dürfen nicht wieder erscheinen.
+        var dto = await SubmitPauseAsync();
+        await _service.RejectAsync(dto.Id, null, "Admin");
+
+        var shown = await _notifier.ShowButtonsAsync(dto.Id, TelegramMessageFactory.BuildCorrectionConfirmKeyboard(dto.Id, approve: true));
+
+        Assert.Equal(TimeCorrectionStatus.Rejected, shown!.Status);
+        Assert.Empty(_telegram.CallsTo("editMessageReplyMarkup"));
+        Assert.All(_telegram.CallsTo("editMessageText"), edit => Assert.Contains("❌ Abgelehnt von Admin", edit.Text));
+    }
+
+    [Fact]
     public async Task DecisionWhileTheMessageIsStillBeingSent_UpdatesTheMessageOnceItExists()
     {
         // Entscheidung, während sendMessage noch läuft: OnDecided findet noch keine
@@ -539,7 +589,7 @@ public sealed class TelegramCorrectionTests : IDisposable
     {
         var dto = await SubmitPauseAsync();
         var failing = new TelegramUpdatePoller(
-            _settings, new TelegramBotApi(new FakeTelegramClientFactory(_telegram)), new ThrowingApproveService(), _store, _pollerLog);
+            _settings, new TelegramBotApi(new FakeTelegramClientFactory(_telegram)), new ThrowingApproveService(), _store, _notifier, _pollerLog);
 
         _telegram.Updates.Enqueue(FakeTelegram.UpdatesOf(
             FakeTelegram.Callback(1, Data(TelegramCorrectionAction.Approve, dto.Id)),
@@ -700,7 +750,7 @@ public sealed class TelegramCorrectionTests : IDisposable
         var waits = new List<TimeSpan>();
         using var cancellation = new CancellationTokenSource();
         var poller = new TelegramUpdatePoller(
-            _settings, new TelegramBotApi(new FakeTelegramClientFactory(_telegram)), _service, _store, _pollerLog,
+            _settings, new TelegramBotApi(new FakeTelegramClientFactory(_telegram)), _service, _store, _notifier, _pollerLog,
             delay: (span, _) =>
             {
                 waits.Add(span);
@@ -722,7 +772,7 @@ public sealed class TelegramCorrectionTests : IDisposable
         var waits = new List<TimeSpan>();
         using var cancellation = new CancellationTokenSource();
         var poller = new TelegramUpdatePoller(
-            new ThrowingSettingsStore(), new TelegramBotApi(new FakeTelegramClientFactory(_telegram)), _service, _store, _pollerLog,
+            new ThrowingSettingsStore(), new TelegramBotApi(new FakeTelegramClientFactory(_telegram)), _service, _store, _notifier, _pollerLog,
             delay: (span, _) =>
             {
                 waits.Add(span);

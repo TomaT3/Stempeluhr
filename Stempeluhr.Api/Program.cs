@@ -34,7 +34,9 @@ builder.Services.AddScoped<IClockService, ClockService>();
 // Korrekturanträge: Singleton wegen der Sperren pro Antrag. Der Notifier
 // meldet sie in den Korrektur-Chat (ohne TelegramCorrectionChatId: nichts).
 builder.Services.AddSingleton<TelegramBotApi>();
-builder.Services.AddSingleton<ITimeCorrectionNotifier, TelegramTimeCorrectionNotifier>();
+// Eine Instanz für Service und Poller: sie hält die Edits einer Nachricht in Reihenfolge.
+builder.Services.AddSingleton<TelegramTimeCorrectionNotifier>();
+builder.Services.AddSingleton<ITimeCorrectionNotifier>(services => services.GetRequiredService<TelegramTimeCorrectionNotifier>());
 builder.Services.AddSingleton<ITimeCorrectionService, TimeCorrectionService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 // Telegram-Notifier: Singleton + named HttpClient. Die Notify-Task läuft
