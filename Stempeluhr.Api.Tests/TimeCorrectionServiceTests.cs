@@ -348,6 +348,23 @@ public sealed class TimeCorrectionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Retry_WhenTheStoredPatchWasUndoneMeanwhile_IsASnapshotConflict()
+    {
+        var sheet = WorkSheet();
+        var dto = await Submitted(Submit("addPause", sheet.Id, pauseBegin: At(8), pauseEnd: At(8, 30)));
+        _kimai.FailBeforeCreate = 1; // shortened to 08:00 and stored, the pause cannot be created
+        var failed = await Approved(dto.Id);
+        Assert.Equal(["shorten"], failed.AppliedSteps);
+        sheet.End = At(11); // back to the original: skipping the patch would book the work twice
+
+        var retried = (await _service.RetryAsync(dto.Id, "Admin")).Value!;
+
+        Assert.Equal(TimeCorrectionStatus.Failed, retried.Status);
+        Assert.Equal("Eintrag wurde inzwischen geändert", retried.Error);
+        Assert.Single(_kimai.Writes);
+    }
+
+    [Fact]
     public async Task Approve_ChangeTimes_WhenTheUnpatchedEndChangedToo_IsASnapshotConflict()
     {
         var sheet = WorkSheet();

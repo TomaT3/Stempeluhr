@@ -561,9 +561,12 @@ public sealed class TimeCorrectionService(
     }
 
     /// <summary>
-    /// Vergleicht das neu gelesene Timesheet mit dem Snapshot. Zulässig ist
-    /// auch der Zustand nach dem Patch-Schritt (ein früherer Versuch hat ihn
-    /// schon ausgeführt) - jede andere Abweichung ist ein Konflikt.
+    /// Vergleicht das neu gelesene Timesheet mit dem Snapshot. Ist der
+    /// Patch-Schritt als erledigt gespeichert, zählt nur noch der Zustand
+    /// danach: ein Rücksprung zum Original ist eine zwischenzeitliche Änderung,
+    /// und der übersprungene Patch würde die Arbeit doppelt buchen. Sonst ist
+    /// neben dem Original auch der gepatchte Zustand zulässig (Patch gelaufen,
+    /// Fortschritt nicht mehr gespeichert). Jede andere Abweichung ist ein Konflikt.
     /// </summary>
     private static bool MatchesSnapshot(
         TimeCorrectionRequest request, KimaiTimesheetDetailDto sheet, IReadOnlyList<PlannedStep> steps)
@@ -577,12 +580,14 @@ public sealed class TimeCorrectionService(
             return false;
         }
 
-        if (sheet.Begin == original.Begin && sheet.End == original.End)
+        var patch = steps.FirstOrDefault(step => step.Kind == PlannedStepKind.Patch);
+        if (patch is not null && request.AppliedSteps.Contains(patch.Name))
         {
-            return true;
+            return IsPatched(sheet, original, patch);
         }
 
-        return steps.FirstOrDefault(step => step.Kind == PlannedStepKind.Patch) is { } patch && IsPatched(sheet, original, patch);
+        return (sheet.Begin == original.Begin && sheet.End == original.End)
+            || (patch is not null && IsPatched(sheet, original, patch));
     }
 
     /// <summary>
