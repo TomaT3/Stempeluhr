@@ -217,6 +217,167 @@ public sealed class KimaiClientTests
         Assert.Contains("page=2", handler.Requests[1]);
     }
 
+    [Fact]
+    public async Task GetTimesheetAsync_ReadsSingleTimesheet()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.OK,
+            """{"id":42,"begin":"2026-08-28T08:00:00+02:00","end":"2026-08-28T16:00:00+02:00","activity":5,"project":{"id":3},"description":"Schicht","billable":false}"""));
+
+        var sheet = await CreateClient(handler).GetTimesheetAsync(Settings, Employee, 42);
+
+        Assert.Equal("GET /api/timesheets/42", Assert.Single(handler.Requests));
+        Assert.NotNull(sheet);
+        Assert.Equal(42, sheet.Id);
+        Assert.Equal(DateTimeOffset.Parse("2026-08-28T08:00:00+02:00"), sheet.Begin);
+        Assert.Equal(DateTimeOffset.Parse("2026-08-28T16:00:00+02:00"), sheet.End);
+        Assert.Equal((5, 3, "Schicht", false), (sheet.ActivityId, sheet.ProjectId, sheet.Description, sheet.Billable));
+    }
+
+    [Fact]
+    public async Task GetTimesheetAsync_RunningSheetHasNoEnd()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.OK,
+            """{"id":43,"begin":"2026-08-28T08:00:00+02:00","end":null,"activity":{"id":5},"project":{"id":3}}"""));
+
+        var sheet = await CreateClient(handler).GetTimesheetAsync(Settings, Employee, 43);
+
+        Assert.NotNull(sheet);
+        Assert.Null(sheet.End);
+        Assert.Null(sheet.Description);
+        Assert.True(sheet.Billable);
+    }
+
+    [Fact]
+    public async Task GetTimesheetAsync_NotFound_ReturnsNull()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.NotFound, """{"code":404,"message":"Not Found"}"""));
+
+        Assert.Null(await CreateClient(handler).GetTimesheetAsync(Settings, Employee, 99));
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task GetTimesheetAsync_OtherErrorsStillThrow()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.Forbidden, "{}"));
+
+        var error = await Assert.ThrowsAsync<KimaiApiException>(() => CreateClient(handler).GetTimesheetAsync(Settings, Employee, 42));
+        Assert.Equal(HttpStatusCode.Forbidden, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateTimesheet_SendsBeginAndEnd_AndReturnsId()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.OK, """{"id":77}"""));
+        var end = T08.AddHours(4);
+
+        var id = await CreateClient(handler).CreateTimesheetAsync(Settings, new EmployeeSettings { Id = "max", ApiToken = "token", Tags = ["a", "b"] }, Target, T08, end, "Rest");
+
+        Assert.Equal(77, id);
+        Assert.Equal("POST /api/timesheets?full=true", Assert.Single(handler.Requests));
+        using var body = System.Text.Json.JsonDocument.Parse(Assert.Single(handler.Bodies)!);
+        var root = body.RootElement;
+        Assert.Equal("2026-08-24T08:00:00+00:00", root.GetProperty("begin").GetString());
+        Assert.Equal("2026-08-24T12:00:00+00:00", root.GetProperty("end").GetString());
+        Assert.Equal((1, 1, "Rest", "a,b", true),
+            (root.GetProperty("project").GetInt32(), root.GetProperty("activity").GetInt32(),
+             root.GetProperty("description").GetString(), root.GetProperty("tags").GetString(), root.GetProperty("billable").GetBoolean()));
+    }
+
+    [Fact]
+    public async Task CreateTimesheet_IsNeverRetried()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.InternalServerError), Resp(HttpStatusCode.OK, """{"id":1}"""));
+
+        await Assert.ThrowsAsync<KimaiApiException>(
+            () => CreateClient(handler).CreateTimesheetAsync(Settings, Employee, Target, T08, T08.AddHours(1), null));
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task CreateTimesheet_ForbiddenEndExplainsTrackingMode()
+    {
+        const string details = """{"errors":{"errors":["Dieses Formular sollte keine zusätzlichen Felder enthalten."],"children":{"project":{},"activity":{},"description":{},"tags":{},"billable":{}}}}""";
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.BadRequest, details));
+
+        var error = await Assert.ThrowsAsync<KimaiApiException>(
+            () => CreateClient(handler).CreateTimesheetAsync(Settings, Employee, Target, T08, T08.AddHours(1), null));
+
+        Assert.Equal(new[] { "begin", "end" }, error.RejectedFields);
+        Assert.Contains("Erfassungsmodus", error.Message);
+    }
+
+    [Fact]
+    public async Task UpdateTimesheetTimes_PatchesOnlyTheGivenFields()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.OK, "{}"), Resp(HttpStatusCode.OK, "{}"), Resp(HttpStatusCode.OK, "{}"));
+        var client = CreateClient(handler);
+
+        await client.UpdateTimesheetTimesAsync(Settings, Employee, 42, T08, null);
+        await client.UpdateTimesheetTimesAsync(Settings, Employee, 42, null, T08.AddHours(8));
+        await client.UpdateTimesheetTimesAsync(Settings, Employee, 42, T08, T08.AddHours(8));
+
+        Assert.All(handler.Requests, request => Assert.Equal("PATCH /api/timesheets/42", request));
+        // Compare parsed fields: the raw JSON escapes '+' as +.
+        var sent = handler.Bodies.Select(json =>
+        {
+            using var body = System.Text.Json.JsonDocument.Parse(json!);
+            return body.RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString());
+        }).ToList();
+        const string begin = "2026-08-24T08:00:00+00:00";
+        const string end = "2026-08-24T16:00:00+00:00";
+        Assert.Equal([("begin", begin)], sent[0].Select(p => (p.Key, p.Value!)));
+        Assert.Equal([("end", end)], sent[1].Select(p => (p.Key, p.Value!)));
+        Assert.Equal([("begin", begin), ("end", end)], sent[2].OrderBy(p => p.Key).Select(p => (p.Key, p.Value!)));
+    }
+
+    [Fact]
+    public async Task UpdateTimesheetTimes_WithoutFieldsThrowsBeforeAnyRequest()
+    {
+        var handler = new ScriptedHandler();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => CreateClient(handler).UpdateTimesheetTimesAsync(Settings, Employee, 42, null, null));
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task UpdateTimesheetTimes_RetriesTransientFailuresOnce_NotTwice()
+    {
+        var handler = new ScriptedHandler(
+            Resp(HttpStatusCode.InternalServerError),
+            Resp(HttpStatusCode.OK, "{}"));
+
+        await CreateClient(handler).UpdateTimesheetTimesAsync(Settings, Employee, 42, T08, null);
+
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task UpdateTimesheetTimes_RejectedBeginExplainsTrackingMode()
+    {
+        const string details = """{"errors":{"errors":["Dieses Formular sollte keine zusätzlichen Felder enthalten."],"children":{"project":{},"activity":{}}}}""";
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.BadRequest, details));
+
+        var error = await Assert.ThrowsAsync<KimaiApiException>(
+            () => CreateClient(handler).UpdateTimesheetTimesAsync(Settings, Employee, 42, T08, null));
+
+        Assert.Equal(new[] { "begin" }, error.RejectedFields);
+        Assert.Contains("Erfassungsmodus", error.Message);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task GetTimesheetsAsync_ParsesProjectAndDescription()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.OK,
+            """[{"id":1,"begin":"2026-08-28T08:00:00+02:00","end":"2026-08-28T12:00:00+02:00","duration":14400,"activity":{"id":5},"project":{"id":3},"description":"Rezeption"}]"""));
+
+        var entry = Assert.Single(await CreateClient(handler).GetTimesheetsAsync(
+            Settings, Employee, new DateTime(2026, 8, 28), new DateTime(2026, 8, 29)));
+
+        Assert.Equal((3, "Rezeption"), (entry.ProjectId, entry.Description));
+    }
+
     private static DateTimeOffset Parse(string value) =>
         DateTimeOffset.Parse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal);
 
