@@ -84,3 +84,89 @@ export interface EmployeeTask {
 }
 
 export type ClockAction = 'start' | 'stop' | 'pauseStart' | 'pauseEnd' | 'switch';
+
+// ---- Korrekturanträge (POST /api/kiosk/corrections*) ----
+
+/**
+ * Zeiten der Korrekturanträge sind lokale Zeit `yyyy-MM-ddTHH:mm` in der
+ * Kimai-Zeitzone des Mitarbeiters, nie UTC und ohne Offset.
+ */
+export type LocalDateTime = string;
+
+/** Anmeldung jeder Korrektur-Anfrage: Mitarbeiter plus PIN **oder** Karte (`pin` leer). */
+export interface CorrectionAuth {
+  employeeId: string;
+  pin: string;
+  nfcCardId: string | null;
+}
+
+export interface CorrectionEntry {
+  id: number;
+  begin: LocalDateTime;
+  /** null = läuft noch. */
+  end: LocalDateTime | null;
+  kind: 'work' | 'pause';
+  /** „Arbeit“, „Pause“ oder die Bezeichnung der Tätigkeit. */
+  label: string;
+  hasOpenRequest: boolean;
+}
+
+/** Eine Schicht (eine Nachtschicht bleibt über Mitternacht eine Schicht) mit ihren Einträgen. */
+export interface CorrectionShift {
+  begin: LocalDateTime;
+  end: LocalDateTime | null;
+  entries: CorrectionEntry[];
+}
+
+/** Auswahlliste der letzten 31 Tage, Schichten neueste zuerst. */
+export interface CorrectionTimesheets {
+  /** IANA-Zeitzone, in der alle Zeiten stehen. */
+  timeZone: string;
+  shifts: CorrectionShift[];
+}
+
+export type CorrectionKind = 'addPause' | 'setEnd' | 'addShift' | 'changeTimes';
+
+export type CorrectionStatus = 'pending' | 'applied' | 'rejected' | 'failed' | 'withdrawn' | 'resolvedManually';
+
+export interface SubmitCorrection extends CorrectionAuth {
+  kind: CorrectionKind;
+  /** Nur bei Arten mit vorhandenem Eintrag (nicht `addShift`). */
+  timesheetId: number | null;
+  begin: LocalDateTime | null;
+  end: LocalDateTime | null;
+  pauseBegin: LocalDateTime | null;
+  pauseEnd: LocalDateTime | null;
+  /** Nur `addShift`: weitere Tätigkeit, null = Haupttätigkeit. */
+  taskId: string | null;
+  /** Nur auf /clock, höchstens 300 Zeichen. */
+  comment: string | null;
+  /** Terminal-ID oder `clock`. */
+  source: string;
+}
+
+/** Ein Antrag, wie ihn der Mitarbeiter sieht (bei `failed` ist `error` ein neutraler Hinweis). */
+export interface KioskCorrection {
+  id: string;
+  kind: CorrectionKind;
+  status: CorrectionStatus;
+  createdAt: string;
+  comment: string | null;
+  timeZone: string;
+  timesheetId: number | null;
+  begin: LocalDateTime | null;
+  end: LocalDateTime | null;
+  pauseBegin: LocalDateTime | null;
+  pauseEnd: LocalDateTime | null;
+  taskLabel: string | null;
+  /** Timesheet zum Zeitpunkt des Antrags (fehlt bei `addShift`). */
+  original: {
+    begin: LocalDateTime;
+    end: LocalDateTime | null;
+    kind: 'work' | 'pause';
+    label: string;
+  } | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  error: string | null;
+}

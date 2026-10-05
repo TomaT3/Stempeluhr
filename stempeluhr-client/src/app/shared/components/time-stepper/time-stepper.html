@@ -1,0 +1,26 @@
+<div class="stepper" role="group" [attr.aria-label]="label()">
+  <div class="unit unit-day">
+    <span class="unit-name">Tag</span>
+    <button type="button" class="step day-later" aria-label="Einen Tag später" [disabled]="!canStep(1440)" (click)="step(1440)">+</button>
+    <output class="value" aria-live="polite">{{ day() }}</output>
+    <button type="button" class="step day-earlier" aria-label="Einen Tag früher" [disabled]="!canStep(-1440)" (click)="step(-1440)">−</button>
+  </div>
+  <div class="unit unit-hour">
+    <span class="unit-name">Stunde</span>
+    <button type="button" class="step hour-later" aria-label="Eine Stunde später" [disabled]="!canStep(60)" (click)="step(60)">+</button>
+    <output class="value" aria-live="polite">{{ hour() }}</output>
+    <button type="button" class="step hour-earlier" aria-label="Eine Stunde früher" [disabled]="!canStep(-60)" (click)="step(-60)">−</button>
+  </div>
+  <div class="unit unit-minute">
+    <span class="unit-name">Minute</span>
+    <div class="step-pair">
+      <button type="button" class="step minute-later-5" aria-label="Fünf Minuten später" [disabled]="!canStep(5)" (click)="step(5)">+5</button>
+      <button type="button" class="step minute-later-1" aria-label="Eine Minute später" [disabled]="!canStep(1)" (click)="step(1)">+1</button>
+    </div>
+    <output class="value" aria-live="polite">{{ minute() }}</output>
+    <div class="step-pair">
+      <button type="button" class="step minute-earlier-5" aria-label="Fünf Minuten früher" [disabled]="!canStep(-5)" (click)="step(-5)">−5</button>
+      <button type="button" class="step minute-earlier-1" aria-label="Eine Minute früher" [disabled]="!canStep(-1)" (click)="step(-1)">−1</button>
+    </div>
+  </div>
+</div>

@@ -22,6 +22,12 @@ describe('KioskApi', () => {
     vi.useRealTimers();
   });
 
+  const auth = { employeeId: 'max', pin: '', nfcCardId: '04ABCD' };
+  const submission = {
+    kind: 'setEnd' as const, timesheetId: 7, begin: null, end: '2026-10-04T17:00', pauseBegin: null, pauseEnd: null,
+    taskId: null, comment: null, source: 'term-1',
+  };
+
   // A hanging connection must end in the offline path after a few seconds
   // instead of keeping the kiosk busy for minutes.
   const hangingCalls: Array<[string, string, () => Observable<unknown>]> = [
@@ -29,6 +35,10 @@ describe('KioskApi', () => {
     ['pinLogin', '/api/kiosk/pin-login', () => api.pinLogin('1234')],
     ['hoursOverview', '/api/kiosk/hours', () => api.hoursOverview('1234')],
     ['ping', '/api/health', () => api.ping()],
+    ['correctionTimesheets', '/api/kiosk/corrections/timesheets', () => api.correctionTimesheets(auth)],
+    ['submitCorrection', '/api/kiosk/corrections', () => api.submitCorrection({ ...auth, ...submission })],
+    ['myCorrections', '/api/kiosk/corrections/mine', () => api.myCorrections(auth)],
+    ['withdrawCorrection', '/api/kiosk/corrections/c1/withdraw', () => api.withdrawCorrection(auth, 'c1')],
   ];
 
   it('sends the event ID the kiosk queues on failure with the live stamp (issue #67)', () => {
@@ -36,6 +46,28 @@ describe('KioskApi', () => {
 
     const request = http.expectOne('/api/kiosk/clock');
     expect(request.request.body).toMatchObject({ action: 'pauseEnd', eventId: 'ev1' });
+    request.flush({});
+  });
+
+  it('authenticates the correction calls with employee ID and card (no PIN) like the clock call', () => {
+    api.correctionTimesheets(auth).subscribe();
+    const request = http.expectOne('/api/kiosk/corrections/timesheets');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({ employeeId: 'max', pin: '', nfcCardId: '04ABCD' });
+    request.flush({ timeZone: 'Europe/Berlin', shifts: [] });
+  });
+
+  it('submits a correction with its times as local text and the source', () => {
+    api.submitCorrection({ ...auth, ...submission }).subscribe();
+    const request = http.expectOne('/api/kiosk/corrections');
+    expect(request.request.body).toEqual({ ...auth, ...submission });
+    request.flush({});
+  });
+
+  it('withdraws by ID with the same authentication', () => {
+    api.withdrawCorrection({ employeeId: 'max', pin: '1234', nfcCardId: null }, 'c1').subscribe();
+    const request = http.expectOne('/api/kiosk/corrections/c1/withdraw');
+    expect(request.request.body).toEqual({ employeeId: 'max', pin: '1234', nfcCardId: null });
     request.flush({});
   });
 
