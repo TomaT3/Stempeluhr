@@ -31,9 +31,10 @@ builder.Services.AddKioskRateLimiters();
 // Failed-PIN lock per employee (issue #8); shared by live and replay paths.
 builder.Services.AddSingleton<PinAttemptGuard>();
 builder.Services.AddScoped<IClockService, ClockService>();
-// Korrekturanträge: Singleton wegen der Sperren pro Antrag; der Notifier ist
-// bis zur Telegram-Anbindung (Issue 5) ein No-op.
-builder.Services.AddSingleton<ITimeCorrectionNotifier, NoOpTimeCorrectionNotifier>();
+// Korrekturanträge: Singleton wegen der Sperren pro Antrag. Der Notifier
+// meldet sie in den Korrektur-Chat (ohne TelegramCorrectionChatId: nichts).
+builder.Services.AddSingleton<TelegramBotApi>();
+builder.Services.AddSingleton<ITimeCorrectionNotifier, TelegramTimeCorrectionNotifier>();
 builder.Services.AddSingleton<ITimeCorrectionService, TimeCorrectionService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 // Telegram-Notifier: Singleton + named HttpClient. Die Notify-Task läuft
@@ -50,6 +51,17 @@ builder.Services.AddHttpClient(TelegramNotifier.ClientName, client =>
 {
     PooledConnectionLifetime = TimeSpan.FromMinutes(2)
 });
+// Long-Polling der Korrektur-Knöpfe: eigener Client, weil sein Timeout über
+// dem getUpdates-Timeout (50 s) liegen muss, der Notifier-Client aber kurz bleibt.
+builder.Services.AddHttpClient(TelegramBotApi.PollClientName, client =>
+{
+    client.BaseAddress = new Uri("https://api.telegram.org");
+    client.Timeout = TimeSpan.FromSeconds(TelegramUpdatePoller.PollTimeoutSeconds + 20);
+}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+});
+builder.Services.AddHostedService<TelegramUpdatePoller>();
 builder.Services.AddSingleton<ITelegramNotifier, TelegramNotifier>();
 builder.Services.AddSingleton<OfflineRejectionNotifier>();
 // Telegram warning after 6 h without a break or 10 h per shift.

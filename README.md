@@ -208,8 +208,9 @@ einer Tätigkeit), bleibt der Wechsel zu jeder Tätigkeit möglich.
 Mitarbeiter vergessen, die Pause oder das Ausstempeln zu stempeln. Kimai-Zugang
 bekommen sie bewusst nicht; stattdessen beantragen sie die Korrektur, und erst
 nach der Freigabe durch Chef oder Admin schreibt die API sie in Kimai. Entschieden
-wird auf der Admin-Seite `/admin/corrections`; Kiosk und `/clock` (#98) und die
-Telegram-Knöpfe (#99) folgen in eigenen Schritten (Epic #94).
+wird auf der Admin-Seite `/admin/corrections` oder per Knopf in einem eigenen
+Telegram-Chat ([Einrichtung](#korrekturanträge-per-telegram-freigeben)); Kiosk
+und `/clock` (#98) folgen in einem eigenen Schritt (Epic #94).
 
 **Ablauf:** Der Mitarbeiter wählt in der Liste der letzten 31 Tage einen Eintrag
 (nach Schichten gruppiert, eine Nachtschicht über Mitternacht bleibt eine
@@ -360,6 +361,93 @@ landen sie in `telegramChatId`:
 ```json
 { "telegramAlertChatId": "-1009876543210" }
 ```
+
+#### Korrekturanträge per Telegram freigeben
+
+Neue [Korrekturanträge](#korrekturanträge) erscheinen in einem **eigenen
+Telegram-Chat** mit den Knöpfen **Genehmigen** und **Ablehnen**. Der Chef
+entscheidet dort direkt, ohne Admin-Seite; die Admin-Seite bleibt daneben
+nutzbar. Ohne `telegramCorrectionChatId` gibt es keine Telegram-Freigabe: keine
+Nachricht, kein Empfang, nur die Admin-Seite.
+
+Die Nachricht nennt Mitarbeiter, Art, die betroffene Schicht, Vorher → Nachher
+und den Kommentar, z. B.:
+
+```text
+📝 Korrekturantrag · Anna Mustermann
+Ausstempeln nachtragen
+Schicht: Mo 06.10. 22:00 – Di 07.10. 06:10
+Ende: Di 07.10. 06:10 → Di 07.10. 05:40
+Kommentar: Hab vergessen auszustempeln
+```
+
+Alle Zeiten stehen mit Wochentag und Datum in der Kimai-Zeitzone des
+Mitarbeiters, damit Nachtschichten über Mitternacht eindeutig sind. „Schicht“
+ist der Zeitraum des betroffenen Eintrags (bei einem Pausen-Eintrag „Pause“).
+
+**Entscheiden:** Ein Tipp auf „Genehmigen“ oder „Ablehnen“ entscheidet noch
+nichts; die Knöpfe wechseln zu „Ja, genehmigen“ bzw. „Ja, ablehnen“ und
+„Zurück“. Erst die Bestätigung ruft den Service auf (als Entscheider steht der
+Vorname des Telegram-Kontos, sonst der Benutzername, am Antrag). Ablehnen
+geschieht dort ohne Grund. Danach ersetzt die API die Nachricht durch das
+Ergebnis, ohne Knöpfe, und zwar nach **jeder** Entscheidung, auch wenn sie auf
+der Admin-Seite fiel oder der Mitarbeiter zurückgezogen hat:
+
+- `✅ Genehmigt von Max · 07.10. 09:12 – in Kimai eingetragen`
+- `❌ Abgelehnt von Max · 07.10. 09:12`
+- `⚠️ Nicht in Kimai eingetragen: … – bitte in Kimai nachtragen`
+  (danach auf der Admin-Seite erneut versuchen oder als erledigt markieren;
+  das Ergebnis ersetzt die Nachricht dann noch einmal)
+- `↩️ Zurückgezogen`
+- `☑️ Von Max manuell in Kimai nachgetragen`
+
+**Wer darf:** Ein Tipp zählt nur, wenn die Nachricht im Korrektur-Chat steht
+(`telegramCorrectionChatId`) und, falls `telegramApproverUserIds` gesetzt ist,
+der Tippende in dieser Liste steht. Sonst antwortet der Bot mit „Keine
+Berechtigung“ und es passiert nichts. Ist die Liste leer, darf jedes Mitglied
+des Chats entscheiden. Jeder Tipp wird beantwortet, auch bei Fehlern. Ein
+schon entschiedener Antrag antwortet „Bereits entschieden: …“ und die Nachricht
+wird auf den Stand gebracht; doppelte Tipps, wiederholte Updates nach einem
+Neustart und Telegram gleichzeitig mit der Admin-Seite lösen dank der Sperre
+pro Antrag keine zweite Buchung aus.
+
+**Einrichtung:**
+
+1. Eine **eigene Gruppe** für die Freigabe anlegen, den Bot (siehe oben)
+   hinzufügen und zum Admin machen.
+2. **Chat-ID ermitteln**, und zwar **bevor** sie eingetragen wird: eine
+   Nachricht in die neue Gruppe schreiben und
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` öffnen
+   (`result[n].message.chat.id`, negativ). Danach fragt der Empfang der API
+   selbst per `getUpdates` ab und verbraucht die Updates; ein manueller Aufruf
+   liefert dann nichts mehr bzw. Fehler 409.
+3. **User-IDs ermitteln:** In derselben `getUpdates`-Antwort steht pro
+   Nachricht `result[n].message.from.id`. Wer entscheiden darf, schreibt vorher
+   eine Nachricht in die Gruppe.
+4. In `data/settings.json` ergänzen (wirkt ohne Neustart, spätestens nach dem
+   laufenden Abruf von bis zu 50 s) oder im Admin unter „Telegram-Freigabe“
+   eintragen (leer lassen bzw. leeren schaltet ab):
+
+   ```json
+   {
+     "telegramBotToken": "<TOKEN>",
+     "telegramChatId": "-1001234567890",
+     "telegramCorrectionChatId": "-1009998887776",
+     "telegramApproverUserIds": [123456789, 987654321]
+   }
+   ```
+
+**Technik:** Der `TelegramUpdatePoller` fragt per Long-Polling ab
+(`getUpdates`, `timeout=50`, nur `callback_query`; kein Webhook, nur
+Outbound-HTTPS) und läuft nur mit Bot-Token **und** Korrektur-Chat. Der Offset
+liegt im Speicher. Ein **409** heißt, dass für den Bot ein Webhook gesetzt ist
+oder eine zweite Instanz mit demselben Token abfragt (z. B. eine
+Testumgebung): das steht einmal im Log, danach wartet der Poller mit Backoff
+und versucht es weiter. Auch bei Netzfehlern steigt die Wartezeit von 5 s auf
+höchstens 60 s, ohne das Log zu fluten. `callback_data` hat die Form
+`c:<aktion>:<id>` (höchstens 64 Bytes). Telegram-Fehler werden nur geloggt und
+beeinflussen weder Entscheidung noch Buchung; die Anfragen an die Bot API
+loggt .NET nur ab Warning, weil der Token im URL-Pfad steht.
 
 ### Terminal-Metriken in Grafana (optional)
 

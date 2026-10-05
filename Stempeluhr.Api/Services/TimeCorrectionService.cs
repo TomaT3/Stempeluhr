@@ -9,7 +9,7 @@ namespace Stempeluhr.Api.Services;
 /// Korrekturanträge: Mitarbeiter reichen sie ein (nur online, ohne
 /// Offline-Queue), Chef oder Admin entscheidet, erst dann wird mit dem
 /// Mitarbeiter-Token in Kimai geschrieben. Singleton: die Sperren pro Antrag
-/// müssen alle Anfragen (Admin-Seite, später Telegram) umfassen.
+/// müssen alle Anfragen (Admin-Seite, Telegram) umfassen.
 /// </summary>
 public sealed class TimeCorrectionService(
     IRuntimeSettingsStore settingsStore,

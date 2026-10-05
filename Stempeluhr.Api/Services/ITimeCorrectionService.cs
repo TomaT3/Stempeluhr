@@ -24,7 +24,7 @@ public interface ITimeCorrectionService
     Task<CorrectionResult<TimeCorrectionDto>> WithdrawAsync(
         CorrectionAuthRequest auth, string id, CancellationToken cancellationToken = default);
 
-    // ---- Chef/Admin (Admin-Seite, später Telegram) ----
+    // ---- Chef/Admin (Admin-Seite, Telegram) ----
 
     /// <summary>Offene Anträge (Pending, Failed) oder alle gespeicherten, neueste zuerst.</summary>
     IReadOnlyList<TimeCorrectionDto> List(bool openOnly);

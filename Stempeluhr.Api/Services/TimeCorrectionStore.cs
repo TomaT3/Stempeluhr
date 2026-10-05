@@ -49,7 +49,12 @@ public sealed class TimeCorrectionStore(string filePath, ILogger<TimeCorrectionS
         }
     }
 
-    /// <summary>Ersetzt den Antrag mit derselben ID; false, wenn es ihn nicht gibt.</summary>
+    /// <summary>
+    /// Ersetzt den Antrag mit derselben ID; false, wenn es ihn nicht gibt. Die
+    /// Telegram-Nachricht bleibt erhalten, wenn der neue Stand keine kennt: der
+    /// Service hält seinen Stand unter dem Antrags-Lock, der Notifier hängt die
+    /// Nachricht dagegen unabhängig davon an (<see cref="AttachTelegramMessage"/>).
+    /// </summary>
     public bool Update(TimeCorrectionRequest request)
     {
         lock (_gate)
@@ -60,9 +65,35 @@ public sealed class TimeCorrectionStore(string filePath, ILogger<TimeCorrectionS
             {
                 return false;
             }
+            if (request.TelegramMessageId is null && entries[index].TelegramMessageId is { } messageId)
+            {
+                request = request with { TelegramChatId = entries[index].TelegramChatId, TelegramMessageId = messageId };
+            }
             var updated = new List<TimeCorrectionRequest>(entries) { [index] = request };
             Save(TrimCompleted(updated));
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Hält die Telegram-Nachricht des Antrags fest und gibt den dabei
+    /// aktuellen Stand zurück (null, wenn es den Antrag nicht gibt). Läuft
+    /// allein unter dem Store-Lock und ändert sonst nichts, damit eine
+    /// gleichzeitige Entscheidung nie überschrieben wird.
+    /// </summary>
+    public TimeCorrectionRequest? AttachTelegramMessage(string id, long chatId, long messageId)
+    {
+        lock (_gate)
+        {
+            var entries = Load();
+            var index = entries.FindIndex(entry => entry.Id == id);
+            if (index < 0)
+            {
+                return null;
+            }
+            var attached = entries[index] with { TelegramChatId = chatId, TelegramMessageId = messageId };
+            Save(TrimCompleted(new List<TimeCorrectionRequest>(entries) { [index] = attached }));
+            return attached;
         }
     }
 

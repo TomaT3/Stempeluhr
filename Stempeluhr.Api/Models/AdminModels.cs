@@ -60,6 +60,8 @@ public sealed record AdminSettingsDto(
 {
     public IReadOnlyCollection<string> TerminalIds { get; init; } = [];
     public string? TelegramAlertChatId { get; init; }
+    public string? TelegramCorrectionChatId { get; init; }
+    public IReadOnlyCollection<long> TelegramApproverUserIds { get; init; } = [];
     public string? InfluxUrl { get; init; }
     public string? InfluxOrg { get; init; }
     public string? InfluxBucket { get; init; }
@@ -80,6 +82,8 @@ public sealed record AdminSettingsDto(
         {
             TerminalIds = settings.TerminalTokens.Keys.ToArray(),
             TelegramAlertChatId = settings.TelegramAlertChatId,
+            TelegramCorrectionChatId = settings.TelegramCorrectionChatId,
+            TelegramApproverUserIds = settings.TelegramApproverUserIds.ToArray(),
             InfluxUrl = settings.InfluxUrl,
             InfluxOrg = settings.InfluxOrg,
             InfluxBucket = settings.InfluxBucket,
@@ -169,7 +173,9 @@ public sealed record AdminSettingsUpdateDto(
     string? InfluxUrl = null,
     string? InfluxOrg = null,
     string? InfluxBucket = null,
-    string? InfluxToken = null)
+    string? InfluxToken = null,
+    string? TelegramCorrectionChatId = null,
+    IReadOnlyCollection<long>? TelegramApproverUserIds = null)
 {
     public RuntimeSettings ToSettings(RuntimeSettings current)
     {
@@ -190,6 +196,15 @@ public sealed record AdminSettingsUpdateDto(
             TelegramAlertChatId = string.IsNullOrWhiteSpace(TelegramAlertChatId)
                 ? current.TelegramAlertChatId
                 : TelegramAlertChatId.Trim(),
+            // Wie DefaultTaskLabel: null (alter Client) behält den Wert, ein
+            // leerer Wert schaltet die Telegram-Freigabe bewusst ab - die
+            // Admin-UI hat dafür Felder.
+            TelegramCorrectionChatId = TelegramCorrectionChatId is null
+                ? current.TelegramCorrectionChatId
+                : string.IsNullOrWhiteSpace(TelegramCorrectionChatId) ? null : TelegramCorrectionChatId.Trim(),
+            TelegramApproverUserIds = TelegramApproverUserIds is null
+                ? [.. current.TelegramApproverUserIds]
+                : TelegramApproverUserIds.Where(id => id > 0).Distinct().ToList(),
             // Same keep-current semantics: the admin UI has no Influx fields.
             InfluxUrl = KeepOrTrim(InfluxUrl, current.InfluxUrl),
             InfluxOrg = KeepOrTrim(InfluxOrg, current.InfluxOrg),
