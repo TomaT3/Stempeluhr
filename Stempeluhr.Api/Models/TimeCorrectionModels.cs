@@ -10,7 +10,7 @@ public sealed class CamelCaseEnumConverter<T>() : JsonStringEnumConverter<T>(Jso
 [JsonConverter(typeof(CamelCaseEnumConverter<TimeCorrectionKind>))]
 public enum TimeCorrectionKind
 {
-    /// <summary>Pause von/bis in ein gestopptes Arbeits-Timesheet eintragen.</summary>
+    /// <summary>Pause von/bis in ein Arbeits-Timesheet eintragen, auch in ein laufendes.</summary>
     AddPause,
 
     /// <summary>Tatsächliches Ende eines Timesheets setzen (vor dem aktuellen Ende).</summary>
@@ -94,6 +94,21 @@ public sealed record TimeCorrectionRequest
 
     /// <summary>Schritte, die in Kimai schon ausgeführt sind (Fortschritt für „Erneut versuchen“).</summary>
     public IReadOnlyList<string> AppliedSteps { get; init; } = [];
+
+    /// <summary>
+    /// Nur bei einer Pause in einem laufenden Eintrag: <see cref="ObservedEndAtApply"/>
+    /// wurde beim Genehmigen vor dem ersten Schritt festgehalten. Ohne dieses
+    /// Flag ist ein leeres Ende nur „noch nicht gelesen“, nicht „läuft noch“.
+    /// </summary>
+    public bool ObservedAtApply { get; init; }
+
+    /// <summary>
+    /// Ende des Eintrags, wie es beim Genehmigen vor dem ersten Schritt in Kimai
+    /// stand (null = lief noch). Gespeichert, damit „Erneut versuchen“ nach dem
+    /// Kürzen weiß, ob die Rest-Arbeit laufend gestartet oder bis zu diesem Ende
+    /// angelegt wird. Nur gültig mit <see cref="ObservedAtApply"/>.
+    /// </summary>
+    public DateTimeOffset? ObservedEndAtApply { get; init; }
 
     public long? TelegramChatId { get; init; }
     public long? TelegramMessageId { get; init; }

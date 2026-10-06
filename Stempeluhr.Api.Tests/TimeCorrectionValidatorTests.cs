@@ -58,10 +58,6 @@ public sealed class TimeCorrectionValidatorTests
         => Assert.Contains("höchstens 4 Stunden", Validate(AddPause(At(6, 30), At(10, 31))));
 
     [Fact]
-    public void AddPause_OnARunningSheet_IsRejected()
-        => Assert.Contains("läuft noch", Validate(AddPause(At(8), At(8, 30), Work(10, At(6), null))));
-
-    [Fact]
     public void AddPause_OnAPauseSheet_IsRejected()
         => Assert.Contains("Arbeitseintrag", Validate(AddPause(At(8), At(8, 30), Work(10, At(6), At(11), PauseActivity))));
 

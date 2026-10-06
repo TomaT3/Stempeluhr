@@ -495,7 +495,22 @@ public sealed class TimeCorrectionService(
                     return Fail(request, read.Error == "Eintrag nicht gefunden." ? "Eintrag nicht gefunden oder nicht erlaubt." : read.Error!);
                 }
 
-                if (!MatchesSnapshot(request, own, steps))
+                if (IsRunningPauseRequest(request) && !request.ObservedAtApply)
+                {
+                    // Erste Genehmigung: den Stand festhalten, bevor ein Schritt
+                    // etwas ändert. Der Plan hängt davon ab (laufend weiterführen
+                    // oder bis zum Ende anlegen), und "Erneut versuchen" muss
+                    // nach dem Kürzen noch wissen, wie es war.
+                    if (!IsUnchanged(request, own))
+                    {
+                        return Fail(request, "Eintrag wurde inzwischen geändert");
+                    }
+
+                    request = request with { ObservedAtApply = true, ObservedEndAtApply = own.End };
+                    store.Update(request);
+                    steps = TimeCorrectionPlan.Steps(request);
+                }
+                else if (!MatchesSnapshot(request, own, steps))
                 {
                     return Fail(request, "Eintrag wurde inzwischen geändert");
                 }
@@ -535,8 +550,23 @@ public sealed class TimeCorrectionService(
                 }
                 else if (!await ExistsAsync(settings, employee, resolved.Target, step, timeZone, cancellationToken))
                 {
-                    await kimai.CreateTimesheetAsync(
-                        settings, employee, resolved.Target, step.Begin!.Value, step.End!.Value, resolved.Description, cancellationToken);
+                    if (step.Kind == PlannedStepKind.StartWork)
+                    {
+                        // Der Eintrag ist gekürzt, also gehört ein laufender
+                        // Eintrag jetzt nicht mehr dem Antrag: der Mitarbeiter hat
+                        // inzwischen selbst etwas gestartet.
+                        if ((await kimai.GetStatusAsync(settings, employee, cancellationToken)).IsRunning)
+                        {
+                            return Fail(request with { AppliedSteps = applied.ToArray() }, "Eintrag wurde inzwischen geändert");
+                        }
+
+                        await kimai.StartAtAsync(settings, employee, resolved.Target, step.Begin!.Value, cancellationToken);
+                    }
+                    else
+                    {
+                        await kimai.CreateTimesheetAsync(
+                            settings, employee, resolved.Target, step.Begin!.Value, step.End!.Value, resolved.Description, cancellationToken);
+                    }
                 }
 
                 applied.Add(step.Name);
@@ -590,8 +620,37 @@ public sealed class TimeCorrectionService(
             return IsPatched(sheet, original, patch);
         }
 
-        return (sheet.Begin == original.Begin && sheet.End == original.End)
+        return IsUnchanged(request, sheet)
             || (patch is not null && IsPatched(sheet, original, patch));
+    }
+
+    /// <summary>Eine Pause, die sich auf ein beim Absenden noch laufendes Timesheet bezieht.</summary>
+    private static bool IsRunningPauseRequest(TimeCorrectionRequest request)
+        => request is { Kind: TimeCorrectionKind.AddPause, Original.End: null };
+
+    /// <summary>
+    /// Das Timesheet wie beim Antrag, noch ohne Schritt. Ein laufendes Original
+    /// gilt als unverändert, solange es läuft oder (Mitarbeiter hat inzwischen
+    /// ausgestempelt) nicht vor dem Pausenende endet. Ist der Stand beim
+    /// Genehmigen schon festgehalten, muss es genau dabei bleiben: wer nach dem
+    /// Festhalten noch ausgestempelt hat, bekäme sonst eine laufende Rest-Arbeit.
+    /// </summary>
+    private static bool IsUnchanged(TimeCorrectionRequest request, KimaiTimesheetDetailDto sheet)
+    {
+        var original = request.Original!;
+        if (sheet.Begin != original.Begin)
+        {
+            return false;
+        }
+
+        if (!IsRunningPauseRequest(request))
+        {
+            return sheet.End == original.End;
+        }
+
+        return request.ObservedAtApply
+            ? sheet.End == request.ObservedEndAtApply
+            : sheet.End is null || sheet.End >= request.PauseEnd;
     }
 
     /// <summary>

@@ -246,9 +246,42 @@ internal sealed class FakeKimai : IKimaiClient
 
     private static string Hm(DateTimeOffset value) => value.ToOffset(TimeCorrection.Cest).ToString("HH:mm");
 
-    public Task<ClockStatusDto> GetStatusAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => throw new NotSupportedException();
+    /// <summary>Only whether something runs counts (like <c>/api/timesheets/active</c> of the token owner).</summary>
+    public Task<ClockStatusDto> GetStatusAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)
+    {
+        ThrowIfUnreachable();
+        var running = Sheets.FirstOrDefault(sheet => sheet.User == TimeCorrection.OwnUserId && sheet.End is null);
+        return Task.FromResult(running is null
+            ? new ClockStatusDto(false, null, null, 0, "clockedOut", "Nicht eingestempelt")
+            : new ClockStatusDto(true, running.Id, running.Begin.ToString("o"), 0, "working", "Eingestempelt"));
+    }
+
     public Task StartAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget t, CancellationToken ct = default) => throw new NotSupportedException();
-    public Task StartAtAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget t, DateTimeOffset d, CancellationToken ct = default) => throw new NotSupportedException();
+
+    /// <summary>Starts a running timesheet that begins in the past; shares the failure switches of <see cref="CreateTimesheetAsync"/>.</summary>
+    public Task StartAtAsync(RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget target, DateTimeOffset begin, CancellationToken ct = default)
+    {
+        ThrowIfUnreachable();
+        _creates++;
+        if (FailBeforeCreate == _creates)
+        {
+            FailBeforeCreate = null;
+            throw new KimaiApiException(FailStatus, "{}", "POST /api/timesheets");
+        }
+
+        Writes.Add($"start act={target.ActivityId} proj={target.ProjectId} {Hm(begin)}- desc={target.Description} billable={target.Billable}");
+        var sheet = Add(begin, null, target.ActivityId, target.ProjectId);
+        sheet.Description = target.Description;
+        sheet.Billable = target.Billable;
+        if (FailAfterCreate == _creates)
+        {
+            FailAfterCreate = null;
+            throw new HttpRequestException("answer lost");
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task StopAsync(RuntimeSettings s, EmployeeSettings e, int id, CancellationToken ct = default) => throw new NotSupportedException();
     public Task StopAtAsync(RuntimeSettings s, EmployeeSettings e, int id, DateTimeOffset d, CancellationToken ct = default) => throw new NotSupportedException();
     public Task BackdateEndAsync(RuntimeSettings s, EmployeeSettings e, int id, DateTimeOffset d, CancellationToken ct = default) => throw new NotSupportedException();

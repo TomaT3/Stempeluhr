@@ -84,9 +84,10 @@ public static class TimeCorrectionValidator
 
     private static string? ValidateAddPause(TimeCorrectionRequest request, RuntimeSettings settings, TimeZoneInfo timeZone)
     {
-        if (RequireStoppedTimesheet(request) is { } missing)
+        // Anders als die übrigen Arten auch für einen laufenden Eintrag.
+        if (request.TimesheetId is null || request.Original is null)
         {
-            return missing;
+            return "Der Eintrag fehlt.";
         }
 
         var original = request.Original!;
@@ -112,9 +113,18 @@ public static class TimeCorrectionValidator
 
         // Der Eintrag muss vor der Pause noch Arbeit behalten: Beginn gleich
         // Pausenbeginn würde ihn auf Länge 0 kürzen.
-        if (pauseBegin <= original.Begin || pauseEnd > original.End)
+        if (original.End is not { } originalEnd)
         {
-            return $"Die Pause muss innerhalb des Eintrags ({Format(original.Begin, timeZone)}–{Format(original.End!.Value, timeZone)}) liegen.";
+            // Läuft der Eintrag noch, begrenzt nur "nicht in der Zukunft" das
+            // Pausenende (gemeinsame Prüfung in Validate).
+            return pauseBegin <= original.Begin
+                ? $"Die Pause muss nach dem Beginn des Eintrags ({Format(original.Begin, timeZone)}) liegen."
+                : null;
+        }
+
+        if (pauseBegin <= original.Begin || pauseEnd > originalEnd)
+        {
+            return $"Die Pause muss innerhalb des Eintrags ({Format(original.Begin, timeZone)}–{Format(originalEnd, timeZone)}) liegen.";
         }
 
         return null;
@@ -244,14 +254,16 @@ public static class TimeCorrectionValidator
 
     /// <summary>
     /// Zeitraum, den der Antrag neu belegt: Pause samt Rest-Arbeit bis zum alten
-    /// Ende (der Eintrag selbst wird nur gekürzt), die ganze nachgetragene
+    /// Ende (der Eintrag selbst wird nur gekürzt; bei einem laufenden Eintrag
+    /// zählt nur die Pause, die Rest-Arbeit läuft offen weiter), die ganze nachgetragene
     /// Schicht, der geänderte Eintrag. Nur Kürzen (Ende setzen) belegt nichts Neues.
     /// </summary>
     private static (DateTimeOffset Begin, DateTimeOffset End)? ClaimedRange(TimeCorrectionRequest request)
     {
         return request.Kind switch
         {
-            TimeCorrectionKind.AddPause when request.PauseBegin is { } b && request.Original is { End: { } oldEnd } => (b, oldEnd),
+            TimeCorrectionKind.AddPause when request.PauseBegin is { } b && request.PauseEnd is { } pauseEnd && request.Original is not null
+                => (b, TimeCorrectionPlan.EffectiveEnd(request) ?? pauseEnd),
             TimeCorrectionKind.AddShift when request.Begin is { } b && request.End is { } e => (b, e),
             TimeCorrectionKind.ChangeTimes when request.Original is { End: { } oldEnd } original
                 => (request.Begin ?? original.Begin, request.End ?? oldEnd),
