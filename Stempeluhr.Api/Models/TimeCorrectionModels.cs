@@ -166,7 +166,7 @@ public sealed record CorrectionTimesheetsDto(string TimeZone, IReadOnlyList<Corr
 /// <summary>
 /// Ein Hinweis auf auffällige Arbeitszeit. <paramref name="Kind"/>:
 /// <c>continuous</c> (über 6 h am Stück ohne Pause) oder <c>shift</c> (über
-/// 10 h in der Schicht). Zeiten lokal (<c>yyyy-MM-ddTHH:mm</c>);
+/// 10 h in der Schicht), nur aus der jüngsten Schicht. Zeiten lokal (<c>yyyy-MM-ddTHH:mm</c>);
 /// <paramref name="End"/> null = die Arbeit läuft noch.
 /// <paramref name="TimesheetId"/> (nur bei <c>continuous</c>): das laufende
 /// Arbeits-Timesheet, sonst der längste gestoppte Arbeits-Eintrag des Blocks.

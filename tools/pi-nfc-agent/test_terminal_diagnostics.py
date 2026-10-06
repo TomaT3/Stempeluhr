@@ -119,6 +119,12 @@ class DiagnosticsTests(unittest.TestCase):
             sanitize_heartbeat({key: {"invalid": "value"}})
         self.assertIsNone(sanitize_heartbeat({"pending": float("nan")})["pending"])
 
+    def test_keeps_the_work_time_hints_operation(self):
+        clean = sanitize_heartbeat({"requests": [{"operation": "hints", "ageMs": 5}],
+                                    "events": [{"kind": "http", "operation": "hints", "status": 503}]})
+        self.assertEqual(clean["requests"][0]["operation"], "hints")
+        self.assertEqual(clean["events"][0]["operation"], "hints")
+
     def test_watchdog_and_persistence(self):
         with tempfile.TemporaryDirectory() as folder:
             monitor = DiagnosticsMonitor(Path(folder), "test")

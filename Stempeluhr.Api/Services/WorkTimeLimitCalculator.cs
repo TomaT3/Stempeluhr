@@ -79,7 +79,45 @@ public static class WorkTimeLimitCalculator
         DateTimeOffset windowStart,
         DateTimeOffset now)
     {
-        var intervals = entries
+        var intervals = WorkIntervals(entries, pauseActivityId, now);
+
+        var violations = new List<WorkTimeViolation>();
+        Collect(intervals, MinimumBreak, ContinuousLimit, WorkTimeViolationKind.Continuous, windowStart, now, violations);
+        Collect(intervals, ShiftRest, ShiftLimit, WorkTimeViolationKind.Shift, windowStart, now, violations);
+        return violations;
+    }
+
+    /// <summary>
+    /// Beginn der jüngsten Schicht: Arbeit, getrennt durch mindestens
+    /// <see cref="ShiftRest"/> ohne Arbeit, wie bei <see cref="Evaluate"/>.
+    /// null ohne Arbeit in <paramref name="entries"/>.
+    /// </summary>
+    public static DateTimeOffset? LatestShiftStart(
+        IReadOnlyCollection<KimaiTimesheetEntryDto> entries,
+        int? pauseActivityId,
+        DateTimeOffset now)
+    {
+        DateTimeOffset? start = null;
+        var end = DateTimeOffset.MinValue;
+        foreach (var interval in WorkIntervals(entries, pauseActivityId, now))
+        {
+            if (start is null || interval.Begin - end >= ShiftRest)
+            {
+                start = interval.Begin;
+            }
+            if (interval.End > end)
+            {
+                end = interval.End;
+            }
+        }
+        return start;
+    }
+
+    private static (DateTimeOffset Begin, DateTimeOffset End, bool Running)[] WorkIntervals(
+        IReadOnlyCollection<KimaiTimesheetEntryDto> entries,
+        int? pauseActivityId,
+        DateTimeOffset now)
+        => entries
             .Where(entry => entry.Begin is not null
                 && !(pauseActivityId is not null && entry.ActivityId == pauseActivityId))
             // Laufendes Timesheet: zählt bis jetzt.
@@ -87,12 +125,6 @@ public static class WorkTimeLimitCalculator
             .Where(interval => interval.End > interval.Begin)
             .OrderBy(interval => interval.Begin)
             .ToArray();
-
-        var violations = new List<WorkTimeViolation>();
-        Collect(intervals, MinimumBreak, ContinuousLimit, WorkTimeViolationKind.Continuous, windowStart, now, violations);
-        Collect(intervals, ShiftRest, ShiftLimit, WorkTimeViolationKind.Shift, windowStart, now, violations);
-        return violations;
-    }
 
     private static void Collect(
         (DateTimeOffset Begin, DateTimeOffset End, bool Running)[] intervals,

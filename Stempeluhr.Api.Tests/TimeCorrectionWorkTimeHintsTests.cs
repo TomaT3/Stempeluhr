@@ -119,6 +119,37 @@ public sealed class TimeCorrectionWorkTimeHintsTests : IDisposable
     }
 
     [Fact]
+    public async Task OnlyTheLatestShiftCounts_ACaseOfAnOlderShiftIsDropped()
+    {
+        // Oct 4 06:00-13:00 without a break (7 h), 9 h rest, then a night shift
+        // 22:00-09:00 with 10 h 30 min work and enough breaks (review of #113).
+        _kimai.Add(Day(4, 6), Day(4, 13));
+        _kimai.Add(Day(4, 22), Day(5, 3));
+        _kimai.Add(Day(5, 3), Day(5, 3, 30), activity: PauseActivity);
+        _kimai.Add(Day(5, 3, 30), Day(5, 9));
+
+        var hint = Assert.Single((await HintsAsync()).Hints);
+
+        Assert.Equal(new WorkTimeHintDto("shift", "2026-10-04T22:00", "2026-10-05T09:00", 10 * 3600 + 1800, null), hint);
+    }
+
+    [Fact]
+    public async Task ALatestShiftWithoutACase_HidesTheCaseOfTheShiftBefore()
+    {
+        // Oct 4 13:00-20:00 without a break (7 h, ended 16 h ago).
+        _kimai.Add(Day(4, 13), Day(4, 20));
+        // 8 h later a short shift without any case.
+        _kimai.Add(Day(5, 4), Day(5, 6));
+        Assert.Empty((await HintsAsync()).Hints);
+
+        // Running again after 8 h rest: a new shift, the old case stays hidden.
+        _kimai.Sheets.Clear();
+        _kimai.Add(Day(4, 13), Day(4, 20));
+        _kimai.Add(Day(5, 8), null);
+        Assert.Empty((await HintsAsync()).Hints);
+    }
+
+    [Fact]
     public async Task AnOpenRequestOnAnEntryOfTheBlock_SuppressesTheHint()
     {
         var first = _kimai.Add(Day(4, 22), Day(5, 2));

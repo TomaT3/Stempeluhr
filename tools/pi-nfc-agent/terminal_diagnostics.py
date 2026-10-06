@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from typing import Callable
 
-OPERATIONS = {"clock", "sync", "login", "identify", "hours", "health"}
+OPERATIONS = {"clock", "sync", "login", "identify", "hours", "hints", "health"}
 
 
 def number(value, maximum=1_000_000_000):

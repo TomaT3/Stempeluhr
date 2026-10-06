@@ -4,7 +4,17 @@ import { SwUpdate } from '@angular/service-worker';
 import { Observable, Subscription, finalize, map, timeout } from 'rxjs';
 
 import { APP_VERSION, DEV_VERSION } from '../../core/app-version';
-import { ClockAction, ClockStatus, CorrectionAuth, Employee, EmployeeTask, HoursOverview, isOnDefaultTask } from '../../core/models/kiosk.models';
+import {
+  ClockAction,
+  ClockStatus,
+  CorrectionAuth,
+  Employee,
+  EmployeeTask,
+  HoursOverview,
+  WorkTimeHint,
+  WorkTimeHints,
+  isOnDefaultTask,
+} from '../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../core/models/offline.models';
 import { AppVersionService } from '../../core/services/app-version.service';
 import { AudioFeedback } from '../../core/services/audio-feedback';
@@ -51,7 +61,7 @@ const CHOICE_TAP_GUARD_MS = 400;
 const RESET_MS = 2200;
 /** Dasselbe, wenn die Antwort eine Warnung trägt (z. B. abgelehnter Wechsel, Issue #56). */
 const WARNING_RESET_MS = 6000;
-/** Läuft ein Abschnitt länger, bietet die Statuszeile „Vergessen auszustempeln?“ an. */
+/** Läuft ein Abschnitt länger, bietet die Sitzung „Vergessen auszustempeln?“ an. */
 const FORGOT_STOP_AFTER_SECONDS = 12 * 3600;
 
 /** A stamp as captured at button press (see sendClockAction). */
@@ -205,6 +215,62 @@ export abstract class ClockWorkflow implements OnDestroy {
     const status = this.clockState.status();
     return this.isUnlocked() && status?.state === 'working' && status.activeTimesheetId !== null
       && this.clockState.elapsed() >= FORGOT_STOP_AFTER_SECONDS;
+  });
+
+  /**
+   * Arbeitszeit-Hinweise des angemeldeten Mitarbeiters (Epic #109). Geladen
+   * nach jeder bestätigten Anmeldung, geleert bei jedem Identitätswechsel;
+   * Fehler bleiben still, der Hinweis entfällt dann.
+   */
+  readonly workTimeHints = signal<WorkTimeHints | null>(null);
+  private workTimeHintsRequest: Subscription | null = null;
+
+  /**
+   * „Pause vergessen?“: die Arbeit läuft seit über 6 h ohne Pause. Nur für
+   * den laufenden Eintrag, nur online und ohne wartende Stempel;
+   * „Vergessen auszustempeln?“ geht vor.
+   */
+  readonly pauseHint = computed<WorkTimeHint | null>(() => {
+    const status = this.clockState.status();
+    if (!this.isUnlocked() || this.correctionBlocked() || this.forgotToStop()
+      || status?.state !== 'working' || status.activeTimesheetId === null) {
+      return null;
+    }
+    return this.workTimeHints()?.hints.find(hint =>
+      hint.kind === 'continuous' && hint.end === null && hint.timesheetId === status.activeTimesheetId) ?? null;
+  });
+
+  /**
+   * Hinweis zur letzten Schicht, solange der Mitarbeiter ausgestempelt ist.
+   * Der Server liefert nur Fälle der jüngsten Schicht; treffen dort beide
+   * zu, geht die Pause vor: dort kann man direkt etwas tun.
+   */
+  readonly lastShiftHint = computed<WorkTimeHint | null>(() => {
+    if (!this.isUnlocked() || this.correctionBlocked() || this.clockState.status()?.state !== 'clockedOut') {
+      return null;
+    }
+    const finished = (this.workTimeHints()?.hints ?? []).filter(hint => hint.end !== null);
+    const latest = (kind: WorkTimeHint['kind']) => finished
+      .filter(hint => hint.kind === kind)
+      .reduce<WorkTimeHint | null>((last, hint) => (last && last.end! >= hint.end! ? last : hint), null);
+    return latest('continuous') ?? latest('shift');
+  });
+
+  /** „seit 07:58 ohne Pause“ – Beginn in der Kimai-Zeitzone, wie ihn der Server liefert. */
+  readonly pauseHintDetail = computed(() => {
+    const hint = this.pauseHint();
+    return hint ? `seit ${hint.begin.slice(11, 16)} ohne Pause` : '';
+  });
+
+  /** „Letzte Schicht: 7:10 Std. ohne Pause“ bzw. „Letzte Schicht: 10:40 Std.“ */
+  readonly lastShiftHintLabel = computed(() => {
+    const hint = this.lastShiftHint();
+    if (!hint) {
+      return '';
+    }
+    const minutes = Math.floor(hint.workedSeconds / 60);
+    const hours = `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')} Std.`;
+    return hint.kind === 'continuous' ? `Letzte Schicht: ${hours} ohne Pause` : `Letzte Schicht: ${hours}`;
   });
 
   private resetTimer: number | null = null;
@@ -490,6 +556,37 @@ export abstract class ClockWorkflow implements OnDestroy {
     });
   }
 
+  /**
+   * Lädt die Arbeitszeit-Hinweise der laufenden Sitzung (PIN oder Karte, wie
+   * correctionAuth). Die Antwort gilt nur, solange Sitzung und Mitarbeiter
+   * dieselben sind: nach einem Identitätswechsel, back() oder einer Aktion
+   * wird sie verworfen.
+   */
+  private loadWorkTimeHints(): void {
+    const employeeId = this.selectedEmployee()?.id;
+    const pin = this.pin();
+    const nfcCardId = this.nfcCardId;
+    if (!employeeId || !this.isUnlocked() || this.isOffline() || (!pin && !nfcCardId)) {
+      return;
+    }
+    const generation = this.sessionGeneration;
+    this.workTimeHintsRequest?.unsubscribe();
+    this.workTimeHintsRequest = this.kioskApi.workTimeHints({ employeeId, pin, nfcCardId }).subscribe({
+      next: hints => {
+        if (generation === this.sessionGeneration && this.selectedEmployee()?.id === employeeId) {
+          this.workTimeHints.set(hints);
+        }
+      },
+      error: () => undefined,
+    });
+  }
+
+  private clearWorkTimeHints(): void {
+    this.workTimeHintsRequest?.unsubscribe();
+    this.workTimeHintsRequest = null;
+    this.workTimeHints.set(null);
+  }
+
   confirmPin(): void {
     if (!this.pin() || this.isBusy()) {
       return;
@@ -502,6 +599,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     // Neuer Login: nie kurz die Stunden des Vorgängers stehen lassen
     // (in-flight Responses werden zusätzlich per PIN-Guard verworfen).
     this.hoursOverview.set(null);
+    this.clearWorkTimeHints();
     this.kioskApi.pinLogin(pin).subscribe({
       next: session => {
         this.selectedEmployee.set(session.employee);
@@ -523,7 +621,10 @@ export abstract class ClockWorkflow implements OnDestroy {
         if (this.replayStatusPending()) {
           this.message.set('Ausstehende Stempel werden nachgetragen.');
           if (!this.hasPendingForEmployee(session.employee.id)) this.refreshStatusAfterReplay();
-        } else this.loadHoursOverview(pin);
+        } else {
+          this.loadHoursOverview(pin);
+          this.loadWorkTimeHints();
+        }
       },
       error: (err) => {
         const status = err?.status ?? 0;
@@ -646,6 +747,10 @@ export abstract class ClockWorkflow implements OnDestroy {
   onCorrectionClosed(): void {
     this.closeCorrection();
     this.message.set('');
+    // Ein eben gestellter Antrag unterdrückt den Hinweis: nicht den alten
+    // Stand antippen lassen, bis die neue Antwort da ist.
+    this.clearWorkTimeHints();
+    this.loadWorkTimeHints();
   }
 
   /** 2 min ohne Tipp im Korrekturablauf: zurück in den Ruhezustand. */
@@ -664,6 +769,28 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
     this.sendClockAction('stop', null, timesheetId);
+  }
+
+  /**
+   * „Pause vergessen?“: öffnet „Pause nachtragen“ für den laufenden Eintrag.
+   * Gestempelt wird dabei nichts; bis zur Freigabe geht es normal weiter.
+   */
+  openPauseHint(): void {
+    const timesheetId = this.pauseHint()?.timesheetId;
+    if (timesheetId != null) {
+      this.openCorrection({ kind: 'addPause', timesheetId });
+    }
+  }
+
+  /** Hinweis zur letzten Schicht: „Pause nachtragen“ für den Eintrag, bei über 10 h die Art-Auswahl. */
+  openLastShiftHint(): void {
+    const hint = this.lastShiftHint();
+    if (!hint) {
+      return;
+    }
+    this.openCorrection(hint.kind === 'continuous' && hint.timesheetId !== null
+      ? { kind: 'addPause', timesheetId: hint.timesheetId }
+      : null);
   }
 
   /** Zurück von der Einstempel-Auswahl zu Ein-/Ausstempeln (unbekannter Status). */
@@ -710,6 +837,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.message.set('');
     this.isBusy.set(false);
     this.hoursOverview.set(null);
+    this.clearWorkTimeHints();
     this.resetSessionChoices();
     this.pendingResetOnRecovery = false;
   }
@@ -795,6 +923,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
     this.healthCheck?.unsubscribe();
     this.identifyRefresh?.unsubscribe();
+    this.workTimeHintsRequest?.unsubscribe();
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
     }
@@ -964,6 +1093,7 @@ export abstract class ClockWorkflow implements OnDestroy {
               // andere - nie Name, Status oder Auswahl des alten stehen lassen.
               this.applyOfflineIdentity(event.employee, sessionCardId, null, event.status);
               this.resumeCardBacklog(event.employee, confirmedCardId);
+              if (!this.replayStatusPending()) this.loadWorkTimeHints();
               return;
             }
             if (event.employee) {
@@ -977,6 +1107,8 @@ export abstract class ClockWorkflow implements OnDestroy {
             if (event.status && !this.replayStatusPending()) {
               this.applyObservedStatus(employee.id, event.status);
             }
+            // Erst die vom Server bestätigte Karte bekommt Hinweise.
+            if (event.employee && !this.replayStatusPending()) this.loadWorkTimeHints();
           },
           error: () => {
             this.identifyRefresh = null;
@@ -1015,6 +1147,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         if (event.success && event.employee) {
           this.applyOfflineIdentity(event.employee, event.cardId ?? identifyCardId, null, event.status);
           this.resumeCardBacklog(event.employee, event.cardId ?? identifyCardId);
+          if (!this.replayStatusPending()) this.loadWorkTimeHints();
           this.audioFeedback.playBeeps(1);
         } else {
           this.message.set(event.message || 'Unbekannte Karte');
@@ -1110,6 +1243,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     // Card login is also an identity switch: never keep the hours of a
     // previous employee (privacy) - and without a pin no reload happens.
     this.hoursOverview.set(null);
+    this.clearWorkTimeHints();
   }
 
   /** Reload only after this employee's backlog has drained; stale login/status
@@ -1138,6 +1272,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.replayStatusPending.set(false);
         this.message.set('');
         this.loadHoursOverview(pin);
+        this.loadWorkTimeHints();
       },
       error: () => {
         if (generation !== this.sessionGeneration) return;
@@ -1262,6 +1397,9 @@ export abstract class ClockWorkflow implements OnDestroy {
       employeeName: stamp.employeeName,
     });
     this.isOffline.set(true);
+    // Offline gibt es keine Hinweise; nach dem Nachtrag lädt
+    // refreshStatusAfterReplay bzw. die nächste Anmeldung sie neu.
+    this.clearWorkTimeHints();
     // Show where this action leaves the employee instead of keeping the
     // pre-action status on screen: after an offline Einstempeln the kiosk
     // then offers Pause/Ausstempeln instead of another Einstempeln (which

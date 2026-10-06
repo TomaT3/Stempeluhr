@@ -5,4 +5,7 @@
   [disabled]="disabled()"
   (click)="pressed.emit()">
   {{ label() }}
+  @if (detail()) {
+    <span class="detail">{{ detail() }}</span>
+  }
 </button>

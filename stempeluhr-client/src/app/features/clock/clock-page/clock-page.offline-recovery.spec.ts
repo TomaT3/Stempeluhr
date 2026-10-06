@@ -88,6 +88,7 @@ describe('ClockPage recovery via the real OfflineQueueService', () => {
               failPolls ? throwError(() => ({ status: 0 })) : of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }),
             ),
             hoursOverview: vi.fn(() => of(null)),
+            workTimeHints: vi.fn(() => of({ timeZone: 'Europe/Berlin', hints: [] })),
             health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
           },
         },

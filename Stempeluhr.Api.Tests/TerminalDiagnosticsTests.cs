@@ -56,6 +56,19 @@ public sealed class TerminalDiagnosticsTests
     }
 
     [Fact]
+    public void KeepsTheWorkTimeHintsOperation()
+    {
+        using var document = JsonDocument.Parse("""
+            {"ui":{"requests":[{"operation":"hints","ageMs":5}],
+            "events":[{"kind":"http","operation":"hints","status":503},{"kind":"http","operation":"SECRET"}]}}
+            """);
+        var output = JsonSerializer.SerializeToElement(TerminalDiagnostics.Filter(document.RootElement));
+        Assert.Equal("hints", output.GetProperty("requests")[0].GetProperty("operation").GetString());
+        Assert.Equal("hints", output.GetProperty("events")[0].GetProperty("operation").GetString());
+        Assert.DoesNotContain("SECRET", output.ToString());
+    }
+
+    [Fact]
     public void FiltersSecretsAndUnboundedUntrustedStrings()
     {
         using var document = JsonDocument.Parse("""
