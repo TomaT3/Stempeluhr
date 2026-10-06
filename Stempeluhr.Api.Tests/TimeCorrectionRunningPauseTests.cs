@@ -278,6 +278,8 @@ public sealed class RunningPauseServiceTests : IDisposable
 
         Assert.Equal(TimeCorrectionStatus.Pending, dto.Status);
         Assert.Null(dto.Original!.End);
+        Assert.False(dto.ObservedAtApply);
+        Assert.Null(dto.ObservedEndAtApply);
         var stored = _store.Find(dto.Id)!;
         Assert.Null(stored.Original!.End);
         Assert.False(stored.ObservedAtApply);
@@ -336,6 +338,9 @@ public sealed class RunningPauseServiceTests : IDisposable
         var stored = _store.Find(dto.Id)!;
         Assert.True(stored.ObservedAtApply);
         Assert.Null(stored.ObservedEndAtApply);
+        // Die Admin-Seite zeigt so: lief beim Genehmigen noch.
+        Assert.True(result.ObservedAtApply);
+        Assert.Null(result.ObservedEndAtApply);
     }
 
     [Fact]
@@ -357,6 +362,8 @@ public sealed class RunningPauseServiceTests : IDisposable
         ], _kimai.Writes);
         Assert.DoesNotContain(_kimai.Sheets, entry => entry.End is null);
         Assert.Equal(At(11), _store.Find(dto.Id)!.ObservedEndAtApply);
+        Assert.True(result.ObservedAtApply);
+        Assert.Equal(Text(At(11)), result.ObservedEndAtApply);
     }
 
     [Fact]

@@ -175,4 +175,10 @@ export interface AdminTimeCorrection {
   /** Kimai-Meldung eines gescheiterten Antrags. */
   error: string | null;
   appliedSteps: string[];
+  /**
+   * Pause in einem laufenden Eintrag: true, sobald beim Genehmigen der Stand
+   * festgehalten wurde; `observedEndAtApply` null = lief da noch.
+   */
+  observedAtApply: boolean;
+  observedEndAtApply: string | null;
 }

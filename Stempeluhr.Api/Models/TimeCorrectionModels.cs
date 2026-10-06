@@ -208,7 +208,11 @@ public sealed record TimeCorrectionDto(
     string? DecidedBy,
     string? DecisionNote,
     string? Error,
-    IReadOnlyList<string> AppliedSteps);
+    IReadOnlyList<string> AppliedSteps,
+    // Pause im laufenden Eintrag: beim Genehmigen festgehaltenes Ende
+    // (null mit ObservedAtApply = lief noch).
+    bool ObservedAtApply,
+    string? ObservedEndAtApply);
 
 public enum CorrectionOutcome
 {
