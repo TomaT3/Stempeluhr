@@ -165,13 +165,15 @@ p {
 .session-panel {
   position: relative;
   display: grid;
-  align-content: center;
+  /* safe: läuft der Inhalt über, beginnt er oben statt nach oben
+     abgeschnitten zu werden (dort erreicht ihn kein Scrollen). */
+  align-content: safe center;
   gap: 8px;
   min-width: 0;
   padding: 12px;
   /* Greift nur offline (feste Höhe neben dem Banner) im Extremfall:
-     dreizeiliger Name, Pause und lange Meldung. Dann scrollt das Panel,
-     nie die Seite, und die Meldung überdeckt nicht die Stundenkarte. */
+     drei- bis vierzeiliger Name, Pause und lange Meldung. Dann scrollt das
+     Panel, nie die Seite, und die Meldung überdeckt nicht die Stundenkarte. */
   overflow-y: auto;
 }
 
