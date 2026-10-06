@@ -13,6 +13,7 @@ import {
   KioskEmployeeSession,
   NfcClockEvent,
   SubmitCorrection,
+  WorkTimeHints,
 } from '../models/kiosk.models';
 
 /** Timeout für den read-only identify-Call (Kiosk bleibt sonst stumm bei hängendem Backend). */
@@ -125,6 +126,14 @@ export class KioskApi {
     return this.http
       .post<KioskCorrection>(`/api/kiosk/corrections/${encodeURIComponent(id)}/withdraw`, authBody(auth))
       .pipe(timeout(REQUEST_TIMEOUT_MS));
+  }
+
+  /**
+   * Arbeitszeit-Hinweise nach der Anmeldung: rein lesend, bucht nichts.
+   * Anmeldung wie bei den Korrekturanträgen.
+   */
+  workTimeHints(auth: CorrectionAuth) {
+    return this.http.post<WorkTimeHints>('/api/kiosk/work-time-hints', authBody(auth)).pipe(timeout(REQUEST_TIMEOUT_MS));
   }
 
   /** Server-Version (aus der AssemblyInformationalVersion, im Container = Release-Tag). */

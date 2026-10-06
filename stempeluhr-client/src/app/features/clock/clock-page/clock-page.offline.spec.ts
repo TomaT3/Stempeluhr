@@ -97,6 +97,7 @@ describe('ClockPage offline behaviour', () => {
               failPolls ? throwError(() => ({ status: 0 })) : of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }),
             ),
             hoursOverview: vi.fn(() => of(null)),
+            workTimeHints: vi.fn(() => of({ timeZone: 'Europe/Berlin', hints: [] })),
             identify: vi.fn(() => identifyValue),
             health: healthApi,
           },

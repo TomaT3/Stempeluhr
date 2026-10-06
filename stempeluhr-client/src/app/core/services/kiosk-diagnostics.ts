@@ -134,6 +134,7 @@ const operations: Record<string, string> = {
   '/api/kiosk/pin-login': 'login',
   '/api/kiosk/identify': 'identify',
   '/api/kiosk/hours': 'hours',
+  '/api/kiosk/work-time-hints': 'hints',
   '/api/health': 'health',
 };
 

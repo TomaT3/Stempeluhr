@@ -378,10 +378,32 @@ Zusammenfassung zeigt danach drei Zeilen, die letzte „ab 12:30 (läuft)“, un
 Hinweis, bis zur Freigabe ganz normal weiter zu stempeln. Mit `CorrectionStart`
 (`addPause` oder `setEnd` plus Timesheet) öffnet die Seite den Ablauf direkt in
 den Zeiten eines Eintrags. Läuft ein Abschnitt
-länger als 12 h, zeigt die Statuszeile „Vergessen auszustempeln?“: Der Knopf
+länger als 12 h, erscheint „Vergessen auszustempeln?“: Der Knopf
 stempelt über den normalen Stop-Pfad (`/api/kiosk/clock`, mit Offline-Queue) aus
 und öffnet nur nach einem online gelungenen Stop „Ausstempeln nachtragen“ für genau
-dieses Timesheet. Die Komponente lebt so lange wie die Sitzung: Neue Anmeldung,
+dieses Timesheet.
+
+Nach jeder bestätigten Anmeldung (PIN-Login ohne wartende Stempel, Karte nach
+dem `identify` des Servers, Status nach einem Nachtrag) und nach dem Schließen
+des Ablaufs lädt die Sitzung die Arbeitszeit-Hinweise (`/api/kiosk/work-time-hints`)
+und zeigt höchstens einen davon. Läuft die Arbeit seit über
+6 h ohne Pause, steht dort „Pause vergessen?“ mit „seit 07:58 ohne Pause“. Der
+Knopf stempelt **nicht**, sondern öffnet „Pause nachtragen“ für den laufenden
+Eintrag; „Vergessen auszustempeln?“ geht vor. Ausgestempelt nennt der Hinweis
+die letzte Schicht („Letzte Schicht: 7:10 Std. ohne Pause“ bzw. „Letzte Schicht:
+10:40 Std.“, darunter „Prüfen“) und öffnet „Pause nachtragen“ für den Eintrag
+des Hinweises bzw. bei über 10 h die Art-Auswahl. Treffen beide Fälle zu, steht
+nur der Pausen-Hinweis da. In der Pause, offline und solange Stempel des
+Mitarbeiters warten, gibt es keinen Hinweis; Fehler bleiben still. Die Hinweise
+werden bei jedem Identitätswechsel und `back()` geleert, eine verspätete
+Antwort nach einem Identitätswechsel oder einer Aktion wird verworfen.
+
+Alle drei Hinweise stehen auf `/clock` unter dem Status, am Terminal in der
+Uhr-Spalte unter Datum und Uhrzeit: In der Mitarbeiter-Spalte schöbe jeder
+weitere Knopf die Stundenkarte bei 800×480 unter den Rand. Solange der
+Korrekturablauf offen ist, blendet das Terminal sie aus.
+
+Der Korrekturablauf lebt so lange wie die Sitzung: Neue Anmeldung,
 X und Abbruch zerstören sie samt laufender Anfragen, eine verspätete Antwort
 erreicht keinen anderen Mitarbeiter. Nach 2 min ohne Tipp geht der Kiosk in den
 Ruhezustand; der Auto-Reload bei neuer Version wartet, bis niemand mehr im Ablauf

@@ -3,7 +3,7 @@ import { ActivatedRoute } from '@angular/router';
 import { SwUpdate } from '@angular/service-worker';
 import { of, Subject, throwError } from 'rxjs';
 
-import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent } from '../../../core/models/kiosk.models';
+import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent, WorkTimeHint } from '../../../core/models/kiosk.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
@@ -16,6 +16,7 @@ describe('ClockPage', () => {
   let pinLoginResult: Subject<KioskEmployeeSession>;
   let clockResult: Subject<ClockStatus>;
   let hoursOverview: ReturnType<typeof vi.fn>;
+  let workTimeHints: ReturnType<typeof vi.fn>;
   /** Card published by the local agent (only polled with a terminalId). */
   let localScanValue: LocalNfcScan | null;
   /** Online card identification (kioskApi.identify). */
@@ -68,6 +69,7 @@ describe('ClockPage', () => {
     pinLoginResult = new Subject<KioskEmployeeSession>();
     clockResult = new Subject<ClockStatus>();
     hoursOverview = vi.fn(() => of(overview));
+    workTimeHints = vi.fn(() => of({ timeZone: 'Europe/Berlin', hints: [] }));
     pinLogin = vi.fn(() => pinLoginResult);
     localScanValue = null;
     identifyResult = new Subject<NfcClockEvent>();
@@ -88,6 +90,7 @@ describe('ClockPage', () => {
             pinLogin,
             clock: vi.fn(() => clockResult),
             hoursOverview,
+            workTimeHints,
             ping: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
             identify: vi.fn(() => identifyResult),
             health: healthMock,
@@ -910,6 +913,90 @@ describe('ClockPage', () => {
         expect(fixture.componentInstance.selectedEmployee()).toBeNull();
         expect(fixture.nativeElement.querySelector('.kiosk-login')).not.toBeNull();
         expect(fixture.nativeElement.querySelector('app-correction-flow')).toBeNull();
+      });
+    });
+
+    describe('Arbeitszeit-Hinweise', () => {
+      const running: ClockStatus = { ...working, activeTimesheetId: 23, startedAt: '2026-10-05T09:30:00Z' };
+      const pauseCase: WorkTimeHint = {
+        kind: 'continuous', begin: '2026-10-05T07:58', end: null, workedSeconds: 22_000, timesheetId: 23,
+      };
+      const lastPauseCase: WorkTimeHint = {
+        kind: 'continuous', begin: '2026-10-03T22:00', end: '2026-10-04T06:00', workedSeconds: 25_800, timesheetId: 12,
+      };
+      const lastShiftCase: WorkTimeHint = {
+        kind: 'shift', begin: '2026-10-03T22:00', end: '2026-10-04T09:00', workedSeconds: 38_400, timesheetId: null,
+      };
+      const hints = (...list: WorkTimeHint[]) => of({ timeZone: 'Europe/Berlin', hints: list });
+      const hintButton = (fixture: ComponentFixture<ClockPage>) =>
+        fixture.nativeElement.querySelector('app-correction-entry .forgot-hint') as HTMLButtonElement | null;
+      const hintText = (fixture: ComponentFixture<ClockPage>) =>
+        hintButton(fixture)?.textContent?.replace(/\s+/g, ' ').trim();
+
+      it('offers "Pause vergessen?" and opens "Pause nachtragen" for the running entry without stamping', () => {
+        workTimeHints.mockReturnValue(hints(pauseCase));
+        const fixture = login(running);
+
+        expect(workTimeHints).toHaveBeenCalledExactlyOnceWith({ employeeId: 'max', pin: '1234', nfcCardId: null });
+        expect(hintText(fixture)).toBe('Pause vergessen? seit 07:58 ohne Pause');
+
+        hintButton(fixture)!.click();
+        fixture.detectChanges();
+
+        const kioskApi = TestBed.inject(KioskApi) as unknown as { clock: ReturnType<typeof vi.fn> };
+        expect(kioskApi.clock).not.toHaveBeenCalled();
+        expect(fixture.componentInstance.correctionStart()).toEqual({ kind: 'addPause', timesheetId: 23 });
+        expect(flowTitle(fixture)).toBe('Pause beginnt');
+      });
+
+      it('names the last shift and opens "Pause nachtragen" for the entry of the hint', () => {
+        workTimeHints.mockReturnValue(hints(lastShiftCase, lastPauseCase));
+        const fixture = login();
+
+        expect(hintText(fixture)).toBe('Letzte Schicht: 7:10 Std. ohne Pause Prüfen');
+        hintButton(fixture)!.click();
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.correctionStart()).toEqual({ kind: 'addPause', timesheetId: 12 });
+      });
+
+      it('opens the choice of kinds for a shift over 10 hours', () => {
+        workTimeHints.mockReturnValue(hints(lastShiftCase));
+        const fixture = login();
+
+        expect(hintText(fixture)).toBe('Letzte Schicht: 10:40 Std. Prüfen');
+        hintButton(fixture)!.click();
+        fixture.detectChanges();
+
+        expect(flowTitle(fixture)).toBe('Korrektur');
+      });
+
+      it('shows no hint during the pause or offline', () => {
+        workTimeHints.mockReturnValue(hints({ ...pauseCase, end: '2026-10-05T15:00', timesheetId: 21 }, lastShiftCase));
+        expect(hintButton(login({ ...status, isRunning: true, activeTimesheetId: 22, state: 'paused', stateText: 'Pause' }))).toBeNull();
+
+        workTimeHints.mockReturnValue(hints(lastShiftCase));
+        const fixture = login();
+        fixture.componentInstance.isOffline.set(true);
+        fixture.detectChanges();
+        expect(hintButton(fixture)).toBeNull();
+      });
+
+      it('loads the hints of a card session with the card', () => {
+        workTimeHints.mockReturnValue(hints(lastShiftCase));
+        terminalIdValue = 'term-1';
+        const fixture = TestBed.createComponent(ClockPage);
+        localScanValue = { cardId: '04AB', scannedAt: new Date().toISOString(), consumed: false };
+        vi.advanceTimersByTime(1_000);
+        expect(workTimeHints).not.toHaveBeenCalled();
+        identifyResult.next({
+          eventId: 'ev-nfc-1', occurredAt: new Date().toISOString(), terminalId: 'term-1', cardId: '04AB',
+          employee: session.employee, status, message: 'NFC-Karte erkannt.', success: true,
+        });
+        fixture.detectChanges();
+
+        expect(workTimeHints).toHaveBeenCalledExactlyOnceWith({ employeeId: 'max', pin: '', nfcCardId: '04AB' });
+        expect(hintText(fixture)).toBe('Letzte Schicht: 10:40 Std. Prüfen');
       });
     });
 

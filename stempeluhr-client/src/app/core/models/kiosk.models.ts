@@ -125,6 +125,30 @@ export interface CorrectionTimesheets {
   shifts: CorrectionShift[];
 }
 
+/**
+ * Auffällige Arbeitszeit nach der Anmeldung (POST /api/kiosk/work-time-hints):
+ * `continuous` = über 6 h am Stück ohne Pause, `shift` = über 10 h in der
+ * Schicht. Fälle, die noch laufen oder höchstens 24 h vorbei sind und zu
+ * denen kein Antrag offen ist.
+ */
+export interface WorkTimeHint {
+  kind: 'continuous' | 'shift';
+  begin: LocalDateTime;
+  /** null = die Arbeit läuft noch. */
+  end: LocalDateTime | null;
+  workedSeconds: number;
+  /**
+   * Nur bei `continuous`: das laufende Arbeits-Timesheet, sonst der längste
+   * gestoppte Arbeits-Eintrag des Blocks.
+   */
+  timesheetId: number | null;
+}
+
+export interface WorkTimeHints {
+  timeZone: string;
+  hints: WorkTimeHint[];
+}
+
 export type CorrectionKind = 'addPause' | 'setEnd' | 'addShift' | 'changeTimes';
 
 export type CorrectionStatus = 'pending' | 'applied' | 'rejected' | 'failed' | 'withdrawn' | 'resolvedManually';

@@ -119,6 +119,22 @@
           label="Vergessen auszustempeln?"
           [disabled]="actionsBlocked()"
           (pressed)="stopAndCorrect()" />
+      } @else if (pauseHint()) {
+        <!-- Über 6 h ohne Pause: öffnet "Pause nachtragen" für den laufenden
+             Eintrag, ohne zu stempeln. -->
+        <app-correction-entry
+          layout="clock"
+          variant="hint"
+          label="Pause vergessen?"
+          [detail]="pauseHintDetail()"
+          (pressed)="openPauseHint()" />
+      } @else if (lastShiftHint()) {
+        <app-correction-entry
+          layout="clock"
+          variant="hint"
+          [label]="lastShiftHintLabel()"
+          detail="Prüfen"
+          (pressed)="openLastShiftHint()" />
       }
 
       @if (startChoiceVisible()) {

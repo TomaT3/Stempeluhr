@@ -11,6 +11,37 @@
   <header class="terminal-clock" aria-label="Aktuelle Uhrzeit und Datum">
     <span class="clock-time">{{ clockState.now() | date: 'HH:mm:ss' }}</span>
     <span class="clock-date">{{ clockState.now() | date: 'dd.MM.yyyy' }}</span>
+    @if (selectedEmployee() && !correctionOpen()) {
+      <!-- Hinweise zur Arbeitszeit, höchstens einer. Bewusst in der Uhr-Spalte:
+           In der Mitarbeiter-Spalte schöbe jeder weitere Knopf die Stundenkarte
+           bei 800x480 unter den Rand, die Uhr-Spalte hat in der Sitzung Platz. -->
+      @if (forgotToStop()) {
+        <!-- Seit über 12 h eingestempelt: stempelt normal aus und öffnet
+             danach "Ausstempeln nachtragen" für genau diesen Abschnitt. -->
+        <app-correction-entry
+          layout="terminal"
+          variant="hint"
+          label="Vergessen auszustempeln?"
+          [disabled]="actionsBlocked()"
+          (pressed)="stopAndCorrect()" />
+      } @else if (pauseHint()) {
+        <!-- Über 6 h ohne Pause: öffnet "Pause nachtragen" für den
+             laufenden Eintrag, ohne zu stempeln. -->
+        <app-correction-entry
+          layout="terminal"
+          variant="hint"
+          label="Pause vergessen?"
+          [detail]="pauseHintDetail()"
+          (pressed)="openPauseHint()" />
+      } @else if (lastShiftHint()) {
+        <app-correction-entry
+          layout="terminal"
+          variant="hint"
+          [label]="lastShiftHintLabel()"
+          detail="Prüfen"
+          (pressed)="openLastShiftHint()" />
+      }
+    }
   </header>
 
   @if (!selectedEmployee()) {
@@ -73,16 +104,6 @@
             <span>Pause {{ clockState.elapsed() | duration }}</span>
           } @else {
             <span>Nicht eingestempelt</span>
-          }
-          @if (forgotToStop()) {
-            <!-- Seit über 12 h eingestempelt: stempelt normal aus und öffnet
-                 danach "Ausstempeln nachtragen" für genau diesen Abschnitt. -->
-            <app-correction-entry
-              layout="terminal"
-              variant="hint"
-              label="Vergessen auszustempeln?"
-              [disabled]="actionsBlocked()"
-              (pressed)="stopAndCorrect()" />
           }
         </div>
       } @else {

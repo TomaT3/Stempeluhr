@@ -1,8 +1,9 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 
 /**
- * Einstieg in den Korrekturablauf: „Korrektur“ (bzw. „Korrektur nur online“)
- * und, nach über 12 h Einstempelzeit, „Vergessen auszustempeln?“. Eine eigene
+ * Einstieg in den Korrekturablauf: „Korrektur“ (bzw. „Korrektur nur online“),
+ * nach über 12 h Einstempelzeit „Vergessen auszustempeln?“ und die
+ * Arbeitszeit-Hinweise („Pause vergessen?“, „Letzte Schicht: …“). Eine eigene
  * Komponente, damit die Stile nicht in das Stilbudget von Terminal und /clock
  * zählen.
  */
@@ -17,6 +18,8 @@ import { ChangeDetectionStrategy, Component, input, output } from '@angular/core
 })
 export class CorrectionEntry {
   readonly label = input.required<string>();
+  /** Zweite, kleinere Zeile, z. B. „seit 07:58 ohne Pause“ oder „Prüfen“. */
+  readonly detail = input('');
   readonly variant = input<'entry' | 'hint'>('entry');
   readonly layout = input<'terminal' | 'clock'>('terminal');
   readonly disabled = input(false);

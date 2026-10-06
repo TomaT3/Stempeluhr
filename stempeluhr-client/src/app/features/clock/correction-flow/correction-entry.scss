@@ -3,8 +3,12 @@
   width: min(680px, 100%);
 }
 
-/* Am Terminal füllt der Knopf die Spalte, /clock begrenzt die Breite wie die anderen Knöpfe. */
+/*
+ * Am Terminal füllt der Knopf die Spalte (auch in der zentrierten Uhr-Spalte),
+ * /clock begrenzt die Breite wie die anderen Knöpfe.
+ */
 :host(.layout-terminal) {
+  justify-self: stretch;
   width: auto;
 }
 
@@ -31,6 +35,13 @@ button.forgot-hint {
   border-color: var(--color-danger-border);
   background: var(--color-danger-surface);
   color: var(--color-danger-text);
+}
+
+button .detail {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.8em;
+  font-weight: 700;
 }
 
 button:disabled {

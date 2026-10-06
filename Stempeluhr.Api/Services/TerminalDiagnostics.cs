@@ -34,13 +34,13 @@ public static class TerminalDiagnostics
             uptimeSeconds = Number(system, "uptimeSeconds"), load1 = Number(system, "load1"),
             requests = Array(ui, "requests").Take(10).Select(r => new
             {
-                operation = Choice(r, "operation", "clock", "sync", "login", "identify", "hours", "health"),
+                operation = Choice(r, "operation", "clock", "sync", "login", "identify", "hours", "hints", "health"),
                 ageMs = Number(r, "ageMs"),
             }).ToArray(),
             events = Array(ui, "events").Take(80).Select(e => new
             {
                 kind = Choice(e, "kind", "http", "error", "state"),
-                operation = Choice(e, "operation", "clock", "sync", "login", "identify", "hours", "health"),
+                operation = Choice(e, "operation", "clock", "sync", "login", "identify", "hours", "hints", "health"),
                 code = Choice(e, "code", "javascript", "promise", "storage"),
                 eventId = SafeIdentifier(e, "eventId"),
                 status = Number(e, "status", -1, 599), durationMs = Number(e, "durationMs"),

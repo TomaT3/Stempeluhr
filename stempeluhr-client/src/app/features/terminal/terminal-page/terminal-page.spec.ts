@@ -3,7 +3,14 @@ import { ActivatedRoute } from '@angular/router';
 import { signal } from '@angular/core';
 import { of, Subject, throwError } from 'rxjs';
 
-import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent } from '../../../core/models/kiosk.models';
+import {
+  ClockStatus,
+  HoursOverview,
+  KioskEmployeeSession,
+  NfcClockEvent,
+  WorkTimeHint,
+  WorkTimeHints,
+} from '../../../core/models/kiosk.models';
 import { RejectedOfflineStamp } from '../../../core/models/offline.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { lastKnownStatus, rememberProjectedStatus } from '../../../core/services/offline-cache';
@@ -18,6 +25,7 @@ describe('TerminalPage', () => {
   let pinLogin: ReturnType<typeof vi.fn>;
   let pinLoginResult: Subject<KioskEmployeeSession>;
   let hoursOverview: ReturnType<typeof vi.fn>;
+  let workTimeHints: ReturnType<typeof vi.fn>;
   let clockImpl: ReturnType<typeof vi.fn>;
   let failPolls: boolean;
   let localScanValue: LocalNfcScan | null;
@@ -63,6 +71,7 @@ describe('TerminalPage', () => {
     window.localStorage.clear();
     pinLoginResult = new Subject<KioskEmployeeSession>();
     hoursOverview = vi.fn(() => of(overview));
+    workTimeHints = vi.fn(() => of({ timeZone: 'Europe/Berlin', hints: [] }));
     pinLogin = vi.fn(() => pinLoginResult);
     clockImpl = vi.fn(() => throwError(() => ({ status: 0 })));
     failPolls = false;
@@ -86,6 +95,7 @@ describe('TerminalPage', () => {
             pinLogin,
             clock: clockImpl,
             hoursOverview,
+            workTimeHints,
             ping: vi.fn(() =>
               failPolls ? throwError(() => ({ status: 0 })) : of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }),
             ),
@@ -1306,7 +1316,7 @@ describe('TerminalPage', () => {
 
     describe('Vergessen auszustempeln?', () => {
       const hint = (fixture: ComponentFixture<TerminalPage>) =>
-        fixture.nativeElement.querySelector('.status-line .forgot-hint') as HTMLButtonElement | null;
+        fixture.nativeElement.querySelector('.terminal-clock .forgot-hint') as HTMLButtonElement | null;
 
       it('shows the hint from 12 hours on', () => {
         const fixture = login({ ...working, startedAt: '2026-10-05T02:00:00Z' });
@@ -1413,6 +1423,230 @@ describe('TerminalPage', () => {
       });
     });
 
+    describe('Arbeitszeit-Hinweise', () => {
+      // Läuft seit 11:30 (Timesheet 23 der Testdaten), also unter 12 h.
+      const running: ClockStatus = { ...working, activeTimesheetId: 23, startedAt: '2026-10-05T09:30:00Z' };
+      const paused: ClockStatus = { ...status, isRunning: true, activeTimesheetId: 22, state: 'paused', stateText: 'Pause' };
+      const pauseCase: WorkTimeHint = {
+        kind: 'continuous', begin: '2026-10-05T07:58', end: null, workedSeconds: 22_000, timesheetId: 23,
+      };
+      const lastPauseCase: WorkTimeHint = {
+        kind: 'continuous', begin: '2026-10-03T22:00', end: '2026-10-04T06:00', workedSeconds: 25_800, timesheetId: 12,
+      };
+      const lastShiftCase: WorkTimeHint = {
+        kind: 'shift', begin: '2026-10-03T22:00', end: '2026-10-04T09:00', workedSeconds: 38_400, timesheetId: null,
+      };
+      const hints = (...list: WorkTimeHint[]) => of({ timeZone: 'Europe/Berlin', hints: list });
+      const hintButton = (fixture: ComponentFixture<TerminalPage>) =>
+        fixture.nativeElement.querySelector('.terminal-clock .forgot-hint') as HTMLButtonElement | null;
+      const hintText = (fixture: ComponentFixture<TerminalPage>) =>
+        hintButton(fixture)?.textContent?.replace(/\s+/g, ' ').trim();
+
+      it('offers "Pause vergessen?" after a PIN login and opens "Pause nachtragen" for the running entry without stamping', () => {
+        workTimeHints.mockReturnValue(hints(pauseCase));
+        const fixture = login(running);
+
+        expect(workTimeHints).toHaveBeenCalledExactlyOnceWith({ employeeId: 'max', pin: '1234', nfcCardId: null });
+        expect(hintText(fixture)).toBe('Pause vergessen? seit 07:58 ohne Pause');
+        expect(hintButton(fixture)!.querySelector('.detail')?.textContent).toBe('seit 07:58 ohne Pause');
+
+        hintButton(fixture)!.click();
+        fixture.detectChanges();
+
+        expect(clockImpl).not.toHaveBeenCalled();
+        expect(fixture.componentInstance.correctionStart()).toEqual({ kind: 'addPause', timesheetId: 23 });
+        expect(flowTitle(fixture)).toBe('Pause beginnt');
+        expect(document.activeElement?.classList.contains('flow-title')).toBe(true);
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Weiter');
+        tap(fixture, 'Absenden');
+        expect(submitCorrection).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'addPause', timesheetId: 23 }));
+        expect(clockImpl).not.toHaveBeenCalled();
+        expect(fixture.componentInstance.clockState.status()?.state).toBe('working');
+      });
+
+      it('shows no pause hint for a case that belongs to another entry', () => {
+        workTimeHints.mockReturnValue(hints({ ...pauseCase, timesheetId: 21 }));
+        const fixture = login(running);
+
+        expect(hintButton(fixture)).toBeNull();
+      });
+
+      it('gives "Vergessen auszustempeln?" precedence', () => {
+        workTimeHints.mockReturnValue(hints({ ...pauseCase, timesheetId: 12 }));
+        const fixture = login({ ...working, startedAt: '2026-10-05T02:00:00Z' });
+
+        expect(fixture.nativeElement.querySelectorAll('.terminal-clock .forgot-hint').length).toBe(1);
+        expect(hintText(fixture)).toBe('Vergessen auszustempeln?');
+      });
+
+      it('names the last shift when clocked out and opens "Pause nachtragen" for the entry of the hint', () => {
+        workTimeHints.mockReturnValue(hints(lastPauseCase));
+        const fixture = login();
+
+        expect(hintText(fixture)).toBe('Letzte Schicht: 7:10 Std. ohne Pause Prüfen');
+
+        hintButton(fixture)!.click();
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.correctionStart()).toEqual({ kind: 'addPause', timesheetId: 12 });
+        expect(flowTitle(fixture)).toBe('Pause beginnt');
+        expect(fixture.nativeElement.querySelector('app-correction-flow .flow-context')?.textContent).toContain('Nachtdienst');
+      });
+
+      it('opens the choice of kinds for a shift over 10 hours', () => {
+        workTimeHints.mockReturnValue(hints(lastShiftCase));
+        const fixture = login();
+
+        expect(hintText(fixture)).toBe('Letzte Schicht: 10:40 Std. Prüfen');
+
+        hintButton(fixture)!.click();
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.correctionStart()).toBeNull();
+        expect(flowTitle(fixture)).toBe('Korrektur');
+      });
+
+      it('shows only the pause hint when both cases of the last shift apply', () => {
+        workTimeHints.mockReturnValue(hints(lastShiftCase, lastPauseCase));
+        const fixture = login();
+
+        expect(hintText(fixture)).toBe('Letzte Schicht: 7:10 Std. ohne Pause Prüfen');
+      });
+
+      it('has no last-shift hint once clocked in, and no hint during the pause', () => {
+        workTimeHints.mockReturnValue(hints(lastPauseCase, lastShiftCase));
+        expect(hintButton(login(running))).toBeNull();
+
+        workTimeHints.mockReturnValue(hints({ ...pauseCase, end: '2026-10-05T15:00', timesheetId: 21 }, lastShiftCase));
+        expect(hintButton(login(paused))).toBeNull();
+      });
+
+      it('hides the hint offline', () => {
+        workTimeHints.mockReturnValue(hints(pauseCase));
+        const fixture = login(running);
+        expect(hintButton(fixture)).not.toBeNull();
+
+        fixture.componentInstance.isOffline.set(true);
+        fixture.detectChanges();
+
+        expect(hintButton(fixture)).toBeNull();
+      });
+
+      it('asks nothing and shows nothing while stamps of the employee wait for transfer', () => {
+        pendingQueue.set([{ kind: 'kiosk', event: { employeeId: 'max' } }]);
+        workTimeHints.mockReturnValue(hints(lastPauseCase));
+        const fixture = login();
+
+        expect(workTimeHints).not.toHaveBeenCalled();
+        fixture.componentInstance.workTimeHints.set({ timeZone: 'Europe/Berlin', hints: [lastPauseCase] });
+        fixture.detectChanges();
+        expect(hintButton(fixture)).toBeNull();
+      });
+
+      it('stays quiet when the hints cannot be read', () => {
+        workTimeHints.mockReturnValue(throwError(() => ({ status: 503 })));
+        const fixture = login();
+
+        expect(hintButton(fixture)).toBeNull();
+        expect(fixture.componentInstance.message()).toBe('');
+      });
+
+      it('loads the hints of a cached card only after the server confirmed it', () => {
+        workTimeHints.mockReturnValue(hints(lastPauseCase));
+        const identify$ = new Subject<NfcClockEvent>();
+        vi.mocked(TestBed.inject(KioskApi).identify).mockImplementation(() => identify$);
+        const fixture = loginWithCard();
+        expect(workTimeHints).not.toHaveBeenCalled();
+
+        identify$.next({
+          eventId: 'e1', occurredAt: new Date().toISOString(), terminalId: 'term-1', cardId: '04ABCD',
+          employee: session.employee, status, message: 'NFC-Karte erkannt.', success: true,
+        });
+        fixture.detectChanges();
+
+        expect(workTimeHints).toHaveBeenCalledExactlyOnceWith({ employeeId: 'max', pin: '', nfcCardId: '04ABCD' });
+        expect(hintText(fixture)).toBe('Letzte Schicht: 7:10 Std. ohne Pause Prüfen');
+      });
+
+      it('loads the hints after an uncached card was identified', () => {
+        workTimeHints.mockReturnValue(hints(lastShiftCase));
+        vi.mocked(TestBed.inject(KioskApi).identify).mockImplementation(() => of({
+          eventId: 'e1', occurredAt: new Date().toISOString(), terminalId: 'term-1', cardId: '04ABCD',
+          employee: session.employee, status, message: 'NFC-Karte erkannt.', success: true,
+        }));
+        localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+        const fixture = TestBed.createComponent(TerminalPage);
+        vi.advanceTimersByTime(1_000);
+        fixture.detectChanges();
+
+        expect(workTimeHints).toHaveBeenCalledExactlyOnceWith({ employeeId: 'max', pin: '', nfcCardId: '04ABCD' });
+        expect(hintText(fixture)).toBe('Letzte Schicht: 10:40 Std. Prüfen');
+      });
+
+      it('discards a late answer after the identity changed - no hint of Max for Anna', () => {
+        const late = new Subject<WorkTimeHints>();
+        workTimeHints.mockReturnValue(late);
+        const fixture = login();
+
+        fixture.componentInstance.back();
+        workTimeHints.mockReturnValue(hints());
+        pinLogin.mockImplementation(() => of({ employee: { ...session.employee, id: 'anna', displayName: 'Anna Beispiel' }, status }));
+        ['4', '3', '2', '1'].forEach(digit => fixture.componentInstance.pressDigit(digit));
+        fixture.detectChanges();
+        late.next({ timeZone: 'Europe/Berlin', hints: [lastPauseCase] });
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('anna');
+        expect(fixture.componentInstance.workTimeHints()?.hints).toEqual([]);
+        expect(hintButton(fixture)).toBeNull();
+        expect(late.observed).toBe(false);
+      });
+
+      it('discards an answer that arrives after a stamp of the same session', () => {
+        const late = new Subject<WorkTimeHints>();
+        workTimeHints.mockReturnValue(late);
+        clockImpl.mockImplementation(() => new Subject<ClockStatus>());
+        const fixture = login(running);
+
+        fixture.componentInstance.startPause();
+        late.next({ timeZone: 'Europe/Berlin', hints: [pauseCase] });
+
+        expect(fixture.componentInstance.workTimeHints()).toBeNull();
+      });
+
+      it('clears the hints on back()', () => {
+        workTimeHints.mockReturnValue(hints(lastPauseCase));
+        const fixture = login();
+        expect(fixture.componentInstance.workTimeHints()).not.toBeNull();
+
+        fixture.componentInstance.back();
+
+        expect(fixture.componentInstance.workTimeHints()).toBeNull();
+      });
+
+      it('reloads the hints when the flow is closed - the old state cannot be tapped meanwhile', () => {
+        workTimeHints.mockReturnValue(hints(lastPauseCase));
+        const fixture = login();
+        hintButton(fixture)!.click();
+        fixture.detectChanges();
+
+        const reload = new Subject<WorkTimeHints>();
+        workTimeHints.mockReturnValue(reload);
+        tap(fixture, 'Zurück');
+        tap(fixture, 'Zurück');
+
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        expect(workTimeHints).toHaveBeenCalledTimes(2);
+        expect(hintButton(fixture)).toBeNull();
+
+        // An open request now suppresses the case on the server.
+        reload.next({ timeZone: 'Europe/Berlin', hints: [] });
+        fixture.detectChanges();
+        expect(hintButton(fixture)).toBeNull();
+      });
+    });
+
     describe('Layout 800x480', () => {
       it('replaces the stamp buttons and the hours card in their column and keeps name, X and status', () => {
         const fixture = login(working);
@@ -1435,6 +1669,23 @@ describe('TerminalPage', () => {
         expect(fixture.nativeElement.querySelector('.session-panel .status-line')).not.toBeNull();
         // The entry button itself gives way to the flow.
         expect(entryButton(fixture)).toBeNull();
+      });
+
+      it('puts the work time hints into the clock column, never into the employee column, and hides them in the flow', () => {
+        workTimeHints.mockReturnValue(of({
+          timeZone: 'Europe/Berlin',
+          hints: [{ kind: 'shift', begin: '2026-10-03T22:00', end: '2026-10-04T09:00', workedSeconds: 38_400, timesheetId: null }],
+        }));
+        const fixture = login();
+
+        const hint = fixture.nativeElement.querySelector('.forgot-hint') as HTMLElement;
+        expect(hint.closest('.terminal-clock')).not.toBeNull();
+        expect(fixture.nativeElement.querySelector('.session-panel .forgot-hint')).toBeNull();
+
+        openFlow(fixture);
+        expect(fixture.nativeElement.querySelector('.forgot-hint')).toBeNull();
+        // The time stays where it was.
+        expect(fixture.nativeElement.querySelector('.terminal-clock .clock-time')).not.toBeNull();
       });
 
       it('scrolls only inside the flow: fixed head and footer around ONE scroll body', () => {
