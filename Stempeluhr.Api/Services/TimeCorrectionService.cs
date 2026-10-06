@@ -200,9 +200,17 @@ public sealed class TimeCorrectionService(
                 .Select(request => request.TimesheetId!.Value)
                 .ToHashSet();
 
+            // Nur die jüngste Schicht zählt: Ein Fall einer älteren Schicht
+            // (auch innerhalb von 24 h) ist nicht die „letzte Schicht“.
+            var latestShiftStart = WorkTimeLimitCalculator.LatestShiftStart(entries, settings.PauseActivityId, now);
             var hints = new List<WorkTimeHintDto>();
             foreach (var violation in WorkTimeLimitCalculator.Evaluate(entries, settings.PauseActivityId, windowStart, now))
             {
+                if (violation.Start < latestShiftStart)
+                {
+                    continue;
+                }
+
                 // Alle Einträge im Bereich [Start, Ende], auch eine kurze Pause darin.
                 var inRange = entries
                     .Where(entry => entry.Begin is { } begin && begin < violation.End && (entry.End ?? now) > violation.Start)

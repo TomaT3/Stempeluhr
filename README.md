@@ -317,7 +317,10 @@ Antrag **als erledigt markieren**.
   die Timesheets der letzten 48 h und wertet sie mit denselben festen Regeln
   wie die Telegram-Warnung aus (über 6 h am Stück ohne Pause, über 10 h in der
   Schicht; nur Fälle, die noch laufen oder höchstens 24 h vorbei sind;
-  Nachtschichten über Mitternacht zählen als eine Schicht). Hat ein Eintrag im
+  Nachtschichten über Mitternacht zählen als eine Schicht). Gemeldet werden nur
+  Fälle der jüngsten Schicht (Arbeit nach mindestens 8 h ohne Arbeit): Ein Fall
+  einer früheren Schicht ist nicht die „letzte Schicht“, auch wenn er keine 24 h
+  zurückliegt. Hat ein Eintrag im
   Bereich des Falls schon einen offenen Antrag (`pending`, `failed`), entfällt
   der Hinweis. Die Antwort `{ "timeZone": …, "hints": [ … ] }` enthält pro Fall
   `kind` (`continuous` oder `shift`), `begin` und `end` (lokale Zeit

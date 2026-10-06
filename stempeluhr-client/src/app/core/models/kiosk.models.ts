@@ -128,8 +128,8 @@ export interface CorrectionTimesheets {
 /**
  * Auffällige Arbeitszeit nach der Anmeldung (POST /api/kiosk/work-time-hints):
  * `continuous` = über 6 h am Stück ohne Pause, `shift` = über 10 h in der
- * Schicht. Fälle, die noch laufen oder höchstens 24 h vorbei sind und zu
- * denen kein Antrag offen ist.
+ * Schicht. Nur Fälle der jüngsten Schicht, die noch laufen oder höchstens
+ * 24 h vorbei sind und zu denen kein Antrag offen ist.
  */
 export interface WorkTimeHint {
   kind: 'continuous' | 'shift';

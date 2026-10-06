@@ -283,6 +283,30 @@ public sealed class WorkTimeLimitCalculatorTests
         Assert.Empty(Evaluate(entries));
     }
 
+    [Fact]
+    public void LatestShiftStart_BeginsAfterEightHoursWithoutWork_PausesAreNoWork()
+    {
+        var entries = new[]
+        {
+            Work("2026-09-29T06:00:00+02:00", "2026-09-29T13:00:00+02:00"),
+            // 13:00-21:00 without work (a pause entry is no work): exactly 8 h, a new shift.
+            Pause("2026-09-29T13:00:00+02:00", "2026-09-29T14:00:00+02:00"),
+            Work("2026-09-29T21:00:00+02:00", "2026-09-30T02:00:00+02:00"),
+            // 7 h 59 min later: still the same shift.
+            Work("2026-09-30T09:59:00+02:00", null),
+        };
+
+        Assert.Equal(Parse("2026-09-29T21:00:00+02:00"),
+            WorkTimeLimitCalculator.LatestShiftStart(entries, PauseActivity, Now));
+    }
+
+    [Fact]
+    public void LatestShiftStart_IsNullWithoutWork()
+    {
+        Assert.Null(WorkTimeLimitCalculator.LatestShiftStart(
+            [Pause("2026-09-30T08:00:00+02:00", "2026-09-30T09:00:00+02:00")], PauseActivity, Now));
+    }
+
     private static IReadOnlyList<WorkTimeViolation> Evaluate(
         IReadOnlyCollection<KimaiTimesheetEntryDto> entries, DateTimeOffset? now = null)
     {

@@ -242,7 +242,8 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /**
    * Hinweis zur letzten Schicht, solange der Mitarbeiter ausgestempelt ist.
-   * Treffen beide Fälle zu, geht die Pause vor: dort kann man direkt etwas tun.
+   * Der Server liefert nur Fälle der jüngsten Schicht; treffen dort beide
+   * zu, geht die Pause vor: dort kann man direkt etwas tun.
    */
   readonly lastShiftHint = computed<WorkTimeHint | null>(() => {
     if (!this.isUnlocked() || this.correctionBlocked() || this.clockState.status()?.state !== 'clockedOut') {
