@@ -497,19 +497,53 @@ public sealed class RunningPauseServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Retry_WhenTheEmployeeStoppedAfterTheObservationButBeforeTheShortening_FailsInsteadOfRestartingWork()
+    public async Task Retry_WhenTheEmployeeStoppedAfterTheObservationButBeforeTheShortening_ObservesAgainAndBooksTheRestUpToThatEnd()
     {
         var sheet = RunningSheet();
         var dto = await SubmitPause(sheet, At(8), At(8, 30));
-        // The observation "was running" is stored, but no step ran (e.g. the process stopped).
+        // The observation "was running" is stored, but no step ran (e.g. Kimai was down).
         _store.Update(_store.Find(dto.Id)! with { Status = TimeCorrectionStatus.Failed, ObservedAtApply = true, ObservedEndAtApply = null });
         sheet.End = At(11);
 
         var retried = await Retried(dto.Id);
 
-        Assert.Equal(TimeCorrectionStatus.Failed, retried.Status);
-        Assert.Equal("Eintrag wurde inzwischen geändert", retried.Error);
+        Assert.Equal(TimeCorrectionStatus.Applied, retried.Status);
+        Assert.Equal(["shorten", "pause", "rest"], retried.AppliedSteps);
+        Assert.DoesNotContain(_kimai.Writes, write => write.StartsWith("start"));
+        Assert.Single(_kimai.Sheets, entry => entry.Begin == At(8, 30) && entry.End == At(11));
+        Assert.Equal(At(11), _store.Find(dto.Id)!.ObservedEndAtApply);
+    }
+
+    [Fact]
+    public async Task Retry_WhenTheShorteningRanButItsAnswerWasLost_KeepsTheObservationAndRestartsTheWork()
+    {
+        var sheet = RunningSheet();
+        var dto = await SubmitPause(sheet, At(8), At(8, 30));
+        // Observed running, Kimai shortened the sheet, the progress was not stored.
+        _store.Update(_store.Find(dto.Id)! with { Status = TimeCorrectionStatus.Failed, ObservedAtApply = true, ObservedEndAtApply = null });
+        sheet.End = At(8);
+
+        var retried = await Retried(dto.Id);
+
+        Assert.Equal(TimeCorrectionStatus.Applied, retried.Status);
+        Assert.Equal(["shorten", "pause", "startWork"], retried.AppliedSteps);
+        Assert.DoesNotContain(_kimai.Writes, write => write.StartsWith("patch"));
+        Assert.Single(_kimai.Sheets, entry => entry.End is null && entry.Begin == At(8, 30));
+    }
+
+    [Fact]
+    public async Task Approve_WhenTheActivityOfTheRunningSheetChangedMeanwhile_FailsAsChanged()
+    {
+        var sheet = RunningSheet();
+        var dto = await SubmitPause(sheet, At(8), At(8, 30));
+        sheet.Activity = 6;
+
+        var result = await Approved(dto.Id);
+
+        Assert.Equal(TimeCorrectionStatus.Failed, result.Status);
+        Assert.Equal("Eintrag wurde inzwischen geändert", result.Error);
         Assert.Empty(_kimai.Writes);
+        Assert.False(_store.Find(dto.Id)!.ObservedAtApply);
     }
 
     [Fact]

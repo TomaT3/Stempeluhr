@@ -265,10 +265,13 @@ Vor Schritt 3 prüft die API, dass nichts anderes läuft; sonst wird der Antrag
 `failed` („Eintrag wurde inzwischen geändert“) und der Admin trägt von Hand
 nach oder versucht es erneut. Eine schon laufend gestartete Rest-Arbeit
 erkennt die API an Beginn = Pausenende und gleicher Aktivität, ihr Ende spielt
-keine Rolle (der Mitarbeiter kann inzwischen ausgestempelt haben). Ist der
-Stand einmal festgehalten, gilt nur noch genau dieser (oder der schon gekürzte)
-Zustand als unverändert: wer danach noch ausgestempelt hat, bekommt keine
-laufende Rest-Arbeit, der Antrag scheitert stattdessen. In Telegram steht bei
+keine Rolle (der Mitarbeiter kann inzwischen ausgestempelt haben). Solange noch
+kein Schritt etwas geändert hat (etwa weil Kimai beim ersten Versuch nicht
+erreichbar war), liest „Erneut versuchen“ den Stand neu: wer inzwischen
+ausgestempelt hat, bekommt die Rest-Arbeit bis zu diesem Ende statt einer
+laufenden. Ist der Eintrag schon gekürzt, gilt der festgehaltene Stand. Wie bei
+jedem Antrag müssen Aktivität, Projekt, `billable` und Beschreibung dem
+Snapshot entsprechen. In Telegram steht bei
 einem laufenden Eintrag zusätzlich eine Zeile „Danach“, z. B. `06:00–12:00 ·
 Pause 12:00–12:30 · ab 12:30 (läuft)`.
 

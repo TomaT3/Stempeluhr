@@ -223,7 +223,6 @@ public static class TelegramMessageFactory
         return $"{WeekdayNames[(int)local.DayOfWeek]} {local:dd.MM. HH:mm}";
     }
 
-    /// <summary>"Mo 06.10. 22:00 – Di 07.10. 06:10"; am selben Tag steht das Ende nur mit der Uhrzeit.</summary>
     /// <summary>
     /// "Mo 05.10. 06:00–12:00 · Pause 12:00–12:30 · ab 12:30 (läuft)": der Stand
     /// nach der Genehmigung. Hat der Mitarbeiter inzwischen ausgestempelt
@@ -255,6 +254,7 @@ public static class TelegramMessageFactory
         return string.Join(" · ", parts.Where(part => part.Length > 0));
     }
 
+    /// <summary>"Mo 06.10. 22:00 – Di 07.10. 06:10"; am selben Tag steht das Ende nur mit der Uhrzeit.</summary>
     private static string FormatCorrectionRange(DateTimeOffset begin, DateTimeOffset? end, TimeZoneInfo timeZone)
     {
         var from = FormatCorrectionTime(begin, timeZone);
