@@ -92,8 +92,20 @@ public static class TelegramMessageFactory
         switch (request.Kind)
         {
             case TimeCorrectionKind.AddPause:
-                if (original is not null) lines.Add($"{entryLabel}: {Range(original.Begin, original.End)}");
+                if (original is { End: null })
+                {
+                    // Pause im laufenden Eintrag: nachher steht der Eintrag bis zur Pause, die Pause, dann läuft die Arbeit weiter.
+                    lines.Add($"{entryLabel}: {FormatCorrectionTime(original.Begin, timeZone)} – läuft");
+                }
+                else if (original is not null)
+                {
+                    lines.Add($"{entryLabel}: {Range(original.Begin, original.End)}");
+                }
                 if (request.PauseBegin is { } pauseBegin) lines.Add($"Pause: {Range(pauseBegin, request.PauseEnd)}");
+                if (original is { End: null } && request.PauseBegin is { } runBegin && request.PauseEnd is { } runEnd)
+                {
+                    lines.Add($"Danach: {DescribeRunningPauseResult(request, original.Begin, runBegin, runEnd, timeZone)}");
+                }
                 break;
             case TimeCorrectionKind.SetEnd:
                 if (original is not null) lines.Add($"{entryLabel}: {Range(original.Begin, original.End)}");
@@ -209,6 +221,37 @@ public static class TelegramMessageFactory
     {
         var local = TimeZoneInfo.ConvertTime(value, timeZone);
         return $"{WeekdayNames[(int)local.DayOfWeek]} {local:dd.MM. HH:mm}";
+    }
+
+    /// <summary>
+    /// "Mo 05.10. 06:00–12:00 · Pause 12:00–12:30 · ab 12:30 (läuft)": der Stand
+    /// nach der Genehmigung. Hat der Mitarbeiter inzwischen ausgestempelt
+    /// (beobachtetes Ende), steht statt "(läuft)" die Rest-Arbeit bis dahin.
+    /// Zeiten am selben Tag wie der Vorgänger ohne Wochentag und Datum.
+    /// </summary>
+    private static string DescribeRunningPauseResult(
+        TimeCorrectionRequest request, DateTimeOffset begin, DateTimeOffset pauseBegin, DateTimeOffset pauseEnd, TimeZoneInfo timeZone)
+    {
+        string Next(DateTimeOffset previous, DateTimeOffset value)
+        {
+            var local = TimeZoneInfo.ConvertTime(value, timeZone);
+            return TimeZoneInfo.ConvertTime(previous, timeZone).Date == local.Date
+                ? local.ToString("HH:mm")
+                : FormatCorrectionTime(value, timeZone);
+        }
+
+        var parts = new List<string>
+        {
+            $"{FormatCorrectionTime(begin, timeZone)}–{Next(begin, pauseBegin)}",
+            $"Pause {Next(pauseBegin, pauseBegin)}–{Next(pauseBegin, pauseEnd)}",
+        };
+        parts.Add(TimeCorrectionPlan.EffectiveEnd(request) switch
+        {
+            null => $"ab {Next(pauseEnd, pauseEnd)} (läuft)",
+            { } end when end > pauseEnd => $"ab {Next(pauseEnd, pauseEnd)} bis {Next(pauseEnd, end)}",
+            _ => string.Empty,
+        });
+        return string.Join(" · ", parts.Where(part => part.Length > 0));
     }
 
     /// <summary>"Mo 06.10. 22:00 – Di 07.10. 06:10"; am selben Tag steht das Ende nur mit der Uhrzeit.</summary>

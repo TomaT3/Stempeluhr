@@ -513,7 +513,9 @@ public sealed class TimeCorrectionService(
         TimeZoneInfo timeZone,
         CancellationToken cancellationToken)
     {
-        var times = new[] { request.Begin, request.End, request.PauseBegin, request.PauseEnd, request.Original?.Begin, request.Original?.End }
+        // Die Rest-Arbeit einer Pause reicht bis zum beobachteten Ende bzw. bis jetzt.
+        var restEnd = TimeCorrectionPlan.RestEnd(request, _clock.GetUtcNow());
+        var times = new[] { request.Begin, request.End, request.PauseBegin, request.PauseEnd, request.Original?.Begin, request.Original?.End, restEnd }
             .Where(time => time is not null).Select(time => time!.Value).ToArray();
         if (times.Length == 0)
         {
@@ -562,7 +564,23 @@ public sealed class TimeCorrectionService(
                     return Fail(request, read.Error == "Eintrag nicht gefunden." ? "Eintrag nicht gefunden oder nicht erlaubt." : read.Error!);
                 }
 
-                if (!MatchesSnapshot(request, own, steps))
+                if (IsRunningPauseRequest(request) && MustObserve(request, own, steps))
+                {
+                    // Noch hat kein Schritt etwas geändert: den Stand (neu)
+                    // festhalten. Der Plan hängt davon ab (laufend weiterführen
+                    // oder bis zum Ende anlegen), und "Erneut versuchen" muss
+                    // nach dem Kürzen noch wissen, wie es war.
+                    var unobserved = request with { ObservedAtApply = false, ObservedEndAtApply = null };
+                    if (!HasOriginalAttributes(own, request.Original!) || !IsUnchanged(unobserved, own))
+                    {
+                        return Fail(request, "Eintrag wurde inzwischen geändert");
+                    }
+
+                    request = request with { ObservedAtApply = true, ObservedEndAtApply = own.End };
+                    store.Update(request);
+                    steps = TimeCorrectionPlan.Steps(request);
+                }
+                else if (!MatchesSnapshot(request, own, steps))
                 {
                     return Fail(request, "Eintrag wurde inzwischen geändert");
                 }
@@ -602,8 +620,23 @@ public sealed class TimeCorrectionService(
                 }
                 else if (!await ExistsAsync(settings, employee, resolved.Target, step, timeZone, cancellationToken))
                 {
-                    await kimai.CreateTimesheetAsync(
-                        settings, employee, resolved.Target, step.Begin!.Value, step.End!.Value, resolved.Description, cancellationToken);
+                    if (step.Kind == PlannedStepKind.StartWork)
+                    {
+                        // Der Eintrag ist gekürzt, also gehört ein laufender
+                        // Eintrag jetzt nicht mehr dem Antrag: der Mitarbeiter hat
+                        // inzwischen selbst etwas gestartet.
+                        if ((await kimai.GetStatusAsync(settings, employee, cancellationToken)).IsRunning)
+                        {
+                            return Fail(request with { AppliedSteps = applied.ToArray() }, "Eintrag wurde inzwischen geändert");
+                        }
+
+                        await kimai.StartAtAsync(settings, employee, resolved.Target, step.Begin!.Value, cancellationToken);
+                    }
+                    else
+                    {
+                        await kimai.CreateTimesheetAsync(
+                            settings, employee, resolved.Target, step.Begin!.Value, step.End!.Value, resolved.Description, cancellationToken);
+                    }
                 }
 
                 applied.Add(step.Name);
@@ -642,11 +675,7 @@ public sealed class TimeCorrectionService(
     private static bool MatchesSnapshot(
         TimeCorrectionRequest request, KimaiTimesheetDetailDto sheet, IReadOnlyList<PlannedStep> steps)
     {
-        if (request.Original is not { } original
-            || sheet.ActivityId != original.ActivityId
-            || sheet.ProjectId != original.ProjectId
-            || sheet.Billable != original.Billable
-            || (sheet.Description ?? "") != (original.Description ?? ""))
+        if (request.Original is not { } original || !HasOriginalAttributes(sheet, original))
         {
             return false;
         }
@@ -657,8 +686,56 @@ public sealed class TimeCorrectionService(
             return IsPatched(sheet, original, patch);
         }
 
-        return (sheet.Begin == original.Begin && sheet.End == original.End)
+        return IsUnchanged(request, sheet)
             || (patch is not null && IsPatched(sheet, original, patch));
+    }
+
+    /// <summary>Aktivität, Projekt, Abrechenbarkeit und Beschreibung wie im Snapshot.</summary>
+    private static bool HasOriginalAttributes(KimaiTimesheetDetailDto sheet, TimeCorrectionOriginal original)
+        => sheet.ActivityId == original.ActivityId
+            && sheet.ProjectId == original.ProjectId
+            && sheet.Billable == original.Billable
+            && (sheet.Description ?? "") == (original.Description ?? "");
+
+    /// <summary>
+    /// Beim ersten Genehmigen, und solange noch kein Schritt etwas geändert
+    /// hat: dann ist der aktuelle Stand maßgeblich, auch wenn der Mitarbeiter
+    /// seit einem gescheiterten Versuch ausgestempelt hat. Ein schon gekürzter
+    /// Eintrag (Antwort verloren) behält den festgehaltenen Stand.
+    /// </summary>
+    private static bool MustObserve(TimeCorrectionRequest request, KimaiTimesheetDetailDto sheet, IReadOnlyList<PlannedStep> steps)
+        => !request.ObservedAtApply
+            || (request.AppliedSteps.Count == 0
+                && steps.FirstOrDefault(step => step.Kind == PlannedStepKind.Patch) is { } patch
+                && !IsPatched(sheet, request.Original!, patch));
+
+    /// <summary>Eine Pause, die sich auf ein beim Absenden noch laufendes Timesheet bezieht.</summary>
+    private static bool IsRunningPauseRequest(TimeCorrectionRequest request)
+        => request is { Kind: TimeCorrectionKind.AddPause, Original.End: null };
+
+    /// <summary>
+    /// Das Timesheet wie beim Antrag, noch ohne Schritt. Ein laufendes Original
+    /// gilt als unverändert, solange es läuft oder (Mitarbeiter hat inzwischen
+    /// ausgestempelt) nicht vor dem Pausenende endet. Ist der Stand beim
+    /// Genehmigen schon festgehalten, muss es genau dabei bleiben: wer nach dem
+    /// Festhalten noch ausgestempelt hat, bekäme sonst eine laufende Rest-Arbeit.
+    /// </summary>
+    private static bool IsUnchanged(TimeCorrectionRequest request, KimaiTimesheetDetailDto sheet)
+    {
+        var original = request.Original!;
+        if (sheet.Begin != original.Begin)
+        {
+            return false;
+        }
+
+        if (!IsRunningPauseRequest(request))
+        {
+            return sheet.End == original.End;
+        }
+
+        return request.ObservedAtApply
+            ? sheet.End == request.ObservedEndAtApply
+            : sheet.End is null || sheet.End >= request.PauseEnd;
     }
 
     /// <summary>

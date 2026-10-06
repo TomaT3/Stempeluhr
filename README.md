@@ -224,7 +224,7 @@ offenen (`pending`, `failed`) bleiben, von den abgeschlossenen die letzten 1000.
 
 | Art | Eingabe | In Kimai |
 | --- | --- | --- |
-| `addPause` | gestopptes Arbeits-Timesheet, Pause von/bis darin | Ende auf Pausenbeginn kürzen, Pause anlegen, Rest-Arbeit bis zum alten Ende anlegen (mit Projekt, Aktivität, Beschreibung und `billable` des Originals; entfällt, wenn die Pause am alten Ende endet) |
+| `addPause` | Arbeits-Timesheet (auch ein **laufendes**), Pause von/bis darin | Ende auf Pausenbeginn kürzen, Pause anlegen, Rest-Arbeit bis zum alten Ende anlegen (mit Projekt, Aktivität, Beschreibung und `billable` des Originals; entfällt, wenn die Pause am alten Ende endet). Bei einem laufenden Eintrag läuft die Rest-Arbeit ab dem Pausenende weiter, siehe „Pause im laufenden Eintrag“ unten |
 | `setEnd` | Timesheet, tatsächliches Ende (vor dem aktuellen) | Ende ändern |
 | `addShift` | Beginn, Ende, Tätigkeit, optional Pause | Arbeit (bei Pause in zwei Teilen) und Pause anlegen, Beschreibung „Nachgetragen (Korrekturantrag)“ |
 | `changeTimes` | gestopptes Timesheet, neuer Beginn und/oder neues Ende | Beginn/Ende ändern |
@@ -243,6 +243,47 @@ Einträge auch an Tokens mit `view_other_timesheet`. Fehlt eine der IDs, wird
 abgelehnt statt geraten. Gebucht wird mit dem **Mitarbeiter-Token**, das
 Admin-Token bleibt rein lesend. Es gibt keine Offline-Queue: ist Kimai nicht
 erreichbar, antwortet das Absenden mit 503.
+
+**Pause im laufenden Eintrag:** Wer in die Pause gegangen ist, ohne zu stempeln,
+beantragt sie, ohne auszustempeln (`addPause` auf das laufende Timesheet, das
+Ende ist dann leer). Beim Absenden gilt: die Pause liegt nach dem Beginn des
+Eintrags, ihr Ende höchstens jetzt (2 Minuten Toleranz); höchstens 4 h, keine
+Überlappung und ein offener Antrag pro Timesheet gelten wie sonst. `setEnd` und
+`changeTimes` verlangen weiter einen gestoppten Eintrag. Bis zur Freigabe
+stempelt der Mitarbeiter normal weiter. Beim Genehmigen hält die API **vor dem
+ersten Schritt** den Stand des Eintrags im Antrag fest (`observedAtApply`,
+`observedEndAtApply`; leer heißt „lief noch“), damit „Erneut versuchen“ auch nach
+dem Kürzen richtig fortsetzt:
+
+| Stand beim Genehmigen | Schritte in Kimai |
+| --- | --- |
+| Eintrag läuft noch | 1. Ende auf Pausenbeginn (`shorten`), 2. Pause anlegen (`pause`), 3. Rest-Arbeit ab Pausenende **laufend** starten (`startWork`; Projekt, Aktivität, Beschreibung und `billable` des Originals) |
+| inzwischen gestoppt (Ende ≥ Pausenende) | wie bei einem gestoppten Eintrag, Rest-Arbeit bis zu diesem Ende |
+| inzwischen vor dem Pausenende gestoppt oder sonst geändert | `failed` mit „Eintrag wurde inzwischen geändert“ |
+
+Die Prüfung auf Überschneidungen umfasst die ganze Rest-Arbeit: bei einem
+laufenden Eintrag bis jetzt, bei einem inzwischen gestoppten bis zu dessen
+Ende; eine schon gestartete Rest-Arbeit zählt bis zu ihrem tatsächlichen Ende.
+Hat der Mitarbeiter etwa nach einem gescheiterten Neustart eine andere
+Tätigkeit gestempelt, scheitert „Erneut versuchen“, statt rückwirkend darüber
+zu buchen. Vor Schritt 3 prüft die API außerdem, dass nichts anderes läuft; sonst wird der Antrag
+`failed` („Eintrag wurde inzwischen geändert“) und der Admin trägt von Hand
+nach oder versucht es erneut. Eine schon laufend gestartete Rest-Arbeit
+erkennt die API an Beginn = Pausenende und gleicher Aktivität, ihr Ende spielt
+keine Rolle (der Mitarbeiter kann inzwischen ausgestempelt haben). Solange noch
+kein Schritt etwas geändert hat (etwa weil Kimai beim ersten Versuch nicht
+erreichbar war), liest „Erneut versuchen“ den Stand neu: wer inzwischen
+ausgestempelt hat, bekommt die Rest-Arbeit bis zu diesem Ende statt einer
+laufenden. Ist der Eintrag schon gekürzt, gilt der festgehaltene Stand. Wie bei
+jedem Antrag müssen Aktivität, Projekt, `billable` und Beschreibung dem
+Snapshot entsprechen. In Telegram steht bei
+einem laufenden Eintrag zusätzlich eine Zeile „Danach“, z. B. `06:00–12:00 ·
+Pause 12:00–12:30 · ab 12:30 (läuft)`.
+
+*Bekannte Grenze:* Stempelt der Mitarbeiter genau zwischen dem Kürzen (Schritt 1)
+und dem Neustart (Schritt 3), also innerhalb von Millisekunden, aus, kann die
+neu gestartete Rest-Arbeit danach trotzdem laufen; die API erkennt das nicht
+und der Mitarbeiter stempelt dann einfach erneut aus.
 
 **Idempotenz und `Failed`:** Jede Entscheidung läuft unter einer Sperre pro
 Antrag. Wer einen schon entschiedenen Antrag erneut genehmigt oder ablehnt (zwei

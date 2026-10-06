@@ -84,9 +84,10 @@ public static class TimeCorrectionValidator
 
     private static string? ValidateAddPause(TimeCorrectionRequest request, RuntimeSettings settings, TimeZoneInfo timeZone)
     {
-        if (RequireStoppedTimesheet(request) is { } missing)
+        // Anders als die übrigen Arten auch für einen laufenden Eintrag.
+        if (request.TimesheetId is null || request.Original is null)
         {
-            return missing;
+            return "Der Eintrag fehlt.";
         }
 
         var original = request.Original!;
@@ -112,9 +113,18 @@ public static class TimeCorrectionValidator
 
         // Der Eintrag muss vor der Pause noch Arbeit behalten: Beginn gleich
         // Pausenbeginn würde ihn auf Länge 0 kürzen.
-        if (pauseBegin <= original.Begin || pauseEnd > original.End)
+        if (original.End is not { } originalEnd)
         {
-            return $"Die Pause muss innerhalb des Eintrags ({Format(original.Begin, timeZone)}–{Format(original.End!.Value, timeZone)}) liegen.";
+            // Läuft der Eintrag noch, begrenzt nur "nicht in der Zukunft" das
+            // Pausenende (gemeinsame Prüfung in Validate).
+            return pauseBegin <= original.Begin
+                ? $"Die Pause muss nach dem Beginn des Eintrags ({Format(original.Begin, timeZone)}) liegen."
+                : null;
+        }
+
+        if (pauseBegin <= original.Begin || pauseEnd > originalEnd)
+        {
+            return $"Die Pause muss innerhalb des Eintrags ({Format(original.Begin, timeZone)}–{Format(originalEnd, timeZone)}) liegen.";
         }
 
         return null;
@@ -244,14 +254,17 @@ public static class TimeCorrectionValidator
 
     /// <summary>
     /// Zeitraum, den der Antrag neu belegt: Pause samt Rest-Arbeit bis zum alten
-    /// Ende (der Eintrag selbst wird nur gekürzt), die ganze nachgetragene
+    /// Ende (der Eintrag selbst wird nur gekürzt; bei einem laufenden Eintrag
+    /// reicht die Rest-Arbeit bis jetzt), die ganze nachgetragene
     /// Schicht, der geänderte Eintrag. Nur Kürzen (Ende setzen) belegt nichts Neues.
     /// </summary>
-    private static (DateTimeOffset Begin, DateTimeOffset End)? ClaimedRange(TimeCorrectionRequest request)
+    private static (DateTimeOffset Begin, DateTimeOffset End)? ClaimedRange(TimeCorrectionRequest request, DateTimeOffset now)
     {
         return request.Kind switch
         {
-            TimeCorrectionKind.AddPause when request.PauseBegin is { } b && request.Original is { End: { } oldEnd } => (b, oldEnd),
+            TimeCorrectionKind.AddPause when request.PauseBegin is { } b && request.PauseEnd is { } pauseEnd
+                    && TimeCorrectionPlan.RestEnd(request, now) is { } restEnd
+                => (b, restEnd > pauseEnd ? restEnd : pauseEnd),
             TimeCorrectionKind.AddShift when request.Begin is { } b && request.End is { } e => (b, e),
             TimeCorrectionKind.ChangeTimes when request.Original is { End: { } oldEnd } original
                 => (request.Begin ?? original.Begin, request.End ?? oldEnd),
@@ -269,7 +282,7 @@ public static class TimeCorrectionValidator
         EmployeeSettings employee,
         bool applying)
     {
-        if (ClaimedRange(request) is not { } claimed)
+        if (ClaimedRange(request, now) is not { } claimed)
         {
             return null;
         }
@@ -285,6 +298,18 @@ public static class TimeCorrectionValidator
                 .Select(step => (Step: step, Target: TimeCorrectionTargets.Resolve(step, request, settings, employee)?.Target))
                 .Where(planned => planned.Target is not null)
                 .ToArray();
+
+        // Eine schon laufend gestartete Rest-Arbeit belegt nur bis zu ihrem
+        // tatsächlichen Ende: Was der Mitarbeiter danach stempelt, gehört
+        // nicht mehr zum Antrag.
+        if (created
+                .Where(planned => planned.Step.Kind == PlannedStepKind.StartWork)
+                .Select(planned => timesheets.FirstOrDefault(entry =>
+                    TimeCorrectionTargets.IsCreatedBy(entry, planned.Step, planned.Target!.ActivityId)))
+                .FirstOrDefault(entry => entry is not null) is { } startedRest)
+        {
+            claimed = (claimed.Begin, startedRest.End ?? now);
+        }
 
         foreach (var entry in timesheets)
         {

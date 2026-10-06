@@ -12,13 +12,16 @@ public enum PlannedStepKind
 
     /// <summary>Neues Pausen-Timesheet.</summary>
     CreatePause,
+
+    /// <summary>Neues Arbeits-Timesheet ab <c>Begin</c>, laufend (ohne Ende).</summary>
+    StartWork,
 }
 
 /// <summary>
 /// Ein Schritt in Kimai. <see cref="Name"/> steht in
 /// <see cref="TimeCorrectionRequest.AppliedSteps"/>, sobald er erledigt ist.
 /// Patch-Schritte setzen nur die gefüllten Zeiten; Anlege-Schritte haben immer
-/// Beginn und Ende.
+/// Beginn und Ende, nur <see cref="PlannedStepKind.StartWork"/> hat kein Ende.
 /// </summary>
 public sealed record PlannedStep(string Name, PlannedStepKind Kind, DateTimeOffset? Begin, DateTimeOffset? End);
 
@@ -34,11 +37,30 @@ public static class TimeCorrectionPlan
     public const string StepTimes = "times";
     public const string StepPause = "pause";
     public const string StepRest = "rest";
+    public const string StepStartWork = "startWork";
     public const string StepWork = "work";
     public const string StepWorkBeforePause = "work1";
     public const string StepWorkAfterPause = "work2";
 
     public const string AddedShiftDescription = "Nachgetragen (Korrekturantrag)";
+
+    /// <summary>
+    /// Ende des Originals, soweit bekannt: das beim Absenden gespeicherte, bei
+    /// einem laufenden Original das beim Genehmigen beobachtete. Null heißt
+    /// „läuft noch“ (auch vor dem Genehmigen, wo noch nichts beobachtet ist).
+    /// </summary>
+    public static DateTimeOffset? EffectiveEnd(TimeCorrectionRequest request)
+        => request.Original?.End ?? (request.ObservedAtApply ? request.ObservedEndAtApply : null);
+
+    /// <summary>
+    /// Bis wann die Rest-Arbeit einer Pause reicht: bis zum (beobachteten)
+    /// Ende, bei einem laufenden Eintrag bis <paramref name="now"/>. Null bei
+    /// anderen Arten.
+    /// </summary>
+    public static DateTimeOffset? RestEnd(TimeCorrectionRequest request, DateTimeOffset now)
+        => request is { Kind: TimeCorrectionKind.AddPause, Original: not null }
+            ? EffectiveEnd(request) ?? now
+            : null;
 
     public static IReadOnlyList<PlannedStep> Steps(TimeCorrectionRequest request)
     {
@@ -51,10 +73,23 @@ public static class TimeCorrectionPlan
                     new(StepShorten, PlannedStepKind.Patch, null, request.PauseBegin),
                     new(StepPause, PlannedStepKind.CreatePause, request.PauseBegin, request.PauseEnd),
                 };
-                // Die Rest-Arbeit entfällt, wenn die Pause am alten Ende endet.
-                if (request.Original?.End is { } oldEnd && request.PauseEnd < oldEnd)
+                if (request.Original is null)
                 {
-                    steps.Add(new(StepRest, PlannedStepKind.CreateWork, request.PauseEnd, oldEnd));
+                    return steps;
+                }
+
+                if (EffectiveEnd(request) is { } oldEnd)
+                {
+                    // Die Rest-Arbeit entfällt, wenn die Pause am alten Ende endet.
+                    if (request.PauseEnd < oldEnd)
+                    {
+                        steps.Add(new(StepRest, PlannedStepKind.CreateWork, request.PauseEnd, oldEnd));
+                    }
+                }
+                else
+                {
+                    // Der Eintrag läuft noch: die Rest-Arbeit läuft ab dem Pausenende weiter.
+                    steps.Add(new(StepStartWork, PlannedStepKind.StartWork, request.PauseEnd, null));
                 }
                 return steps;
             }
@@ -105,9 +140,14 @@ public static class TimeCorrectionTargets
     /// <summary>
     /// Ist <paramref name="entry"/> genau das, was <paramref name="step"/> anlegt (Beginn, Ende, Aktivität)?
     /// Ein bloß zeitgleicher Eintrag auf anderer Aktivität gehört nicht dazu.
+    /// Eine laufend gestartete Rest-Arbeit erkennt man an Beginn und Aktivität;
+    /// ihr Ende spielt keine Rolle, denn der Mitarbeiter kann inzwischen
+    /// ausgestempelt haben.
     /// </summary>
     public static bool IsCreatedBy(KimaiTimesheetEntryDto entry, PlannedStep step, int activityId)
-        => entry.Begin == step.Begin && entry.End == step.End && entry.ActivityId == activityId;
+        => entry.Begin == step.Begin
+            && entry.ActivityId == activityId
+            && (step.Kind == PlannedStepKind.StartWork || entry.End == step.End);
 }
 
 /// <summary>
