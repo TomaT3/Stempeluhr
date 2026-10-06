@@ -480,13 +480,31 @@ public sealed class RunningPauseServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Approve_WhenSomethingElseRunsBeforeTheRestart_Fails_AndStartsNothing()
+    public async Task Retry_WhenSomethingElseRunsSinceAfterThePause_FailsAsOverlap_AndStartsNothing()
     {
         var sheet = RunningSheet();
         var dto = await SubmitPause(sheet, At(8), At(8, 30));
         _kimai.FailBeforeCreate = 2; // restart fails once; the employee starts something else meanwhile
         await Approved(dto.Id);
         _kimai.Add(At(9), null, activity: 6, project: 5);
+
+        var retried = await Retried(dto.Id);
+
+        Assert.Equal(TimeCorrectionStatus.Failed, retried.Status);
+        Assert.Contains("überschneidet", retried.Error);
+        Assert.Equal(["shorten", "pause"], retried.AppliedSteps);
+        Assert.DoesNotContain(_kimai.Writes, write => write.StartsWith("start"));
+    }
+
+    [Fact]
+    public async Task Retry_WhenSomethingStartedAfterTheCheck_TheStatusCheckStillStartsNothing()
+    {
+        var sheet = RunningSheet();
+        var dto = await SubmitPause(sheet, At(8), At(8, 30));
+        _kimai.FailBeforeCreate = 2;
+        await Approved(dto.Id);
+        // Begins after the surrounding read (like a stamp between check and restart): only the status sees it.
+        _kimai.Add(At(12, 1), null, activity: 6, project: 5);
 
         var retried = await Retried(dto.Id);
 
@@ -544,6 +562,69 @@ public sealed class RunningPauseServiceTests : IDisposable
         Assert.Equal("Eintrag wurde inzwischen geändert", result.Error);
         Assert.Empty(_kimai.Writes);
         Assert.False(_store.Find(dto.Id)!.ObservedAtApply);
+    }
+
+    [Fact]
+    public async Task Retry_WhenTheEmployeeBookedOtherWorkAfterThePauseMeanwhile_FailsInsteadOfRestartingOverIt()
+    {
+        var sheet = RunningSheet();
+        var dto = await SubmitPause(sheet, At(8), At(8, 30));
+        _kimai.FailBeforeCreate = 2; // pause created, restart fails
+        await Approved(dto.Id);
+        _kimai.Add(At(9), At(11), activity: 6, project: 5);
+
+        var retried = await Retried(dto.Id);
+
+        Assert.Equal(TimeCorrectionStatus.Failed, retried.Status);
+        Assert.Contains("überschneidet", retried.Error);
+        Assert.Equal(["shorten", "pause"], retried.AppliedSteps);
+        Assert.DoesNotContain(_kimai.Writes, write => write.StartsWith("start"));
+    }
+
+    [Fact]
+    public async Task Approve_AfterTheEmployeeStoppedMeanwhile_ChecksTheWholeRestUpToThatEnd()
+    {
+        var sheet = RunningSheet();
+        var dto = await SubmitPause(sheet, At(8), At(8, 30));
+        sheet.End = At(11);
+        _kimai.Add(At(9), At(10), activity: 6, project: 5);
+
+        var result = await Approved(dto.Id);
+
+        Assert.Equal(TimeCorrectionStatus.Failed, result.Status);
+        Assert.Contains("überschneidet", result.Error);
+        Assert.Empty(_kimai.Writes);
+    }
+
+    [Fact]
+    public async Task Approve_WhileRunning_ChecksTheRestUpToNow()
+    {
+        var sheet = RunningSheet();
+        var dto = await SubmitPause(sheet, At(8), At(8, 30));
+        _kimai.Add(At(9), At(9, 30), activity: 6, project: 5);
+
+        var result = await Approved(dto.Id);
+
+        Assert.Equal(TimeCorrectionStatus.Failed, result.Status);
+        Assert.Contains("überschneidet", result.Error);
+        Assert.Empty(_kimai.Writes);
+    }
+
+    [Fact]
+    public async Task Retry_WhenTheStartedRestWasStoppedAndOtherWorkFollows_IsNoOverlap()
+    {
+        var sheet = RunningSheet();
+        var dto = await SubmitPause(sheet, At(8), At(8, 30));
+        _kimai.FailAfterCreate = 2; // the restart exists in Kimai, the client saw an error
+        await Approved(dto.Id);
+        _kimai.Sheets.Single(entry => entry.Begin == At(8, 30)).End = At(10);
+        _kimai.Add(At(10, 30), null, activity: 6, project: 5);
+
+        var retried = await Retried(dto.Id);
+
+        Assert.Equal(TimeCorrectionStatus.Applied, retried.Status);
+        Assert.Equal(["shorten", "pause", "startWork"], retried.AppliedSteps);
+        Assert.Single(_kimai.Writes, write => write.StartsWith("start"));
     }
 
     [Fact]

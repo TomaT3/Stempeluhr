@@ -261,7 +261,12 @@ dem Kürzen richtig fortsetzt:
 | inzwischen gestoppt (Ende ≥ Pausenende) | wie bei einem gestoppten Eintrag, Rest-Arbeit bis zu diesem Ende |
 | inzwischen vor dem Pausenende gestoppt oder sonst geändert | `failed` mit „Eintrag wurde inzwischen geändert“ |
 
-Vor Schritt 3 prüft die API, dass nichts anderes läuft; sonst wird der Antrag
+Die Prüfung auf Überschneidungen umfasst die ganze Rest-Arbeit: bei einem
+laufenden Eintrag bis jetzt, bei einem inzwischen gestoppten bis zu dessen
+Ende; eine schon gestartete Rest-Arbeit zählt bis zu ihrem tatsächlichen Ende.
+Hat der Mitarbeiter etwa nach einem gescheiterten Neustart eine andere
+Tätigkeit gestempelt, scheitert „Erneut versuchen“, statt rückwirkend darüber
+zu buchen. Vor Schritt 3 prüft die API außerdem, dass nichts anderes läuft; sonst wird der Antrag
 `failed` („Eintrag wurde inzwischen geändert“) und der Admin trägt von Hand
 nach oder versucht es erneut. Eine schon laufend gestartete Rest-Arbeit
 erkennt die API an Beginn = Pausenende und gleicher Aktivität, ihr Ende spielt

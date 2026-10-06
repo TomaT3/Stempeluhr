@@ -52,6 +52,16 @@ public static class TimeCorrectionPlan
     public static DateTimeOffset? EffectiveEnd(TimeCorrectionRequest request)
         => request.Original?.End ?? (request.ObservedAtApply ? request.ObservedEndAtApply : null);
 
+    /// <summary>
+    /// Bis wann die Rest-Arbeit einer Pause reicht: bis zum (beobachteten)
+    /// Ende, bei einem laufenden Eintrag bis <paramref name="now"/>. Null bei
+    /// anderen Arten.
+    /// </summary>
+    public static DateTimeOffset? RestEnd(TimeCorrectionRequest request, DateTimeOffset now)
+        => request is { Kind: TimeCorrectionKind.AddPause, Original: not null }
+            ? EffectiveEnd(request) ?? now
+            : null;
+
     public static IReadOnlyList<PlannedStep> Steps(TimeCorrectionRequest request)
     {
         switch (request.Kind)

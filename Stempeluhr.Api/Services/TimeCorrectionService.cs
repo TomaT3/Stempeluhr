@@ -446,7 +446,9 @@ public sealed class TimeCorrectionService(
         TimeZoneInfo timeZone,
         CancellationToken cancellationToken)
     {
-        var times = new[] { request.Begin, request.End, request.PauseBegin, request.PauseEnd, request.Original?.Begin, request.Original?.End }
+        // Die Rest-Arbeit einer Pause reicht bis zum beobachteten Ende bzw. bis jetzt.
+        var restEnd = TimeCorrectionPlan.RestEnd(request, _clock.GetUtcNow());
+        var times = new[] { request.Begin, request.End, request.PauseBegin, request.PauseEnd, request.Original?.Begin, request.Original?.End, restEnd }
             .Where(time => time is not null).Select(time => time!.Value).ToArray();
         if (times.Length == 0)
         {
