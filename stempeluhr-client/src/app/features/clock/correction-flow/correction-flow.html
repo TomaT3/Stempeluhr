@@ -87,6 +87,9 @@
           }
         </dd>
       </dl>
+      @if (isRunningPause()) {
+        <p class="flow-note">Bis zur Freigabe ganz normal weiter stempeln.</p>
+      }
       @if (layout() === 'clock') {
         <label class="flow-comment">
           Kommentar (optional)
@@ -122,6 +125,9 @@
                 }
               </dd>
             </dl>
+            @if (isPendingRunningPause(request)) {
+              <p class="flow-note">Bis zur Freigabe ganz normal weiter stempeln.</p>
+            }
             @if (request.status === 'rejected' && request.decisionNote) {
               <p class="flow-reason">Grund: {{ request.decisionNote }}</p>
             }

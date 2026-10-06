@@ -55,6 +55,8 @@ export function correction(overrides: Partial<KioskCorrection> = {}): KioskCorre
     decidedAt: null,
     decisionNote: null,
     error: null,
+    observedAtApply: false,
+    observedEndAtApply: null,
     ...overrides,
   };
 }

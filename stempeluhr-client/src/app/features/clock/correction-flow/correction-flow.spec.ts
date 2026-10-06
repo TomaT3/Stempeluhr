@@ -115,14 +115,15 @@ describe('CorrectionFlow', () => {
       ]);
     });
 
-    it('offers only stopped work for a pause - and never an entry with an open request', () => {
+    it('offers work for a pause, the running entry too - but no pause and never an entry with an open request', () => {
       create();
       press('Pause nachtragen');
 
       const entries = [...root().querySelectorAll('.flow-entry')].map(entry => [...entry.children].map(child => child.textContent?.trim()).join(' '));
-      // Not the pause (22), not the running entry (23), not the one with an open request (13).
+      // Not the pause (22), not the one with an open request (13).
       expect(entries).toEqual([
         'Arbeit Mo 05.10. 07:00–11:00',
+        'Arbeit Mo 05.10. 11:30 – läuft',
         'Nachtdienst Sa 03.10. 22:00 – So 04.10. 02:00',
         'Kunde X Mi 30.09. 08:00–16:30',
       ]);
@@ -677,6 +678,143 @@ describe('CorrectionFlow', () => {
     it('reports a timesheet with an open request', () => {
       create({ start: { kind: 'setEnd', timesheetId: 13 } });
       expect(root().querySelector('.flow-error')?.textContent).toContain('offenen Antrag');
+    });
+  });
+
+  describe('Pause im laufenden Eintrag', () => {
+    it('suggests the last 30 minutes up to now, shows the running rest and sends local times', () => {
+      create();
+      press('Pause nachtragen');
+      pressEntry('11:30 – läuft');
+
+      // Jetzt ist 16:00: Pause 15:30-16:00.
+      expect(title()).toBe('Pause beginnt');
+      expect(root().querySelector('.flow-context')?.textContent).toContain('Arbeit Mo 05.10. 11:30 – läuft');
+      expect(stepper()).toEqual(['Mo 05.10.', '15', '30']);
+      press('Weiter');
+      expect(stepper()).toEqual(['Mo 05.10.', '16', '00']);
+      press('Weiter');
+
+      expect(title()).toBe('Zusammenfassung');
+      expect(lines()).toEqual([
+        'Arbeit Mo 05.10. 11:30 – läuft',
+        'Arbeit Mo 05.10. 11:30–15:30',
+        'Pause Mo 05.10. 15:30–16:00',
+        'Arbeit ab 16:00 (läuft)',
+      ]);
+      expect(root().textContent).toContain('Bis zur Freigabe ganz normal weiter stempeln.');
+      press('Absenden');
+
+      expect(submitCorrection).toHaveBeenCalledExactlyOnceWith({
+        employeeId: 'max', pin: '1234', nfcCardId: null,
+        kind: 'addPause', timesheetId: 23,
+        begin: null, end: null, pauseBegin: '2026-10-05T15:30', pauseEnd: '2026-10-05T16:00',
+        taskId: null, comment: null, source: 'term-1',
+      });
+    });
+
+    it('rounds now down to 5 minutes and never suggests a pause before the begin of the entry', () => {
+      vi.setSystemTime(new Date('2026-10-05T14:03:00Z'));
+      correctionTimesheets.mockReturnValue(of({
+        timeZone: 'Europe/Berlin',
+        shifts: [{
+          begin: '2026-10-05T15:50',
+          end: null,
+          entries: [{ id: 30, begin: '2026-10-05T15:50', end: null, kind: 'work', label: 'Arbeit', hasOpenRequest: false }],
+        }],
+      } satisfies CorrectionTimesheets));
+      create({ start: { kind: 'addPause', timesheetId: 30 } });
+
+      // Jetzt 16:03, also Ende 16:00; Beginn 15:30 läge vor dem Eintrag (15:50).
+      expect(stepper()).toEqual(['Mo 05.10.', '15', '51']);
+      press('Weiter');
+      expect(stepper()).toEqual(['Mo 05.10.', '16', '00']);
+    });
+
+    it('lets the pause end at now at the latest, its begin a minute before', () => {
+      create({ start: { kind: 'addPause', timesheetId: 23 } });
+
+      expect((root().querySelector('.hour-later') as HTMLButtonElement).disabled).toBe(true);
+      for (let i = 0; i < 5; i++) {
+        pressSelector('.minute-later-5');
+      }
+      for (let i = 0; i < 4; i++) {
+        pressSelector('.minute-later-1');
+      }
+      // 15:30 + 29 min; das Ende bleibt bei jetzt (16:00).
+      expect(stepper()).toEqual(['Mo 05.10.', '15', '59']);
+      expect((root().querySelector('.minute-later-1') as HTMLButtonElement).disabled).toBe(true);
+      press('Weiter');
+      expect(stepper()).toEqual(['Mo 05.10.', '16', '00']);
+      expect((root().querySelector('.minute-later-1') as HTMLButtonElement).disabled).toBe(true);
+      expect(root().querySelector('.flow-warn')).toBeNull();
+    });
+
+    it('cannot start the pause at the begin of the entry', () => {
+      create({ start: { kind: 'addPause', timesheetId: 23 } });
+
+      for (let i = 0; i < 3; i++) {
+        pressSelector('.hour-earlier');
+      }
+      // Eine weitere Stunde früher wäre 11:30, der Beginn des Eintrags.
+      expect(stepper()).toEqual(['Mo 05.10.', '12', '30']);
+      expect((root().querySelector('.hour-earlier') as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('opens "Pause nachtragen" for exactly the given timesheet, back leads to the kinds', () => {
+      create({ start: { kind: 'addPause', timesheetId: 23 } });
+
+      expect(correctionTimesheets).toHaveBeenCalledOnce();
+      expect(title()).toBe('Pause beginnt');
+      expect(root().querySelector('.flow-subtitle')?.textContent).toBe('Pause nachtragen');
+      press('Zurück');
+      expect(title()).toBe('Korrektur');
+    });
+
+    it('does not open a pause in a pause entry', () => {
+      create({ start: { kind: 'addPause', timesheetId: 22 } });
+
+      expect(root().querySelector('.flow-error')?.textContent).toContain('nicht gefunden');
+      expect(title()).toBe('Korrektur');
+    });
+
+    it('still offers no running entry for the end', () => {
+      create({ start: { kind: 'setEnd', timesheetId: 23 } });
+
+      expect(root().querySelector('.flow-error')?.textContent).toContain('nicht gefunden');
+    });
+
+    describe('Meine Anträge', () => {
+      const running = { begin: '2026-10-05T06:00', end: null, kind: 'work' as const, label: 'Arbeit' };
+
+      it('shows the running rest and the hint while the request waits', () => {
+        myCorrections.mockReturnValue(of([correction({
+          kind: 'addPause', end: null, original: running, pauseBegin: '2026-10-05T12:00', pauseEnd: '2026-10-05T12:30',
+        })]));
+        create();
+        press('Meine Anträge');
+
+        expect(lines()).toEqual([
+          'Arbeit Mo 05.10. 06:00 – läuft',
+          'Arbeit Mo 05.10. 06:00–12:00',
+          'Pause Mo 05.10. 12:00–12:30',
+          'Arbeit ab 12:30 (läuft)',
+        ]);
+        expect(root().querySelector('.flow-request')?.textContent).toContain('Bis zur Freigabe ganz normal weiter stempeln.');
+      });
+
+      it('shows the rest up to the end the entry had when it was approved', () => {
+        myCorrections.mockReturnValue(of([correction({
+          kind: 'addPause', status: 'applied', end: null, original: running,
+          pauseBegin: '2026-10-05T12:00', pauseEnd: '2026-10-05T12:30',
+          observedAtApply: true, observedEndAtApply: '2026-10-05T14:00',
+        })]));
+        create();
+        press('Meine Anträge');
+
+        expect(lines().at(-1)).toBe('Arbeit Mo 05.10. 12:30–14:00');
+        expect(root().textContent).not.toContain('weiter stempeln');
+      });
     });
   });
 

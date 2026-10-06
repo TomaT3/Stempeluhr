@@ -346,7 +346,11 @@ optionale Grund erscheint nach „Ablehnen“), fehlgeschlagene erneut versuchen
 oder als „Manuell in Kimai erledigt“ markieren. Ist ein Antrag nur zum Teil
 gebucht (z. B. Eintrag schon gekürzt, Pause fehlt), nennt die Seite die schon
 erledigten Schritte, denn die Nacharbeit muss vom aktuellen Stand in Kimai
-ausgehen. Korrigierte Pausen-Einträge (`setEnd`, `changeTimes`) stehen als
+ausgehen. Bei einer Pause im laufenden Eintrag steht das Original als „– läuft“
+und die Rest-Arbeit als „ab 12:30 (läuft)“; die Zeile „Laufender Eintrag“ sagt,
+was beim Genehmigen passiert bzw. ob der Eintrag dabei noch lief oder schon
+gestoppt war (dann Rest-Arbeit bis zu diesem Ende). Dafür liefert das DTO
+`observedAtApply` und `observedEndAtApply` (lokale Zeit). Korrigierte Pausen-Einträge (`setEnd`, `changeTimes`) stehen als
 „Pause“ da (`original.kind`/`original.label` im DTO). Nach jeder Aktion lädt die
 Liste neu und zeigt das Ergebnis; während eine Aktion läuft, sind die Knöpfe
 gesperrt. Die Seite ist für das Handy ausgelegt, damit der Chef unterwegs
@@ -360,14 +364,20 @@ Stundenkarte in ihrer Spalte, auf `/clock` Status und Stempelknöpfe; Name und
 Abmelden bleiben stehen. Er läuft in Schritten: Art („Pause nachtragen“,
 „Ausstempeln nachtragen“, „Schicht nachtragen“, „Zeiten ändern“, „Meine Anträge“),
 Eintrag (die Schichten der API, neueste zuerst, in einer intern scrollenden Liste;
-bei Pause nur gestoppte Arbeit, sonst jeder gestoppte Eintrag, nie einer mit
-offenem Antrag), Zeiten mit dem Stepper `shared/components/time-stepper` (Tag ±,
+bei Pause jede Arbeit, auch die laufende, sonst jeder gestoppte Eintrag, nie einer
+mit offenem Antrag), Zeiten mit dem Stepper `shared/components/time-stepper` (Tag ±,
 Stunde ±, Minute ±5 und ±1, vorbelegt, außerhalb der Regeln gesperrt),
 Zusammenfassung Vorher → Nachher und Absenden. Nur `/clock` hat ein
 Kommentarfeld (höchstens 300 Zeichen); das Terminal hat keine Tastatur. Bei einer
 400-Antwort bleibt der Mitarbeiter in der Zusammenfassung und sieht die
 Servermeldung. „Meine Anträge“ zeigt Status (bei Ablehnung mit Grund) und
-Vorher → Nachher und bietet für offene Anträge „Zurückziehen“. Läuft ein Abschnitt
+Vorher → Nachher und bietet für offene Anträge „Zurückziehen“. Bei einer Pause im
+laufenden Eintrag endet die Pause höchstens jetzt; vorbelegt sind die letzten
+30 min bis jetzt (auf 5 min abgerundet, nie vor dem Beginn des Eintrags). Die
+Zusammenfassung zeigt danach drei Zeilen, die letzte „ab 12:30 (läuft)“, und den
+Hinweis, bis zur Freigabe ganz normal weiter zu stempeln. Mit `CorrectionStart`
+(`addPause` oder `setEnd` plus Timesheet) öffnet die Seite den Ablauf direkt in
+den Zeiten eines Eintrags. Läuft ein Abschnitt
 länger als 12 h, zeigt die Statuszeile „Vergessen auszustempeln?“: Der Knopf
 stempelt über den normalen Stop-Pfad (`/api/kiosk/clock`, mit Offline-Queue) aus
 und öffnet nur nach einem online gelungenen Stop „Ausstempeln nachtragen“ für genau

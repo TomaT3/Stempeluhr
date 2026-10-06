@@ -19,6 +19,7 @@ describe('CorrectionsPage', () => {
       taskId: null, taskLabel: null,
       original: { begin: '2026-10-04T08:00', end: '2026-10-04T16:00', description: null, kind: 'work', label: 'Arbeit' },
       decidedAt: null, decidedBy: null, decisionNote: null, error: null, appliedSteps: [],
+      observedAtApply: false, observedEndAtApply: null,
       ...overrides,
     };
   }
@@ -100,6 +101,79 @@ describe('CorrectionsPage', () => {
     expect(text).toContain('Pause So 04.10.2026 12:00–12:35');
     expect(text).not.toContain('Arbeit So');
     fixture.destroy();
+  });
+
+  describe('Pause im laufenden Eintrag', () => {
+    const running = { begin: '2026-10-04T08:00', end: null, description: null, kind: 'work' as const, label: 'Arbeit' };
+
+    it('shows the running original, the running rest and what happens on approval', async () => {
+      const { fixture, http, page } = await setup();
+
+      expectList(http, 'open').flush([correction({ original: running })]);
+      fixture.detectChanges();
+
+      const lines = Array.from(page.querySelectorAll('.line')).map(line => line.textContent?.trim());
+      expect(lines).toEqual([
+        'Arbeit So 04.10.2026 08:00 – läuft',
+        'Arbeit So 04.10.2026 08:00–12:00',
+        'Pause So 04.10.2026 12:00–12:30',
+        'Arbeit ab 12:30 (läuft)',
+      ]);
+      const text = page.textContent ?? '';
+      expect(text).toContain('So 04.10.2026 08:00 – läuft');
+      expect(text).toContain('Laufender Eintrag');
+      expect(text).toContain('Beim Genehmigen startet die Rest-Arbeit nach der Pause laufend neu');
+      fixture.destroy();
+    });
+
+    it('shows that the entry was still running when it was approved', async () => {
+      const { fixture, http, page } = await setup();
+
+      expectList(http, 'open').flush([correction({
+        original: running, status: 'applied', observedAtApply: true, observedEndAtApply: null,
+        appliedSteps: ['shorten', 'pause', 'startWork'],
+      })]);
+      fixture.detectChanges();
+
+      const text = page.textContent ?? '';
+      expect(text).toContain('Beim Genehmigen lief der Eintrag noch');
+      expect(text).toContain('Arbeit ab 12:30 (läuft)');
+      fixture.destroy();
+    });
+
+    it('shows that the entry was already stopped when it was approved, and the rest up to that end', async () => {
+      const { fixture, http, page } = await setup();
+
+      expectList(http, 'open').flush([correction({
+        original: running, status: 'failed', error: 'Kimai antwortet nicht', observedAtApply: true,
+        observedEndAtApply: '2026-10-04T15:00', appliedSteps: ['shorten', 'pause'],
+      })]);
+      fixture.detectChanges();
+
+      const text = page.textContent ?? '';
+      expect(text).toContain('Beim Genehmigen schon gestoppt (Ende So 04.10.2026 15:00)');
+      expect(text).toContain('Arbeit So 04.10.2026 12:30–15:00');
+      expect(text).not.toContain('(läuft)');
+      fixture.destroy();
+    });
+
+    it('names the restart of the running rest among the applied steps', async () => {
+      const { fixture, component } = await setup(false);
+
+      expect(component.appliedSteps(correction({ appliedSteps: ['shorten', 'pause', 'startWork'] })))
+        .toBe('Eintrag gekürzt, Pause angelegt, Rest-Arbeit laufend gestartet');
+      fixture.destroy();
+    });
+
+    it('says nothing about a running entry for a stopped one', async () => {
+      const { fixture, http, page } = await setup();
+
+      expectList(http, 'open').flush([correction()]);
+      fixture.detectChanges();
+
+      expect(page.textContent).not.toContain('Laufender Eintrag');
+      fixture.destroy();
+    });
   });
 
   it('switches between open and all requests', async () => {

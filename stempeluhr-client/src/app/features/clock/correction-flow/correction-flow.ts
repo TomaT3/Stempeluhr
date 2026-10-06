@@ -31,9 +31,13 @@ export const CORRECTION_IDLE_MS = 120_000;
 
 export const MAX_COMMENT_LENGTH = 300;
 
-/** „Vergessen auszustempeln?“: gleich „Ausstempeln nachtragen“ für genau dieses Timesheet öffnen. */
+/**
+ * Direkt in die Zeitschritte für genau dieses Timesheet: „Vergessen
+ * auszustempeln?“ öffnet `setEnd`, „Pause vergessen?“ `addPause` (auch für
+ * den laufenden Eintrag).
+ */
 export interface CorrectionStart {
-  kind: 'setEnd';
+  kind: 'addPause' | 'setEnd';
   timesheetId: number;
 }
 
@@ -249,6 +253,9 @@ export class CorrectionFlow implements OnInit {
 
   /** `changeTimes` ohne geänderte Zeit ist kein Antrag. */
   protected readonly unchanged = computed(() => this.kind() === 'changeTimes' && !this.sentBegin() && !this.sentEnd());
+
+  /** Pause im laufenden Eintrag: der Mitarbeiter stempelt bis zur Freigabe normal weiter. */
+  protected readonly isRunningPause = computed(() => this.kind() === 'addPause' && this.entry()?.end === null);
 
   constructor() {
     // Nach jedem Schritt steht der Fokus auf der Überschrift: ein Knopf, der
@@ -505,13 +512,16 @@ export class CorrectionFlow implements OnInit {
     const now = this.now();
     const entry = this.entry();
     switch (this.kind()) {
-      case 'addPause':
-        if (!entry?.end) {
+      case 'addPause': {
+        if (!entry) {
           return { min: null, max: null };
         }
+        // Läuft der Eintrag noch, endet die Pause höchstens jetzt.
+        const until = entry.end ?? now;
         return field === 'pauseBegin'
-          ? { min: addMinutes(entry.begin, 1), max: addMinutes(entry.end, -1) }
-          : { min: addMinutes(this.pauseBegin(), 1), max: earlier(entry.end, addMinutes(this.pauseBegin(), MAX_PAUSE_MINUTES)) };
+          ? { min: addMinutes(entry.begin, 1), max: addMinutes(until, -1) }
+          : { min: addMinutes(this.pauseBegin(), 1), max: earlier(until, addMinutes(this.pauseBegin(), MAX_PAUSE_MINUTES)) };
+      }
       case 'setEnd':
         // Ein Ende in der Minute des bisherigen Endes wäre keine Änderung.
         return entry?.end ? { min: addMinutes(entry.begin, 1), max: addMinutes(entry.end, -1) } : { min: null, max: null };
@@ -557,8 +567,13 @@ export class CorrectionFlow implements OnInit {
     };
     switch (kind) {
       case 'addPause':
-        if (!entry?.end) {
+        if (!entry) {
           return null;
+        }
+        if (!entry.end) {
+          return pauseError()
+            ?? (pauseBegin <= entry.begin ? 'Die Pause muss nach dem Beginn des Eintrags liegen.' : null)
+            ?? (pauseEnd <= this.now() ? null : 'Die Pause darf nicht in der Zukunft enden.');
         }
         return pauseError() ?? (pauseBegin > entry.begin && pauseEnd <= entry.end ? null : 'Die Pause muss innerhalb des Eintrags liegen.');
       case 'setEnd':
@@ -598,6 +613,13 @@ export class CorrectionFlow implements OnInit {
     const length = Math.max(0, minutesBetween(entry.begin, entryEnd));
     switch (this.kind()) {
       case 'addPause': {
+        if (entry.end === null) {
+          // Läuft der Eintrag noch: die letzten 30 min bis jetzt (auf 5 min abgerundet), nie vor dem Beginn.
+          const pauseEnd = floorToStep(this.now(), 5);
+          this.pauseBegin.set(later(addMinutes(pauseEnd, -DEFAULT_PAUSE_MINUTES), addMinutes(entry.begin, 1)));
+          this.pauseEnd.set(pauseEnd);
+          break;
+        }
         // Pause = 30 min um die Mitte des Eintrags, nie über den Eintrag hinaus.
         const begin = floorToStep(addMinutes(entry.begin, Math.floor(length / 2) - DEFAULT_PAUSE_MINUTES / 2), 5);
         this.initPauseWithin(begin, entry.begin, entryEnd);
@@ -682,12 +704,15 @@ export class CorrectionFlow implements OnInit {
 
   // ------------------------------------------------------------ Hilfen
 
-  /** Bei Pause eine gestoppte Arbeit, sonst jeder gestoppte Eintrag; nie einer mit offenem Antrag. */
+  /**
+   * Bei Pause jede Arbeit, auch die laufende; sonst jeder gestoppte Eintrag;
+   * nie einer mit offenem Antrag.
+   */
   private isSelectable(kind: CorrectionKind, entry: CorrectionEntry): boolean {
-    if (entry.end === null || entry.hasOpenRequest) {
+    if (entry.hasOpenRequest) {
       return false;
     }
-    return kind === 'addPause' ? entry.kind === 'work' : true;
+    return kind === 'addPause' ? entry.kind === 'work' : entry.end !== null;
   }
 
   private openEntry(timesheetId: number): void {
@@ -794,6 +819,12 @@ export class CorrectionFlow implements OnInit {
       pauseBegin: correction.pauseBegin,
       pauseEnd: correction.pauseEnd,
       taskLabel: correction.taskLabel,
+      observedEnd: correction.observedAtApply ? correction.observedEndAtApply : null,
     };
+  }
+
+  /** Pause im laufenden Eintrag, noch nicht entschieden. */
+  protected isPendingRunningPause(correction: KioskCorrection): boolean {
+    return correction.status === 'pending' && correction.kind === 'addPause' && correction.original?.end === null;
   }
 }

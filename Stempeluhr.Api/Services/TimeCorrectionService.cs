@@ -1000,6 +1000,8 @@ public sealed class TimeCorrectionService(
             forEmployee && request.Error is not null
                 ? "Der Antrag konnte nicht in Kimai gebucht werden. Der Chef kümmert sich darum."
                 : request.Error,
-            request.AppliedSteps);
+            request.AppliedSteps,
+            request.ObservedAtApply,
+            request.ObservedAtApply ? Local(request.ObservedEndAtApply, timeZone) : null);
     }
 }

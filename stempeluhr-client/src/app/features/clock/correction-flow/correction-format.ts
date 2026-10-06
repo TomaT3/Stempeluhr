@@ -1,5 +1,5 @@
 import { CorrectionKind, CorrectionStatus, LocalDateTime } from '../../../core/models/kiosk.models';
-import { formatRange } from '../../../shared/components/time-stepper/local-time';
+import { formatRange, formatTime } from '../../../shared/components/time-stepper/local-time';
 
 /** Ein Eintrag in „Vorher“ oder „Nachher“, z. B. „Pause Mo 05.10. 12:00–12:30“. */
 export interface CorrectionLine {
@@ -21,6 +21,12 @@ export interface CorrectionChange {
   pauseEnd: LocalDateTime | null;
   /** Bezeichnung der Tätigkeit einer nachgetragenen Schicht. */
   taskLabel: string | null;
+  /**
+   * Pause in einem laufenden Eintrag: Ende, das der Eintrag beim Genehmigen
+   * schon hatte (der Mitarbeiter hat inzwischen ausgestempelt). Fehlt es,
+   * läuft die Rest-Arbeit nach der Pause weiter.
+   */
+  observedEnd?: LocalDateTime | null;
 }
 
 /** Dieselben Bezeichnungen wie auf der Admin-Seite, nur kurz für den Kiosk. */
@@ -51,7 +57,7 @@ export function afterLines(change: CorrectionChange): CorrectionLine[] {
   switch (change.kind) {
     case 'addPause':
       return original && change.pauseBegin && change.pauseEnd
-        ? split(original.label, original.begin, original.end, change.pauseBegin, change.pauseEnd)
+        ? split(original.label, original.begin, original.end ?? change.observedEnd ?? null, change.pauseBegin, change.pauseEnd)
         : [];
     case 'setEnd':
       return original ? [{ label: original.label, range: formatRange(original.begin, change.end ?? original.end) }] : [];
@@ -76,8 +82,11 @@ function split(label: string, begin: string, end: string | null, pauseBegin: str
     { label, range: formatRange(begin, pauseBegin) },
     { label: 'Pause', range: formatRange(pauseBegin, pauseEnd) },
   ];
-  // Endet die Pause am alten Ende, entfällt die Rest-Arbeit.
-  if (end !== pauseEnd) {
+  // Endet die Pause am alten Ende, entfällt die Rest-Arbeit. Läuft der
+  // Eintrag noch, startet sie nach der Pause laufend neu.
+  if (end === null) {
+    lines.push({ label, range: `ab ${formatTime(pauseEnd)} (läuft)` });
+  } else if (end !== pauseEnd) {
     lines.push({ label, range: formatRange(pauseEnd, end) });
   }
   return lines;

@@ -169,4 +169,10 @@ export interface KioskCorrection {
   decidedAt: string | null;
   decisionNote: string | null;
   error: string | null;
+  /**
+   * Pause in einem laufenden Eintrag: true, sobald beim Genehmigen der Stand
+   * festgehalten wurde; `observedEndAtApply` null = lief da noch.
+   */
+  observedAtApply: boolean;
+  observedEndAtApply: LocalDateTime | null;
 }

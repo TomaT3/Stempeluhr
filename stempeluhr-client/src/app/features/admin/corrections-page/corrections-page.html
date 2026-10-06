@@ -51,6 +51,10 @@
                 <span class="line">{{ line.label }} {{ line.range }}</span>
               }
             </dd>
+            @if (runningState(entry); as state) {
+              <dt>Laufender Eintrag</dt>
+              <dd>{{ state }}</dd>
+            }
             @if (entry.comment) {
               <dt>Kommentar</dt>
               <dd>{{ entry.comment }}</dd>

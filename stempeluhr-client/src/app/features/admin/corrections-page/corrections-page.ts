@@ -38,6 +38,7 @@ const StepLabels: Record<string, string> = {
   times: 'Zeiten geändert',
   pause: 'Pause angelegt',
   rest: 'Rest-Arbeit angelegt',
+  startWork: 'Rest-Arbeit laufend gestartet',
   work: 'Arbeit angelegt',
   work1: 'Arbeit vor der Pause angelegt',
   work2: 'Arbeit nach der Pause angelegt',
@@ -163,6 +164,26 @@ export class CorrectionsPage {
     return entry.timeZone && entry.timeZone !== this.browserTimeZone ? entry.timeZone : null;
   }
 
+  /**
+   * Pause in einem beim Antrag laufenden Eintrag: ob er beim Genehmigen noch
+   * lief oder schon gestoppt war. Davon hängt ab, ob die Rest-Arbeit laufend
+   * neu startet oder bis zum Ende angelegt wird.
+   */
+  runningState(entry: AdminTimeCorrection): string | null {
+    if (entry.kind !== 'addPause' || !entry.original || entry.original.end !== null) {
+      return null;
+    }
+    if (entry.observedAtApply) {
+      return entry.observedEndAtApply
+        ? `Beim Genehmigen schon gestoppt (Ende ${this.dateTime(entry.observedEndAtApply)}): Rest-Arbeit bis dahin.`
+        : 'Beim Genehmigen lief der Eintrag noch: Rest-Arbeit startet nach der Pause laufend neu.';
+    }
+    return entry.status === 'pending'
+      ? 'Der Eintrag läuft noch. Beim Genehmigen startet die Rest-Arbeit nach der Pause laufend neu; '
+        + 'hat der Mitarbeiter inzwischen ausgestempelt, endet sie dort.'
+      : null;
+  }
+
   /** Schritte, die Kimai bei einem gescheiterten Antrag schon ausgeführt hat. */
   appliedSteps(entry: AdminTimeCorrection): string {
     return entry.appliedSteps.map(step => StepLabels[step] ?? step).join(', ');
@@ -180,7 +201,12 @@ export class CorrectionsPage {
         if (!original || !entry.pauseBegin || !entry.pauseEnd) {
           return [];
         }
-        return this.split(original.label, original.begin, original.end, entry.pauseBegin, entry.pauseEnd);
+        return this.split(
+          original.label,
+          original.begin,
+          original.end ?? (entry.observedAtApply ? entry.observedEndAtApply : null),
+          entry.pauseBegin,
+          entry.pauseEnd);
       // Auch für Pausen-Einträge: die Bezeichnung kommt aus dem Original.
       case 'setEnd':
         return original ? [{ label: original.label, range: this.range(original.begin, entry.end ?? original.end) }] : [];
@@ -206,8 +232,11 @@ export class CorrectionsPage {
       { label, range: this.range(begin, pauseBegin) },
       { label: 'Pause', range: this.range(pauseBegin, pauseEnd) },
     ];
-    // Endet die Pause am alten Ende, entfällt die Rest-Arbeit.
-    if (end !== pauseEnd) {
+    // Endet die Pause am alten Ende, entfällt die Rest-Arbeit. Läuft der
+    // Eintrag noch, startet sie nach der Pause laufend neu.
+    if (end === null) {
+      lines.push({ label, range: `ab ${pauseEnd.slice(11, 16)} (läuft)` });
+    } else if (end !== pauseEnd) {
       lines.push({ label, range: this.range(pauseEnd, end) });
     }
     return lines;
