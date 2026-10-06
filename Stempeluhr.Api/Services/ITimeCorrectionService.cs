@@ -24,6 +24,15 @@ public interface ITimeCorrectionService
     Task<CorrectionResult<TimeCorrectionDto>> WithdrawAsync(
         CorrectionAuthRequest auth, string id, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Rein lesend: auffällige Arbeitszeit des Mitarbeiters nach den Regeln der
+    /// Telegram-Warnung (<see cref="WorkTimeLimitCalculator"/>). Bucht nichts
+    /// und sendet nichts.
+    /// </summary>
+    /// <exception cref="PinLockedException">Der Mitarbeiter ist wegen falscher PINs gesperrt.</exception>
+    Task<CorrectionResult<WorkTimeHintsDto>> GetWorkTimeHintsAsync(
+        CorrectionAuthRequest auth, CancellationToken cancellationToken = default);
+
     // ---- Chef/Admin (Admin-Seite, Telegram) ----
 
     /// <summary>Offene Anträge (Pending, Failed) oder alle gespeicherten, neueste zuerst.</summary>

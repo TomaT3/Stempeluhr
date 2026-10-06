@@ -177,6 +177,73 @@ public sealed class TimeCorrectionService(
         return CorrectionResult<TimeCorrectionDto>.Ok(ToDto(withdrawn, settings, forEmployee: true));
     }
 
+    public async Task<CorrectionResult<WorkTimeHintsDto>> GetWorkTimeHintsAsync(
+        CorrectionAuthRequest auth, CancellationToken cancellationToken = default)
+    {
+        var context = Authenticate(auth);
+        if (context is null)
+        {
+            return Unauthorized<WorkTimeHintsDto>();
+        }
+
+        var (settings, employee) = context.Value;
+        try
+        {
+            var now = _clock.GetUtcNow();
+            var windowStart = now - WorkTimeLimitCalculator.Lookback;
+            var timeZone = await ResolveTimeZoneAsync(settings, employee, cancellationToken);
+            var entries = await kimai.GetTimesheetsAsync(
+                settings, employee, LocalNaive(windowStart, timeZone), LocalNaive(now, timeZone), cancellationToken);
+
+            var withOpenRequest = store.List()
+                .Where(request => request.IsOpen && request.EmployeeId == employee.Id && request.TimesheetId is not null)
+                .Select(request => request.TimesheetId!.Value)
+                .ToHashSet();
+
+            var hints = new List<WorkTimeHintDto>();
+            foreach (var violation in WorkTimeLimitCalculator.Evaluate(entries, settings.PauseActivityId, windowStart, now))
+            {
+                // Alle Einträge im Bereich [Start, Ende], auch eine kurze Pause darin.
+                var inRange = entries
+                    .Where(entry => entry.Begin is { } begin && begin < violation.End && (entry.End ?? now) > violation.Start)
+                    .ToArray();
+                if (inRange.Any(entry => withOpenRequest.Contains(entry.Id)))
+                {
+                    continue;
+                }
+
+                var work = inRange
+                    .Where(entry => !(settings.PauseActivityId is { } pause && entry.ActivityId == pause))
+                    .ToArray();
+                var running = work.Any(entry => entry.End is null);
+                var continuous = violation.Kind == WorkTimeViolationKind.Continuous;
+                hints.Add(new WorkTimeHintDto(
+                    continuous ? "continuous" : "shift",
+                    Local(violation.Start, timeZone),
+                    running ? null : Local(violation.End, timeZone),
+                    violation.WorkedSeconds,
+                    continuous ? HintTimesheetId(work, now) : null));
+            }
+
+            return CorrectionResult<WorkTimeHintsDto>.Ok(new WorkTimeHintsDto(timeZone.Id, hints));
+        }
+        catch (Exception ex) when (IsKimaiFailure(ex, cancellationToken))
+        {
+            logger?.LogWarning(ex, "Work time hints of {Employee} could not be read", employee.Id);
+            return KimaiUnavailable<WorkTimeHintsDto>(ex);
+        }
+    }
+
+    /// <summary>Das laufende Arbeits-Timesheet, sonst der längste gestoppte Arbeits-Eintrag des Blocks.</summary>
+    private static int? HintTimesheetId(KimaiTimesheetEntryDto[] work, DateTimeOffset now)
+        => work
+            .Where(entry => entry.Id > 0)
+            .OrderByDescending(entry => entry.End is null)
+            .ThenByDescending(entry => (entry.End ?? now) - entry.Begin!.Value)
+            .ThenBy(entry => entry.Begin)
+            .Select(entry => (int?)entry.Id)
+            .FirstOrDefault();
+
     // ------------------------------------------------------------ Chef/Admin
 
     public IReadOnlyList<TimeCorrectionDto> List(bool openOnly)

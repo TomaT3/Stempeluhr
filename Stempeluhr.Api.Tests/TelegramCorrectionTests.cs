@@ -850,6 +850,7 @@ public sealed class TelegramCorrectionTests : IDisposable
             => throw new IOException("disk full");
 
         public Task<CorrectionResult<CorrectionTimesheetsDto>> GetSelectableShiftsAsync(CorrectionAuthRequest auth, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<CorrectionResult<WorkTimeHintsDto>> GetWorkTimeHintsAsync(CorrectionAuthRequest auth, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<CorrectionResult<TimeCorrectionDto>> SubmitAsync(SubmitCorrectionRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<CorrectionResult<IReadOnlyList<TimeCorrectionDto>>> ListOwnAsync(CorrectionAuthRequest auth, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<CorrectionResult<TimeCorrectionDto>> WithdrawAsync(CorrectionAuthRequest auth, string id, CancellationToken cancellationToken = default) => throw new NotSupportedException();
