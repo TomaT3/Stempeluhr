@@ -268,6 +268,23 @@ Antrag **als erledigt markieren**.
   `POST /api/kiosk/corrections/mine` (eigene Anträge der letzten 31 Tage),
   `POST /api/kiosk/corrections/{id}/withdraw` (nur eigene `pending`-Anträge,
   sonst 404 bzw. 409). Fehler kommen als 400 `{ "message": … }` auf Deutsch.
+- Arbeitszeit-Hinweise (rein lesend): `POST /api/kiosk/work-time-hints`, Body
+  wie die übrigen Kiosk-Aufrufe (`employeeId` plus `pin` **oder** `nfcCardId`,
+  PIN-Schutz wie oben). Eigenes Limit von 60 Aufrufen pro Minute und Client-IP,
+  damit die Abfrage bei jeder Anmeldung das Korrektur-Budget (30/min) nicht
+  aufbraucht. Ist Kimai nicht erreichbar, antwortet er mit 503. Die API liest
+  die Timesheets der letzten 48 h und wertet sie mit denselben festen Regeln
+  wie die Telegram-Warnung aus (über 6 h am Stück ohne Pause, über 10 h in der
+  Schicht; nur Fälle, die noch laufen oder höchstens 24 h vorbei sind;
+  Nachtschichten über Mitternacht zählen als eine Schicht). Hat ein Eintrag im
+  Bereich des Falls schon einen offenen Antrag (`pending`, `failed`), entfällt
+  der Hinweis. Die Antwort `{ "timeZone": …, "hints": [ … ] }` enthält pro Fall
+  `kind` (`continuous` oder `shift`), `begin` und `end` (lokale Zeit
+  `yyyy-MM-ddTHH:mm` in der Kimai-Zeitzone des Mitarbeiters; `end: null` =
+  Arbeit läuft noch), `workedSeconds` und `timesheetId`. Bei `continuous` ist
+  das das laufende Arbeits-Timesheet, sonst der längste gestoppte Arbeits-Eintrag
+  des Blocks; bei `shift` ist sie `null`. Der Aufruf bucht nichts, schickt kein
+  Telegram und speichert nichts.
 - Admin (Header `X-Admin-Password`, sonst 401):
   `GET /api/admin/corrections?status=open|all`,
   `POST /api/admin/corrections/{id}/approve`,

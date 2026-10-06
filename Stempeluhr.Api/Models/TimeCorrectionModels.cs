@@ -148,6 +148,19 @@ public sealed record CorrectionShiftDto(string Begin, string? End, IReadOnlyList
 /// <summary>Auswahlliste: Schichten der letzten 31 Tage, neueste zuerst.</summary>
 public sealed record CorrectionTimesheetsDto(string TimeZone, IReadOnlyList<CorrectionShiftDto> Shifts);
 
+/// <summary>
+/// Ein Hinweis auf auffällige Arbeitszeit. <paramref name="Kind"/>:
+/// <c>continuous</c> (über 6 h am Stück ohne Pause) oder <c>shift</c> (über
+/// 10 h in der Schicht). Zeiten lokal (<c>yyyy-MM-ddTHH:mm</c>);
+/// <paramref name="End"/> null = die Arbeit läuft noch.
+/// <paramref name="TimesheetId"/> (nur bei <c>continuous</c>): das laufende
+/// Arbeits-Timesheet, sonst der längste gestoppte Arbeits-Eintrag des Blocks.
+/// </summary>
+public sealed record WorkTimeHintDto(string Kind, string Begin, string? End, int WorkedSeconds, int? TimesheetId);
+
+/// <summary>Hinweise nach der Anmeldung (rein lesend), Zeiten in <paramref name="TimeZone"/>.</summary>
+public sealed record WorkTimeHintsDto(string TimeZone, IReadOnlyList<WorkTimeHintDto> Hints);
+
 public sealed record CorrectionOriginalDto(
     string Begin,
     string? End,

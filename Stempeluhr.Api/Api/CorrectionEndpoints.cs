@@ -55,6 +55,17 @@ public static class CorrectionEndpoints
                 ?? ToResult(await corrections.WithdrawAsync(request, id, cancellationToken)))
             .AddEndpointFilter(PinLockedException.Filter);
 
+        // Read only (books and sends nothing); runs after every login, hence its own IP budget.
+        app.MapPost("/api/kiosk/work-time-hints", async (
+            HttpRequest httpRequest,
+            CorrectionAuthRequest request,
+            ITimeCorrectionService corrections,
+            [FromKeyedServices(KioskRateLimiters.WorkTimeHintKey)] RequestRateLimiter limiter,
+            CancellationToken cancellationToken) =>
+            TooManyRequests(httpRequest, limiter)
+                ?? ToResult(await corrections.GetWorkTimeHintsAsync(request, cancellationToken)))
+            .AddEndpointFilter(PinLockedException.Filter);
+
         return app;
     }
 

@@ -86,6 +86,7 @@ public static class KioskRateLimiters
     public const string SyncKey = "kiosk-sync";
     public const string IdentifyKey = "kiosk-identify";
     public const string CorrectionKey = "kiosk-corrections";
+    public const string WorkTimeHintKey = "kiosk-work-time-hints";
 
     public static IServiceCollection AddKioskRateLimiters(this IServiceCollection services)
     {
@@ -101,6 +102,9 @@ public static class KioskRateLimiters
         // own requests), each of them hits Kimai - and the PIN or card is the
         // only credential, so the IP budget also caps guessing.
         services.AddKeyedSingleton(CorrectionKey, (_, _) => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 30));
+        // Work time hints run after every login (one Kimai read each): their
+        // own budget keeps them from using up the correction budget.
+        services.AddKeyedSingleton(WorkTimeHintKey, (_, _) => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 60));
         return services;
     }
 }

@@ -116,4 +116,21 @@ public sealed class RequestRateLimiterTests
         Assert.True(identify.TryAcquire("1.2.3.4", 60));
         Assert.False(identify.TryAcquire("1.2.3.4"));
     }
+
+    [Fact]
+    public void WorkTimeHintLimiter_HasItsOwn60PerMinuteBudget_ApartFromTheCorrectionBudget()
+    {
+        using var provider = new ServiceCollection().AddKioskRateLimiters().BuildServiceProvider();
+
+        var hints = provider.GetRequiredKeyedService<RequestRateLimiter>(KioskRateLimiters.WorkTimeHintKey);
+        var corrections = provider.GetRequiredKeyedService<RequestRateLimiter>(KioskRateLimiters.CorrectionKey);
+
+        Assert.NotSame(hints, corrections);
+        Assert.True(hints.TryAcquire("1.2.3.4", 60));
+        Assert.False(hints.TryAcquire("1.2.3.4"));
+
+        // The exhausted hint budget must not touch the corrections.
+        Assert.True(corrections.TryAcquire("1.2.3.4", 30));
+        Assert.False(corrections.TryAcquire("1.2.3.4"));
+    }
 }
