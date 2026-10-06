@@ -41,6 +41,16 @@
           detail="Prüfen"
           (pressed)="openLastShiftHint()" />
       }
+      @if (isUnlocked()) {
+        <!-- Korrektur beantragen: nur online (keine Queue). Unter den Hinweisen
+             aus demselben Grund: Offline hat die Mitarbeiter-Spalte neben dem
+             Banner keinen Platz für einen weiteren Knopf. -->
+        <app-correction-entry
+          layout="terminal"
+          [label]="correctionLabel()"
+          [disabled]="correctionBlocked()"
+          (pressed)="openCorrection()" />
+      }
     }
   </header>
 
@@ -92,10 +102,10 @@
             @if (employeeTasks().length > 0 || (status.startedAt && !isOffline())) {
               <em class="task-label">
                 @if (employeeTasks().length > 0) {
-                  {{ currentTaskLabel() }}
+                  <span class="task-name">{{ currentTaskLabel() }}</span>
                 }
                 @if (status.startedAt && !isOffline()) {
-                  seit {{ status.startedAt | date: 'HH:mm' }}
+                  <span>seit {{ status.startedAt | date: 'HH:mm' }}</span>
                 }
               </em>
             }
@@ -116,16 +126,6 @@
           <strong>{{ isOffline() ? 'Status unbekannt (offline)' : 'Status unbekannt' }}</strong>
           <span>Bitte Aktion waehlen</span>
         </div>
-      }
-
-      @if (isUnlocked() && !correctionOpen()) {
-        <!-- Korrektur beantragen: nur online (keine Queue). Bewusst in der
-             Mitarbeiter-Spalte, damit die Stempelknöpfe ihre Größe behalten. -->
-        <app-correction-entry
-          layout="terminal"
-          [label]="correctionLabel()"
-          [disabled]="correctionBlocked()"
-          (pressed)="openCorrection()" />
       }
 
       <p class="message" aria-live="polite">{{ message() }}</p>

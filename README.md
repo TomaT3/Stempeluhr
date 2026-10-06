@@ -402,8 +402,9 @@ werden bei jedem Identitätswechsel und `back()` geleert, eine verspätete
 Antwort nach einem Identitätswechsel oder einer Aktion wird verworfen.
 
 Alle drei Hinweise stehen auf `/clock` unter dem Status, am Terminal in der
-Uhr-Spalte unter Datum und Uhrzeit: In der Mitarbeiter-Spalte schöbe jeder
-weitere Knopf die Stundenkarte bei 800×480 unter den Rand. Solange der
+Uhr-Spalte unter Datum und Uhrzeit, darunter der Knopf „Korrektur“: In der
+Mitarbeiter-Spalte schöbe jeder weitere Knopf die Stundenkarte bei 800×480
+unter den Rand, offline neben dem Banner erst recht. Solange der
 Korrekturablauf offen ist, blendet das Terminal sie aus.
 
 Der Korrekturablauf lebt so lange wie die Sitzung: Neue Anmeldung,

@@ -539,6 +539,8 @@ describe('TerminalPage', () => {
       const caption = fixture.nativeElement.querySelector('.task-label')?.textContent ?? '';
       expect(caption).toContain('Büro');
       expect(caption).toMatch(/seit \d{2}:\d{2}/);
+      // Only the task name may be shortened (800x480), "seit" stays whole.
+      expect(fixture.nativeElement.querySelector('.task-label .task-name')?.textContent?.trim()).toBe('Büro');
 
       component.openTaskPicker();
       fixture.detectChanges();
@@ -1652,9 +1654,11 @@ describe('TerminalPage', () => {
         const fixture = login(working);
         expect(fixture.nativeElement.querySelector('.action-panel')).not.toBeNull();
         expect(fixture.nativeElement.querySelector('.hours-overview')).not.toBeNull();
-        // Korrektur sits in the employee column, never among the big stamp buttons.
+        // Korrektur sits in the clock column: never among the big stamp buttons,
+        // and offline the employee column has no room next to the banner.
         expect(fixture.nativeElement.querySelector('.action-panel app-correction-entry')).toBeNull();
-        expect(fixture.nativeElement.querySelector('.session-panel app-correction-entry')).not.toBeNull();
+        expect(fixture.nativeElement.querySelector('.session-panel app-correction-entry')).toBeNull();
+        expect(entryButton(fixture)?.closest('.terminal-clock')).not.toBeNull();
 
         openFlow(fixture);
 
@@ -1681,6 +1685,9 @@ describe('TerminalPage', () => {
         const hint = fixture.nativeElement.querySelector('.forgot-hint') as HTMLElement;
         expect(hint.closest('.terminal-clock')).not.toBeNull();
         expect(fixture.nativeElement.querySelector('.session-panel .forgot-hint')).toBeNull();
+        // The hint comes first, Korrektur below it.
+        const entries = [...fixture.nativeElement.querySelectorAll('.terminal-clock app-correction-entry button')];
+        expect(entries.map((button: Element) => button.classList.contains('forgot-hint'))).toEqual([true, false]);
 
         openFlow(fixture);
         expect(fixture.nativeElement.querySelector('.forgot-hint')).toBeNull();
