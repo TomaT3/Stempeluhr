@@ -4,7 +4,8 @@ using System.Text.Json;
 namespace Stempeluhr.Api.Services;
 
 /// <summary>Antwort der Bot API: <see cref="Result"/> ist nur bei <see cref="Ok"/> gesetzt.</summary>
-public sealed record TelegramApiResponse(bool Ok, int StatusCode, JsonElement? Result, string? Description)
+public sealed record TelegramApiResponse(
+    bool Ok, int StatusCode, JsonElement? Result, string? Description, long? MigrateToChatId = null)
 {
     /// <summary>Telegram verweigert ein Edit ohne Änderung mit 400 - das Ziel ist dann erreicht.</summary>
     public bool IsNotModified => Description?.Contains("message is not modified", StringComparison.OrdinalIgnoreCase) == true;
@@ -76,9 +77,16 @@ public sealed class TelegramBotApi(IHttpClientFactory httpClientFactory)
                 ? text.GetString()
                 : null;
             JsonElement? result = root.TryGetProperty("result", out var value) ? value.Clone() : null;
+            // Wurde eine Gruppe zur Supergruppe, hat sie eine neue Chat-ID; Telegram nennt sie im Fehler.
+            long? migrateToChatId = root.TryGetProperty("parameters", out var parameters)
+                && parameters.ValueKind == JsonValueKind.Object
+                && parameters.TryGetProperty("migrate_to_chat_id", out var migrated)
+                && migrated.TryGetInt64(out var newChatId)
+                    ? newChatId
+                    : null;
             return new TelegramApiResponse(
                 response.IsSuccessStatusCode && root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True,
-                (int)response.StatusCode, result, description);
+                (int)response.StatusCode, result, description, migrateToChatId);
         }
         catch (JsonException)
         {
