@@ -47,8 +47,11 @@ public sealed class TelegramTimeCorrectionNotifier(
                 || !TryReadMessage(message, out var chatId, out var messageId))
             {
                 logger?.LogWarning(
-                    "Telegram correction message for {Id} was not sent ({StatusCode}): {Description}",
-                    request.Id, response.StatusCode, response.Description);
+                    "Telegram correction message for {Id} was not sent ({StatusCode}): {Description}{Hint}",
+                    request.Id, response.StatusCode, response.Description,
+                    response.MigrateToChatId is { } newChatId
+                        ? $" - the chat was upgraded to a supergroup; set TelegramCorrectionChatId to {newChatId}"
+                        : string.Empty);
                 return;
             }
 

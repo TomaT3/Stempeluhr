@@ -160,6 +160,26 @@ public sealed class TelegramCorrectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Submit_ChatUpgradedToSupergroup_LogsTheNewChatId()
+    {
+        _telegram.Responder = _ => FakeTelegram.Json(
+            new
+            {
+                ok = false,
+                error_code = 400,
+                description = "Bad Request: group chat was upgraded to a supergroup chat",
+                parameters = new { migrate_to_chat_id = FakeTelegram.CorrectionChatNumber },
+            },
+            HttpStatusCode.BadRequest);
+
+        var dto = await SubmitPauseAsync();
+
+        Assert.Null(_store.Find(dto.Id)!.TelegramMessageId);
+        var warning = Assert.Single(_notifierLog.Entries, entry => entry.Level == LogLevel.Warning);
+        Assert.Contains($"set TelegramCorrectionChatId to {FakeTelegram.CorrectionChatNumber}", warning.Message);
+    }
+
+    [Fact]
     public async Task Decisions_TelegramDown_DoNotChangeTheBooking()
     {
         var dto = await SubmitPauseAsync();
