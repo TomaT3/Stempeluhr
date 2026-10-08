@@ -497,9 +497,10 @@ export class CorrectionFlow implements OnInit {
       const length = Math.max(1, minutesBetween(previous, this.pauseEnd()));
       this.pauseEnd.set(this.clamp(addMinutes(value, length), this.bounds('pauseEnd', value)));
     }
-    // Eine Schicht bleibt höchstens 16 h lang und endet nie vor ihrem Beginn.
+    // Eine nachgetragene Schicht behält ihre Länge, wenn ihr Beginn wandert - höchstens 16 h und nie über jetzt hinaus.
     if (field === 'begin' && this.kind() === 'addShift') {
-      this.end.set(this.clamp(this.end(), this.bounds('end', value)));
+      const length = Math.max(1, minutesBetween(previous, this.end()));
+      this.end.set(this.clamp(addMinutes(value, length), this.bounds('end', value)));
     }
   }
 
@@ -531,8 +532,9 @@ export class CorrectionFlow implements OnInit {
           : { min: addMinutes(this.begin(), 1), max: earlier(now, addMinutes(this.begin(), MAX_SHIFT_MINUTES)) };
       case 'addShift':
         switch (field) {
+          // Nicht am Ende festgemacht: das Ende wandert mit (setField), sonst sperrt ein Tag zurück den Weg vor.
           case 'begin':
-            return { min: addMinutes(now, -MAX_AGE_MINUTES), max: addMinutes(this.end(), -1) };
+            return { min: addMinutes(now, -MAX_AGE_MINUTES), max: addMinutes(now, -1) };
           case 'end':
             return { min: addMinutes(begin, 1), max: earlier(now, addMinutes(begin, MAX_SHIFT_MINUTES)) };
           case 'pauseBegin':
