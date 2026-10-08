@@ -74,6 +74,13 @@ dd {
   overscroll-behavior: contain;
 }
 
+/* Auf /clock hat der Ablauf keine feste Höhe und die Seite scrollt: ein
+   Scroll-Container mit contain würde das Mausrad über der Liste schlucken. */
+:host(.layout-clock) .flow-body {
+  overflow: visible;
+  overscroll-behavior: auto;
+}
+
 .flow-list,
 .flow-shift {
   display: grid;
@@ -109,9 +116,11 @@ dd {
   cursor: default;
 }
 
+/* Ein aktiver Knopf wie die Korrekturarten (kein Grau - das sah deaktiviert
+   aus), abgesetzt durch Abstand und Primärrand. */
 .flow-mine {
-  background: var(--color-surface-subtle);
-  color: var(--color-muted);
+  margin-top: 6px;
+  border-color: var(--color-primary);
 }
 
 .flow-entry {

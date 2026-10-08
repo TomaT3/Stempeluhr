@@ -13,6 +13,14 @@
 // ~20px Höhe, davon liegt der Rest im Seitenrand); mit Banner und Stundenkarte
 // waere die Karte sonst teilweise verdeckt.
 @media (min-width: 701px) {
+  // Online-Sitzung: nur der Inhalt nimmt die Resthöhe, sonst bleibt unter
+  // der Stundenkarte ein Streifen frei; die Karte endet über dem Badge.
+  // Vor der Banner-Regel (gleich spezifisch).
+  .terminal.session {
+    grid-template-rows: minmax(0, 1fr) auto;
+    min-height: calc(100vh - clamp(20px, 4vw, 44px) - 12px);
+  }
+
   // Nur die Inhaltszeile nimmt die Resthöhe, nicht das Banner (in der
   // Sitzung folgt die Stundenkarte als implizite Zeile).
   .terminal:has(.offline-banner) {

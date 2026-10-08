@@ -346,6 +346,22 @@ describe('CorrectionFlow', () => {
       expect((root().querySelector('.minute-later-1') as HTMLButtonElement).disabled).toBe(true);
     });
 
+    it('addShift: moving the begin a day back and forward again restores begin and end (#120)', () => {
+      create();
+      press('Schicht nachtragen');
+      expect(stepper()[0]).toBe('Mo 05.10.');
+
+      pressSelector('.day-earlier');
+      expect(stepper()[0]).toBe('So 04.10.');
+      expect((root().querySelector('.day-later') as HTMLButtonElement).disabled).toBe(false);
+
+      pressSelector('.day-later');
+      press('Weiter');
+      press('Weiter');
+      press('Ohne Pause');
+      expect(lines()).toEqual(['kein Eintrag', 'Büro Mo 05.10. 08:00–16:00']);
+    });
+
     describe('Zeiten ändern bei einem Eintrag über 16 Stunden (vergessenes Ausstempeln)', () => {
       const long: CorrectionTimesheets = {
         timeZone: 'Europe/Berlin',
