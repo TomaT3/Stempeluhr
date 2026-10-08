@@ -82,6 +82,8 @@ jobs:
           python3 tools/pi-nfc-agent/test_reader_session.py
           python3 tools/pi-nfc-agent/test_pcsc_maintenance.py
           python3 tools/pi-nfc-agent/test_kiosk_setup.py
+          # As root as well: the updater's privilege drop into the kiosk home.
+          sudo python3 tools/pi-nfc-agent/test_kiosk_setup.py
 
       - name: Pi agent bundle + updater test
         run: |

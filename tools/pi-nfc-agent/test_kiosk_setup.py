@@ -48,7 +48,22 @@ class KioskSetupTests(unittest.TestCase):
         (folder / "cmdline").write_bytes(b"\0".join(arg.encode() for arg in args) + b"\0")
 
     def ensure_touch(self):
-        return kiosk_setup.ensure_touch(self.home, os.getuid(), os.getgid(), self.system_rc, self.proc)
+        return kiosk_setup.ensure_touch(self.home, kiosk_setup.emulated_touch_entries(self.system_rc),
+                                        kiosk_setup.labwc_merges_config(self.proc))
+
+    def configure_quietly(self, user):
+        """configure() with patched system paths; the forked child's traceback is muted."""
+        stderr = os.dup(2)
+        with open(os.devnull, "w") as devnull, \
+                patch.object(kiosk_setup, "SYSTEM_RC", self.system_rc), \
+                patch.object(kiosk_setup, "PROC", self.proc), \
+                contextlib.redirect_stdout(io.StringIO()):
+            os.dup2(devnull.fileno(), 2)
+            try:
+                return kiosk_setup.configure(user, report_skips=True)
+            finally:
+                os.dup2(stderr, 2)
+                os.close(stderr)
 
     def test_detects_labwc_merge_flag(self):
         self.assertIsNone(kiosk_setup.labwc_merges_config(self.proc))
@@ -109,6 +124,52 @@ class KioskSetupTests(unittest.TestCase):
         self.assertEqual(content, AUTOSTART.replace("Exec=chromium ", "Exec=chromium --disable-pinch "))
         self.assertEqual(self.autostart.stat().st_mode & 0o777, 0o600)
 
+    def test_planted_temporary_symlinks_are_not_followed(self):
+        # The former fixed temporary names; a kiosk user could pre-create them.
+        victim = self.root / "victim"
+        victim.write_text("geschützt\n", encoding="utf-8")
+        self.autostart.parent.mkdir(parents=True)
+        self.autostart.write_text(AUTOSTART, encoding="utf-8")
+        self.user_rc.parent.mkdir(parents=True)
+        planted = [self.autostart.with_name(self.autostart.name + ".tmp"),
+                   self.user_rc.with_name(self.user_rc.name + ".tmp")]
+        for link in planted:
+            link.symlink_to(victim)
+        self.run_process(60, "labwc", "-m")
+
+        self.assertIsNotNone(kiosk_setup.ensure_pinch_disabled(self.home))
+        self.assertIn("Touch ohne Mausemulation", self.ensure_touch())
+
+        self.assertEqual(victim.read_text(encoding="utf-8"), "geschützt\n")
+        self.assertTrue(all(link.is_symlink() for link in planted))
+        self.assertIn("--disable-pinch", self.autostart.read_text(encoding="utf-8"))
+        self.assertFalse(self.autostart.is_symlink())
+        leftovers = {path.name for path in self.home.rglob(".*") if path.is_file()}
+        self.assertEqual(leftovers, set())
+
+    @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "needs root (privilege drop)")
+    def test_root_accesses_home_only_with_the_users_rights(self):
+        nobody = pwd.getpwnam("nobody")
+        self.root.chmod(0o755)
+        root_only = self.root / "root-only"
+        root_only.mkdir(mode=0o755)
+        self.autostart.parent.mkdir(parents=True)
+        self.autostart.write_text(AUTOSTART, encoding="utf-8")
+        for path in (self.home, self.home / ".config", self.autostart.parent, self.autostart):
+            os.chown(path, nobody.pw_uid, nobody.pw_gid)
+        user = pwd.struct_passwd(("kiosk", "x", nobody.pw_uid, nobody.pw_gid, "", str(self.home), "/bin/sh"))
+
+        # labwc not running: only the autostart changes, written by the user.
+        self.assertTrue(self.configure_quietly(user))
+        self.assertIn("--disable-pinch", self.autostart.read_text(encoding="utf-8"))
+        self.assertEqual(self.autostart.stat().st_uid, nobody.pw_uid)
+
+        # The user redirects the labwc folder to a root-owned one: root must not write there.
+        (self.home / ".config/labwc").symlink_to(root_only)
+        self.run_process(70, "labwc", "-m")
+        self.assertFalse(self.configure_quietly(user))
+        self.assertEqual(list(root_only.iterdir()), [])
+
     def test_discover_configures_only_kiosk_users_and_stays_quiet_on_skips(self):
         self.autostart.parent.mkdir(parents=True)
         self.autostart.write_text(AUTOSTART, encoding="utf-8")
@@ -120,7 +181,9 @@ class KioskSetupTests(unittest.TestCase):
         with patch.object(kiosk_setup, "SYSTEM_RC", self.system_rc), \
                 patch.object(kiosk_setup, "PROC", self.proc), \
                 patch("pwd.getpwall", return_value=users), \
+                patch("os.geteuid", return_value=1000), \
                 contextlib.redirect_stdout(output):
+            # Unprivileged run: no fork, so the output stays in this process.
             self.assertEqual(kiosk_setup.main(["--discover"]), 0)
 
         # labwc is not running: no touch hint every 15 minutes, only the change.
