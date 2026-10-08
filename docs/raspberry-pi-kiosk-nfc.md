@@ -70,8 +70,22 @@ alle anderen Einstellungen beibehalten:
 }
 ```
 
-Die Datei über den vorhandenen sicheren Wartungszugang als
-`/root/stempeluhr-terminal.token` auf den Pi übertragen (`chmod 600`).
+Die Datei über den vorhandenen sicheren Wartungszugang (SSH) auf den Pi
+übertragen, z. B. vom Admin-Rechner (PowerShell):
+
+```powershell
+scp .\terminal.token stempeluhradmin@<pi-hostname>:/home/stempeluhradmin/stempeluhr-terminal.token
+```
+
+Auf dem Pi (per SSH als `stempeluhradmin`) nach `/root` verschieben und
+schützen:
+
+```bash
+sudo mv /home/stempeluhradmin/stempeluhr-terminal.token /root/stempeluhr-terminal.token
+sudo chown root:root /root/stempeluhr-terminal.token
+sudo chmod 600 /root/stempeluhr-terminal.token
+```
+
 Die Terminal-ID muss in Server-Konfiguration, Agent und Kiosk-URL übereinstimmen.
 Das Token nicht in URLs, Browser oder Shell-Befehlsargumente kopieren.
 Den ACR122U **vor** dem Installer anschließen (`lsusb` muss `072f:2200`
@@ -85,7 +99,18 @@ curl -fsSL https://<host>/pi/install.sh | sudo bash -s -- \
   --terminal-token-file /root/stempeluhr-terminal.token
 ```
 
-Nach der Installation die Übertragungsdateien löschen. Das Token bleibt in
+Nach der Installation die Übertragungsdateien löschen, auf dem Pi und auf dem
+Admin-Rechner:
+
+```bash
+sudo rm /root/stempeluhr-terminal.token
+```
+
+```powershell
+Remove-Item .\terminal.token
+```
+
+Das Token bleibt in
 `/etc/stempeluhr-nfc-agent/config.json` (`root:stempeluhr`, `640`). Bestehende
 Konfigurationen bleiben erhalten; `--terminal-token-file` ergänzt oder ersetzt
 nur das Token. Ohne diese Option funktionieren alte Konfigurationen weiter,
