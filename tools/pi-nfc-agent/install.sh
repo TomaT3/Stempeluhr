@@ -178,14 +178,20 @@ if [ -n "$KIOSK_USER" ]; then
 
   log "Chromium-Autostart für '$KIOSK_USER' -> $KIOSK_URL"
   install -d -o "$KIOSK_USER" -g "$KIOSK_USER" "$KIOSK_HOME/.config" "$KIOSK_HOME/.config/autostart"
+  # --disable-pinch: mit echten Touch-Events (siehe kiosk_setup.py) sonst Zwei-Finger-Zoom.
   cat > "$KIOSK_HOME/.config/autostart/stempeluhr-kiosk.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Stempeluhr Kiosk
-Exec=chromium --password-store=basic --no-first-run --no-default-browser-check --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --app=$KIOSK_URL
+Exec=chromium --disable-pinch --password-store=basic --no-first-run --no-default-browser-check --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --app=$KIOSK_URL
 X-GNOME-Autostart-enabled=true
 EOF
   chown "$KIOSK_USER:$KIOSK_USER" "$KIOSK_HOME/.config/autostart/stempeluhr-kiosk.desktop"
+
+  # labwc meldet den Touchscreen sonst als Maus: Wischen markiert Text statt zu scrollen.
+  log "Touch für '$KIOSK_USER' ohne Mausemulation"
+  python3 "$AGENT_DIR/current/kiosk_setup.py" --user "$KIOSK_USER" \
+    || log "WARNUNG: Kiosk-Touch-Einrichtung fehlgeschlagen; der Updater versucht es erneut."
 fi
 
 log "Fertig. Terminal '$TERMINAL_ID' holt Agent-Updates jetzt selbst von $SERVER."

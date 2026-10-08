@@ -433,6 +433,16 @@ describe('TerminalPage', () => {
     expect(document.documentElement.dataset['theme']).toBe('light');
   });
 
+  it('unterdrueckt am Touch-Kiosk das Kontextmenue bei langem Druck', () => {
+    const fixture = TestBed.createComponent(TerminalPage);
+    fixture.detectChanges();
+
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    fixture.nativeElement.querySelector('.keypad button').dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it('does not claim "offline" while the backend is answering', () => {
     // ONLINE cache hit: the employee is unlocked before the server's status
     // answer arrives - the kiosk may say "unbekannt", but not "offline".

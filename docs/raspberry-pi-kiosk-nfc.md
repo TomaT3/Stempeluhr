@@ -151,13 +151,47 @@ ausführen:
   `127.0.0.1` nur nach einem Erlaubnis-Dialog erreichen – im Kiosk würde der
   den Kartenleser stilllegen. Wirkt ab dem nächsten Chromium-Start.
 - mit `--kiosk-user`: Chromium-Autostart auf
-  `https://<host>/terminal?terminalId=<id>`
+  `https://<host>/terminal?terminalId=<id>` (mit `--disable-pinch`) und
+  Touch ohne Mausemulation (siehe [Touchscreen](#touchscreen-wischen-statt-markieren))
 
 Ein Pi, der nach der früheren Anleitung von Hand eingerichtet wurde, wird mit
 demselben Befehl ohne Parameter umgestellt (Werte kommen aus der vorhandenen
 `config.json`, der vorhandene Autostart bleibt) oder zentral mit
 `tools/deploy/pi-deploy.sh bootstrap`. Danach einmal neu starten, damit
 Chromium die Policy liest. Kontrolle im Kiosk-Browser: `chrome://policy`.
+
+### Touchscreen: Wischen statt Markieren
+
+Raspberry Pi OS (Wayland/labwc) liefert `/etc/xdg/labwc/rc.xml` mit
+`mouseEmulation="yes"` für die DSI-Touchscreens aus. labwc macht daraus
+Mausereignisse: Wischen über eine Liste markiert Text, statt zu scrollen.
+`kiosk_setup.py` aus dem Agent-Bundle legt deshalb für den Kiosk-Benutzer
+`~/.config/labwc/rc.xml` an. Darin stehen dieselben `<touch>`-Einträge mit
+`mouseEmulation="no"`. Ein Beispiel für stempeluhr-02:
+
+```xml
+<?xml version="1.0"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <touch deviceName="11-0038 generic ft5x06 (79)" mapToOutput="DSI-2" mouseEmulation="no" />
+</openbox_config>
+```
+
+- Die Datei entsteht nur, wenn labwc mit `-m`/`--merge-config` läuft (sie
+  ergänzt dann die Systemdatei). Ohne Merge würde sie die übrige
+  Konfiguration ersetzen.
+- Eine vorhandene Benutzer-`rc.xml` bleibt unverändert. Der Installer meldet
+  das, die Umstellung erfolgt dann von Hand.
+- Mit echten Touch-Events könnte man mit zwei Fingern zoomen. Das sperren
+  `--disable-pinch` in der Chromium-Startzeile und die Terminal-Seite. Die
+  Terminal-Seite verhindert außerdem Textauswahl und Kontextmenü bei langem
+  Druck.
+
+Bestehende Terminals brauchen keinen erneuten Installer-Lauf: Der Updater
+führt `kiosk_setup.py` bei jedem Lauf für jeden Benutzer mit
+`~/.config/autostart/stempeluhr-kiosk.desktop` aus. Er ergänzt dabei auch
+`--disable-pinch` im vorhandenen Autostart. Beides wirkt nach dem nächsten
+Neustart. Ob Touch ankommt, zeigt `sudo libinput debug-events` (`TOUCH_DOWN`)
+und am Kiosk das Scrollen per Wischen, etwa in der Korrektur-Liste.
 
 ## 4. Prüfen
 
