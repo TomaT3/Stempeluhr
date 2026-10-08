@@ -415,12 +415,22 @@ ist.
 
 ### Telegram-Benachrichtigung (optional)
 
-Bei jedem echten Live-Stempel (nicht bei No-ops oder erfolgreich übernommenen
-Offline-Nachträgen) schickt die API eine Nachricht wie
+Bei jedem echten Live-Stempel (nicht bei No-ops) schickt die API eine Nachricht wie
 `🟢 Anna Mustermann · eingestempelt um 08:12` in eine Telegram-Gruppe
 (Tätigkeitswechsel: `🔄 Anna Mustermann · wechselt zu Kunde X um 10:15`;
 mit weiteren Tätigkeiten nennt auch das Einstempeln die Tätigkeit:
 `🟢 Anna Mustermann · eingestempelt auf Kunde X um 08:12`).
+Offline-Nachträge, die Kimai tatsächlich ändern, melden sich ebenso, mit der
+Zeit des Stempels am Terminal und dem Zusatz „nachgetragen“, z. B.
+`🟡 Anna Mustermann · Pause um 12:03 (nachgetragen)`. Mehrere Nachträge eines
+Mitarbeiters aus einer Verarbeitungsrunde (Sync-Anfrage oder Outbox-Flush nach
+einem Kimai-Ausfall) kommen als eine Nachricht `📥 Anna Mustermann · 2 Stempel
+nachgetragen` mit einer Zeile je Stempel, höchstens 15 Zeilen. Liegt ein
+Stempel nicht am heutigen Tag, steht das Datum dabei (`am 07.10. um 23:40`).
+Nachträge, die zum No-op werden („Lief bereits“, „Lief nicht“, veraltet),
+wiederholte Event-IDs und Ablehnungen melden sich nicht als Stempel. Jeder
+Nachtrag meldet sich höchstens einmal, auch wenn er nach einem Ausfall erst
+später übernommen wird. Ein gescheiterter Versand wird nicht wiederholt.
 Endgültig abgelehnte Offline-Nachträge, deren Mitarbeiter erfolgreich
 authentifiziert wurde, melden sich zusätzlich als Warnung mit Aktion,
 Zeitpunkt in der Kimai-Zeitzone des Mitarbeiters (falls nicht abrufbar: UTC),

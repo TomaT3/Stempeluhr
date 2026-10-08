@@ -125,6 +125,182 @@ public sealed class OfflineClockServiceTests
         }
     }
 
+    // ---- Telegram notice for replayed stamps (issue #117) ----
+
+    [Fact]
+    public async Task ReplayedStamps_AreAnnouncedOncePerRound_WithTheirOriginalTime()
+    {
+        // Issue #117: stamped in online, the pause began and ended offline.
+        var (service, stamps, kimai) = CreateServiceWithStamps();
+        kimai.SimulateLiveStart(T08);
+        var batch = new[] { Kiosk("pause-1", "pauseStart", T12), Kiosk("pause-2", "pauseEnd", T1230) };
+
+        var result = await service.SyncKioskAsync(batch);
+
+        Assert.All(result.Results, entry => Assert.Equal("applied", entry.Status));
+        var round = Assert.Single(stamps.Rounds);
+        Assert.Equal(
+            [("pauseStart", T12), ("pauseEnd", T1230)],
+            round.Select(stamp => (stamp.Action, stamp.PerformedAt)));
+        Assert.All(round, stamp => Assert.Equal(("max", "Max Mustermann"), (stamp.EmployeeId, stamp.EmployeeName)));
+
+        // A re-send after a lost response is a duplicate - no second notice.
+        var resent = await service.SyncKioskAsync(batch);
+        Assert.All(resent.Results, entry => Assert.Equal("duplicate", entry.Status));
+        Assert.Single(stamps.Rounds);
+    }
+
+    [Fact]
+    public async Task NoOpReplays_AreNotAnnounced()
+    {
+        var (service, stamps, kimai) = CreateServiceWithStamps();
+        Assert.Contains("Lief nicht", Assert.Single((await service.SyncKioskAsync([Kiosk("n1", "stop", T08)])).Results).Message);
+
+        kimai.SimulateLiveStart(T10);
+        var results = (await service.SyncKioskAsync([
+            Kiosk("n2", "start", T08),      // already running
+            Kiosk("n3", "stop", T08),       // the running sheet began after the event
+            Kiosk("n4", "pauseEnd", T12),   // no pause running
+        ])).Results;
+
+        Assert.All(results, entry => Assert.Equal("applied", entry.Status));
+        Assert.Empty(stamps.Rounds);
+        Assert.Equal(T10, Assert.Single(kimai.Operations).At);
+    }
+
+    [Fact]
+    public async Task RejectedReplay_IsNotAnnouncedAsStamp()
+    {
+        var (service, stamps, _) = CreateServiceWithStamps();
+
+        var results = (await service.SyncKioskAsync([
+            Kiosk("r1", "unknown", T08),
+            Kiosk("r2", "start", T10, pin: "0000"),
+        ])).Results;
+
+        Assert.All(results, entry => Assert.NotEqual("applied", entry.Status));
+        Assert.Empty(stamps.Rounds);
+    }
+
+    [Fact]
+    public async Task BufferedReplay_IsAnnouncedOnce_WhenTheOutboxDrains()
+    {
+        var (service, stamps, kimai) = CreateServiceWithStamps();
+        kimai.FailNextStatusCalls = 2;
+        Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([Kiosk("b1", "start", T08)])).Results).Status);
+        Assert.Empty(stamps.Rounds);
+
+        await service.FlushOutboxAsync();
+        await service.FlushOutboxAsync();
+
+        var stamp = Assert.Single(Assert.Single(stamps.Rounds));
+        Assert.Equal(("start", T08), (stamp.Action, stamp.PerformedAt));
+    }
+
+    [Fact]
+    public async Task InterruptedPauseEnd_IsAnnouncedWhenItCompletes()
+    {
+        var (service, stamps, kimai) = CreateServiceWithStamps();
+        await service.SyncKioskAsync([Kiosk("i1", "start", T08), Kiosk("i2", "pauseStart", T12)]);
+        // The resume fails after the pause stop, and again in the trailing flush.
+        kimai.FailNextStartCalls = 2;
+
+        Assert.Equal("buffered", Assert.Single((await service.SyncKioskAsync([Kiosk("i3", "pauseEnd", T1230)])).Results).Status);
+        Assert.Single(stamps.Rounds);
+
+        await service.FlushOutboxAsync();
+        await service.FlushOutboxAsync();
+        Assert.Equal(2, stamps.Rounds.Count);
+        var stamp = Assert.Single(stamps.Rounds[1]);
+        Assert.Equal(("pauseEnd", T1230), (stamp.Action, stamp.PerformedAt));
+    }
+
+    [Fact]
+    public async Task ReplayedStartAndSwitch_NameTheTaskLikeLiveStamps()
+    {
+        var (service, stamps, _) = CreateServiceWithStamps();
+
+        await service.SyncKioskAsync([
+            StartOn("t1", "kx", T08),
+            Switch("t2", null, T10),
+            Kiosk("t3", "stop", T12),
+            StartOn("t4", "deleted-task", T1230),
+        ]);
+
+        Assert.Equal(
+            [("start", "Kunde X"), ("switch", null), ("stop", null), ("start", TelegramMessageFactory.DefaultTaskName)],
+            Assert.Single(stamps.Rounds).Select(stamp => (stamp.Action, stamp.TaskLabel)));
+    }
+
+    [Fact]
+    public async Task DisabledTelegram_CollectsNoStamps()
+    {
+        var (service, stamps, kimai) = CreateServiceWithStamps(enabled: false);
+
+        await service.SyncKioskAsync([Kiosk("d1", "start", T08)]);
+
+        Assert.True(kimai.IsRunning);
+        Assert.Empty(stamps.Rounds);
+    }
+
+    [Fact]
+    public async Task StampNotifier_SendsOneMessagePerEmployee_InTheirTimezone()
+    {
+        var (notifier, telegram, _) = CreateStampNotifier();
+
+        await notifier.SendAsync([
+            new AppliedOfflineStamp("max", "Max Mustermann", "pauseStart", T12),
+            new AppliedOfflineStamp("anna", "Anna Beispiel", "stop", T10),
+            new AppliedOfflineStamp("max", "Max Mustermann", "pauseEnd", T1230),
+        ]);
+
+        // August in Berlin: UTC+2.
+        Assert.Equal(
+            [
+                "📥 Max Mustermann · 2 Stempel nachgetragen\n🟡 Pause um 14:00\n🟢 Pause beendet um 14:30",
+                "🔴 Anna Beispiel · ausgestempelt um 12:00 (nachgetragen)",
+            ],
+            telegram.Messages);
+    }
+
+    [Fact]
+    public async Task StampNotifier_SurvivesTimezoneAndSendFailures()
+    {
+        var (notifier, telegram, kimai) = CreateStampNotifier();
+        kimai.DuringTimezoneLookup = () => throw new HttpRequestException("Kimai down");
+        telegram.SendFailure = new HttpRequestException("Telegram down");
+
+        await notifier.SendAsync([
+            new AppliedOfflineStamp("max", "Max Mustermann", "start", T08),
+            new AppliedOfflineStamp("anna", "Anna Beispiel", "start", T08),
+        ]);
+
+        // The first failed send does not cost the second employee's notice.
+        Assert.Equal(2, telegram.Messages.Count);
+        Assert.All(telegram.Messages, text => Assert.EndsWith("(nachgetragen)", text));
+    }
+
+    [Fact]
+    public async Task StampNotifier_SendsNothing_WhenTelegramWasTurnedOffMeanwhile()
+    {
+        var (notifier, telegram, kimai) = CreateStampNotifier(enabled: false);
+
+        await notifier.SendAsync([new AppliedOfflineStamp("max", "Max Mustermann", "start", T08)]);
+
+        Assert.Empty(telegram.Messages);
+        Assert.Equal(0, kimai.TimezoneCalls);
+    }
+
+    private static (OfflineStampNotifier Notifier, RecordingTelegramNotifier Telegram, FakeKimaiClient Kimai)
+        CreateStampNotifier(bool enabled = true)
+    {
+        var telegram = new RecordingTelegramNotifier();
+        var kimai = new FakeKimaiClient();
+        var notifier = new OfflineStampNotifier(new InMemorySettingsStore(TelegramSettings(enabled)), kimai, telegram,
+            NullLogger<OfflineStampNotifier>.Instance, new ManualClock(T1230));
+        return (notifier, telegram, kimai);
+    }
+
     [Fact]
     public async Task WrongPinCannotGenerateTelegramWarning_ButCaseInsensitiveEmployeeCan()
     {
@@ -1992,20 +2168,10 @@ public sealed class OfflineClockServiceTests
     private static (OfflineClockService Service, RecordingTelegramNotifier Telegram, OfflineRejectionNotifier Throttle, FakeKimaiClient Kimai)
         CreateServiceWithTelegramAndKimai(bool enabled = true,
             RejectedOfflineEventStore? existingJournal = null, TimeProvider? clock = null,
-            IOfflineEventIdStore? eventIds = null, IEnumerable<EmployeeSettings>? extraEmployees = null)
+            IOfflineEventIdStore? eventIds = null, IEnumerable<EmployeeSettings>? extraEmployees = null,
+            IOfflineStampNotifier? stamps = null)
     {
-        var baseline = TestSettings();
-        var settings = new RuntimeSettings
-        {
-            BaseUrl = baseline.BaseUrl,
-            DefaultProjectId = baseline.DefaultProjectId,
-            DefaultActivityId = baseline.DefaultActivityId,
-            PauseActivityId = baseline.PauseActivityId,
-            Employees = [.. baseline.Employees, .. extraEmployees ?? []],
-            TelegramBotToken = enabled ? "test-token" : null,
-            TelegramChatId = enabled ? "test-chat" : null
-        };
-        var store = new InMemorySettingsStore(settings);
+        var store = new InMemorySettingsStore(TelegramSettings(enabled, extraEmployees));
         var telegram = new RecordingTelegramNotifier();
         var kimai = new FakeKimaiClient();
         var journal = existingJournal ?? new RejectedOfflineEventStore(
@@ -2015,17 +2181,49 @@ public sealed class OfflineClockServiceTests
         var service = new OfflineClockService(store, new InMemoryEmployeeService(), kimai,
             eventIds ?? new InMemoryEventIdStore(), new KioskEventCoordinator(),
             journal,
-            new RecordingLogger(), throttle);
+            new RecordingLogger(), throttle, stampNotifier: stamps);
         return (service, telegram, throttle, kimai);
+    }
+
+    private static RuntimeSettings TelegramSettings(bool enabled = true, IEnumerable<EmployeeSettings>? extraEmployees = null)
+    {
+        var baseline = TestSettings();
+        return new RuntimeSettings
+        {
+            BaseUrl = baseline.BaseUrl,
+            DefaultProjectId = baseline.DefaultProjectId,
+            DefaultActivityId = baseline.DefaultActivityId,
+            PauseActivityId = baseline.PauseActivityId,
+            Employees = [.. baseline.Employees, .. extraEmployees ?? []],
+            TelegramBotToken = enabled ? "test-token" : null,
+            TelegramChatId = enabled ? "test-chat" : null
+        };
+    }
+
+    private static (OfflineClockService Service, RecordingStampNotifier Stamps, FakeKimaiClient Kimai)
+        CreateServiceWithStamps(bool enabled = true)
+    {
+        var stamps = new RecordingStampNotifier();
+        var (service, _, _, kimai) = CreateServiceWithTelegramAndKimai(enabled, stamps: stamps);
+        return (service, stamps, kimai);
+    }
+
+    /// <summary>Records each round handed to the notifier.</summary>
+    private sealed class RecordingStampNotifier : IOfflineStampNotifier
+    {
+        public List<IReadOnlyList<AppliedOfflineStamp>> Rounds { get; } = [];
+        public void Report(IReadOnlyList<AppliedOfflineStamp> stamps) => Rounds.Add(stamps);
     }
 
     private sealed class RecordingTelegramNotifier : ITelegramNotifier
     {
         public List<string> Messages { get; } = [];
         public bool SendSucceeds { get; set; } = true;
+        public Exception? SendFailure { get; set; }
         public Task<bool> SendMessageAsync(string text)
         {
             Messages.Add(text);
+            if (SendFailure is { } failure) throw failure;
             return Task.FromResult(SendSucceeds);
         }
         public Task<bool> SendAlertAsync(string text) => throw new NotSupportedException();

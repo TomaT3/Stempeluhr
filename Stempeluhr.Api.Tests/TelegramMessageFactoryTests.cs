@@ -58,6 +58,55 @@ public sealed class TelegramMessageFactoryTests
     }
 
     [Fact]
+    public void OfflineStampNotice_SingleStamp_ReadsLikeTheLiveStamp()
+    {
+        var now = new DateTimeOffset(2026, 7, 1, 14, 0, 0, TimeSpan.Zero);
+        var stamp = new AppliedOfflineStamp("anna", "Anna Mustermann", "pauseStart", new DateTimeOffset(2026, 7, 1, 10, 3, 0, TimeSpan.Zero));
+
+        var text = TelegramMessageFactory.BuildOfflineStampNotice("Anna Mustermann", [stamp], Berlin, now);
+
+        Assert.Equal("🟡 Anna Mustermann · Pause um 12:03 (nachgetragen)", text);
+    }
+
+    [Fact]
+    public void OfflineStampNotice_SeveralStamps_ListsThem_WithTheDateOfEarlierDays()
+    {
+        // 00:30 in Berlin: the night shift began yesterday.
+        var now = new DateTimeOffset(2026, 7, 1, 22, 30, 0, TimeSpan.Zero);
+        AppliedOfflineStamp[] stamps =
+        [
+            new("max", "Max Mustermann", "start", new DateTimeOffset(2026, 7, 1, 20, 0, 0, TimeSpan.Zero), "Kunde X"),
+            new("max", "Max Mustermann", "switch", new DateTimeOffset(2026, 7, 1, 21, 40, 0, TimeSpan.Zero)),
+            new("max", "Max Mustermann", "stop", new DateTimeOffset(2026, 7, 1, 22, 15, 0, TimeSpan.Zero)),
+        ];
+
+        var text = TelegramMessageFactory.BuildOfflineStampNotice("Max Mustermann", stamps, Berlin, now);
+
+        Assert.Equal(
+            "📥 Max Mustermann · 3 Stempel nachgetragen\n"
+            + "🟢 eingestempelt auf Kunde X am 01.07. um 22:00\n"
+            + "🔄 zurück zur Standard-Tätigkeit am 01.07. um 23:40\n"
+            + "🔴 ausgestempelt um 00:15",
+            text);
+    }
+
+    [Fact]
+    public void OfflineStampNotice_LongOutage_CapsTheLines_AndToleratesUnknownActions()
+    {
+        var at = new DateTimeOffset(2026, 7, 1, 6, 0, 0, TimeSpan.Zero);
+        var stamps = Enumerable.Range(0, TelegramMessageFactory.OfflineStampNoticeLineLimit + 3)
+            .Select(i => new AppliedOfflineStamp("max", "Max Mustermann", i == 0 ? "mystery" : "stop", at.AddMinutes(i)))
+            .ToArray();
+
+        var lines = TelegramMessageFactory.BuildOfflineStampNotice("Max Mustermann", stamps, Berlin, at).Split('\n');
+
+        Assert.Equal($"📥 Max Mustermann · {stamps.Length} Stempel nachgetragen", lines[0]);
+        Assert.Equal("🕒 gestempelt um 08:00", lines[1]);
+        Assert.Equal(TelegramMessageFactory.OfflineStampNoticeLineLimit + 2, lines.Length);
+        Assert.Equal("… und 3 weitere", lines[^1]);
+    }
+
+    [Fact]
     public void Build_WinterTime_UsesCETOffset()
     {
         var stamp = new DateTimeOffset(2026, 1, 15, 8, 12, 0, TimeSpan.Zero); // CET → 09:12

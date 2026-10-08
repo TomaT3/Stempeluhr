@@ -9,8 +9,8 @@ namespace Stempeluhr.Api.Tests;
 /// Telegram notifications must fire ONLY on real clock transitions (start,
 /// stop, pauseStart, pauseEnd). No-op presses ("schon eingestempelt", "nicht
 /// eingestempelt", "schon in Pause") must stay silent - otherwise double-taps
-/// spam the customer's chat. Offline replays are covered separately (they run
-/// through OfflineClockService, which never calls these helpers).
+/// spam the customer's chat. Offline replays announce themselves through
+/// OfflineStampNotifier instead (OfflineClockServiceTests, issue #117).
 /// </summary>
 public sealed class ClockServiceNotificationTests
 {
