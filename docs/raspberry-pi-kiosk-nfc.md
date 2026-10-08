@@ -38,13 +38,18 @@ sudo gpasswd -d kiosk sudo || true
 sudo raspi-config   # System Options -> Boot / Auto Login -> Desktop Autologin
 ```
 
-Falls nötig in `/etc/lightdm/lightdm.conf`:
+`raspi-config` trägt den ersten Benutzer (`stempeluhradmin`) ein, nicht
+`kiosk`. Deshalb immer den Benutzer in `/etc/lightdm/lightdm.conf` ändern
+(Abschnitt `[Seat:*]`, die Zeile `autologin-session` bleibt unverändert):
 
-```ini
-[Seat:*]
-autologin-user=kiosk
-autologin-user-timeout=0
+```bash
+sudo sed -i 's/^autologin-user=.*/autologin-user=kiosk/; s/^#autologin-user-timeout=0/autologin-user-timeout=0/' /etc/lightdm/lightdm.conf
+grep -n '^autologin' /etc/lightdm/lightdm.conf
 ```
+
+Nach dem Neustart muss `loginctl list-sessions` eine Sitzung von `kiosk`
+auf `seat0` zeigen; läuft der Desktop als `stempeluhradmin`, startet der
+Kiosk-Autostart nicht.
 
 ## 3. Agent und Kiosk einrichten
 
@@ -69,6 +74,9 @@ Die Datei über den vorhandenen sicheren Wartungszugang als
 `/root/stempeluhr-terminal.token` auf den Pi übertragen (`chmod 600`).
 Die Terminal-ID muss in Server-Konfiguration, Agent und Kiosk-URL übereinstimmen.
 Das Token nicht in URLs, Browser oder Shell-Befehlsargumente kopieren.
+Den ACR122U **vor** dem Installer anschließen (`lsusb` muss `072f:2200`
+zeigen): Die PC/SC-Paketmigration prüft den Leser, ohne ihn bricht der
+Installer ab, bevor Policy und Kiosk-Autostart angelegt werden.
 Anschließend installieren:
 
 ```bash
@@ -224,6 +232,18 @@ Nach Klärung der Ursache manuell erneut starten:
 ```bash
 sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --check
 sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --apply
+```
+
+Meldet der Lauf „Eine Paketmigration ist noch offen“, steht das Ergebnis des
+letzten Versuchs in `/var/lib/stempeluhr-pcsc-migration/<Ordner>/result.json`
+auf `failed` oder `rollback-failed` (typisch: Kartenleser nicht angeschlossen,
+`lsusb` prüfen). Prüfen, dass `dpkg -l pcscd libpcsclite1` die ursprüngliche
+Version zeigt, dann die Marker beiseitelegen und erneut starten; die
+Originalsicherung im Ordner bleibt erhalten:
+
+```bash
+sudo mkdir -p /root/pcsc-migration-alt
+sudo mv /var/lib/stempeluhr-pcsc-migration/{pending,auto-attempt}.json /root/pcsc-migration-alt/
 ```
 
 Während des Paketwechsels werden Agent und pcscd angehalten bzw. neu
