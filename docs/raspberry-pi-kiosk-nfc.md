@@ -38,13 +38,18 @@ sudo gpasswd -d kiosk sudo || true
 sudo raspi-config   # System Options -> Boot / Auto Login -> Desktop Autologin
 ```
 
-Falls nötig in `/etc/lightdm/lightdm.conf`:
+`raspi-config` trägt den ersten Benutzer (`stempeluhradmin`) ein, nicht
+`kiosk`. Deshalb immer den Benutzer in `/etc/lightdm/lightdm.conf` ändern
+(Abschnitt `[Seat:*]`, die Zeile `autologin-session` bleibt unverändert):
 
-```ini
-[Seat:*]
-autologin-user=kiosk
-autologin-user-timeout=0
+```bash
+sudo sed -i 's/^autologin-user=.*/autologin-user=kiosk/; s/^#autologin-user-timeout=0/autologin-user-timeout=0/' /etc/lightdm/lightdm.conf
+grep -n '^autologin' /etc/lightdm/lightdm.conf
 ```
+
+Nach dem Neustart muss `loginctl list-sessions` eine Sitzung von `kiosk`
+auf `seat0` zeigen; läuft der Desktop als `stempeluhradmin`, startet der
+Kiosk-Autostart nicht.
 
 ## 3. Agent und Kiosk einrichten
 
@@ -65,10 +70,27 @@ alle anderen Einstellungen beibehalten:
 }
 ```
 
-Die Datei über den vorhandenen sicheren Wartungszugang als
-`/root/stempeluhr-terminal.token` auf den Pi übertragen (`chmod 600`).
+Die Datei über den vorhandenen sicheren Wartungszugang (SSH) auf den Pi
+übertragen, z. B. vom Admin-Rechner (PowerShell):
+
+```powershell
+scp .\terminal.token stempeluhradmin@<pi-hostname>:/home/stempeluhradmin/stempeluhr-terminal.token
+```
+
+Auf dem Pi (per SSH als `stempeluhradmin`) nach `/root` verschieben und
+schützen:
+
+```bash
+sudo mv /home/stempeluhradmin/stempeluhr-terminal.token /root/stempeluhr-terminal.token
+sudo chown root:root /root/stempeluhr-terminal.token
+sudo chmod 600 /root/stempeluhr-terminal.token
+```
+
 Die Terminal-ID muss in Server-Konfiguration, Agent und Kiosk-URL übereinstimmen.
 Das Token nicht in URLs, Browser oder Shell-Befehlsargumente kopieren.
+Den ACR122U **vor** dem Installer anschließen (`lsusb` muss `072f:2200`
+zeigen): Die PC/SC-Paketmigration prüft den Leser, ohne ihn bricht der
+Installer ab, bevor Policy und Kiosk-Autostart angelegt werden.
 Anschließend installieren:
 
 ```bash
@@ -77,7 +99,18 @@ curl -fsSL https://<host>/pi/install.sh | sudo bash -s -- \
   --terminal-token-file /root/stempeluhr-terminal.token
 ```
 
-Nach der Installation die Übertragungsdateien löschen. Das Token bleibt in
+Nach der Installation die Übertragungsdateien löschen, auf dem Pi und auf dem
+Admin-Rechner:
+
+```bash
+sudo rm /root/stempeluhr-terminal.token
+```
+
+```powershell
+Remove-Item .\terminal.token
+```
+
+Das Token bleibt in
 `/etc/stempeluhr-nfc-agent/config.json` (`root:stempeluhr`, `640`). Bestehende
 Konfigurationen bleiben erhalten; `--terminal-token-file` ergänzt oder ersetzt
 nur das Token. Ohne diese Option funktionieren alte Konfigurationen weiter,
@@ -224,6 +257,18 @@ Nach Klärung der Ursache manuell erneut starten:
 ```bash
 sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --check
 sudo python3 /opt/stempeluhr-nfc-agent/current/pcsc_maintenance.py --apply
+```
+
+Meldet der Lauf „Eine Paketmigration ist noch offen“, steht das Ergebnis des
+letzten Versuchs in `/var/lib/stempeluhr-pcsc-migration/<Ordner>/result.json`
+auf `failed` oder `rollback-failed` (typisch: Kartenleser nicht angeschlossen,
+`lsusb` prüfen). Prüfen, dass `dpkg -l pcscd libpcsclite1` die ursprüngliche
+Version zeigt, dann die Marker beiseitelegen und erneut starten; die
+Originalsicherung im Ordner bleibt erhalten:
+
+```bash
+sudo mkdir -p /root/pcsc-migration-alt
+sudo mv /var/lib/stempeluhr-pcsc-migration/{pending,auto-attempt}.json /root/pcsc-migration-alt/
 ```
 
 Während des Paketwechsels werden Agent und pcscd angehalten bzw. neu
