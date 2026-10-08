@@ -107,6 +107,25 @@ public sealed class TelegramMessageFactoryTests
     }
 
     [Fact]
+    public void OfflineStampNotice_LongNamesAndTasks_AreShortened_BelowTelegramsLimit()
+    {
+        // Review of #118: 15 switches with 300-character task labels made 4,918 characters.
+        var at = new DateTimeOffset(2026, 7, 1, 6, 0, 0, TimeSpan.Zero);
+        var name = new string('N', 5000);
+        var stamps = Enumerable.Range(0, 40)
+            .Select(i => new AppliedOfflineStamp("max", name, "switch", at.AddDays(-1).AddMinutes(i), new string('K', 5000)))
+            .ToArray();
+
+        var bundle = TelegramMessageFactory.BuildOfflineStampNotice(name, stamps, Berlin, at);
+        var single = TelegramMessageFactory.BuildOfflineStampNotice(name, [stamps[0]], Berlin, at);
+
+        Assert.InRange(bundle.Length, 1, TelegramMessageFactory.MaxMessageLength);
+        Assert.InRange(single.Length, 1, 300);
+        Assert.EndsWith("… und 25 weitere", bundle);
+        Assert.Contains("K… am 30.06. um 08:00", bundle);
+    }
+
+    [Fact]
     public void Build_WinterTime_UsesCETOffset()
     {
         var stamp = new DateTimeOffset(2026, 1, 15, 8, 12, 0, TimeSpan.Zero); // CET → 09:12

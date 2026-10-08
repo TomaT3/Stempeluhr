@@ -424,8 +424,12 @@ Offline-Nachträge, die Kimai tatsächlich ändern, melden sich ebenso, mit der
 Zeit des Stempels am Terminal und dem Zusatz „nachgetragen“, z. B.
 `🟡 Anna Mustermann · Pause um 12:03 (nachgetragen)`. Mehrere Nachträge eines
 Mitarbeiters aus einer Verarbeitungsrunde (Sync-Anfrage oder Outbox-Flush nach
-einem Kimai-Ausfall) kommen als eine Nachricht `📥 Anna Mustermann · 2 Stempel
-nachgetragen` mit einer Zeile je Stempel, höchstens 15 Zeilen. Liegt ein
+einem Kimai-Ausfall) kommen als ein Block `📥 Anna Mustermann · 2 Stempel
+nachgetragen` mit einer Zeile je Stempel, höchstens 15 Zeilen; lange Namen und
+Tätigkeiten werden gekürzt. Die Blöcke mehrerer Mitarbeiter teilen sich eine
+Nachricht, solange sie in die 4096 Zeichen von Telegram passen. Zwischen zwei
+Nachtrags-Nachrichten liegen mindestens 6 Sekunden (höchstens 10 pro Minute),
+damit Telegram nach einem langen Ausfall nicht drosselt. Liegt ein
 Stempel nicht am heutigen Tag, steht das Datum dabei (`am 07.10. um 23:40`).
 Nachträge, die zum No-op werden („Lief bereits“, „Lief nicht“, veraltet),
 wiederholte Event-IDs und Ablehnungen melden sich nicht als Stempel. Jeder

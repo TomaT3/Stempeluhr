@@ -244,9 +244,9 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
-    public async Task StampNotifier_SendsOneMessagePerEmployee_InTheirTimezone()
+    public async Task StampNotifier_BundlesTheEmployeesOfARound_InTheirTimezone()
     {
-        var (notifier, telegram, _) = CreateStampNotifier();
+        var (notifier, telegram, _, _) = CreateStampNotifier();
 
         await notifier.SendAsync([
             new AppliedOfflineStamp("max", "Max Mustermann", "pauseStart", T12),
@@ -254,28 +254,51 @@ public sealed class OfflineClockServiceTests
             new AppliedOfflineStamp("max", "Max Mustermann", "pauseEnd", T1230),
         ]);
 
-        // August in Berlin: UTC+2.
+        // One block per employee, in one message. August in Berlin: UTC+2.
         Assert.Equal(
-            [
-                "📥 Max Mustermann · 2 Stempel nachgetragen\n🟡 Pause um 14:00\n🟢 Pause beendet um 14:30",
-                "🔴 Anna Beispiel · ausgestempelt um 12:00 (nachgetragen)",
-            ],
-            telegram.Messages);
+            "📥 Max Mustermann · 2 Stempel nachgetragen\n🟡 Pause um 14:00\n🟢 Pause beendet um 14:30"
+            + "\n\n🔴 Anna Beispiel · ausgestempelt um 12:00 (nachgetragen)",
+            Assert.Single(telegram.Messages));
+    }
+
+    [Fact]
+    public async Task StampNotifier_AfterALongOutage_StaysWithinTelegramLimits()
+    {
+        // Review of #118: 21+ employees in one round used to fire 21+
+        // messages within milliseconds - Telegram answers 429 and, without a
+        // retry, the notices are lost.
+        var (notifier, telegram, waits, _) = CreateStampNotifier();
+        var label = new string('K', 300);
+        var round = Enumerable.Range(0, 25)
+            .SelectMany(employee => Enumerable.Range(0, 20).Select(i => new AppliedOfflineStamp(
+                $"e{employee}", $"Mitarbeiter {employee} {new string('N', 300)}", "switch", T08.AddMinutes(i), label)))
+            .ToArray();
+
+        await notifier.SendAsync(round);
+
+        Assert.InRange(telegram.Messages.Count, 2, 25 / 2 + 1);
+        Assert.All(telegram.Messages, text => Assert.InRange(text.Length, 1, TelegramMessageFactory.MaxMessageLength));
+        Assert.All(Enumerable.Range(0, 25), employee =>
+            Assert.Single(telegram.Messages, text => text.Contains($"Mitarbeiter {employee} N")));
+        Assert.Equal(Enumerable.Repeat(OfflineStampNotifier.MinimumInterval, telegram.Messages.Count - 1), waits);
+
+        // The spacing holds across rounds, too.
+        await notifier.SendAsync([new AppliedOfflineStamp("max", "Max Mustermann", "stop", T12)]);
+        Assert.Equal(OfflineStampNotifier.MinimumInterval, waits[^1]);
+        Assert.Equal(telegram.Messages.Count - 1, waits.Count);
     }
 
     [Fact]
     public async Task StampNotifier_SurvivesTimezoneAndSendFailures()
     {
-        var (notifier, telegram, kimai) = CreateStampNotifier();
+        var (notifier, telegram, _, kimai) = CreateStampNotifier();
         kimai.DuringTimezoneLookup = () => throw new HttpRequestException("Kimai down");
         telegram.SendFailure = new HttpRequestException("Telegram down");
 
-        await notifier.SendAsync([
-            new AppliedOfflineStamp("max", "Max Mustermann", "start", T08),
-            new AppliedOfflineStamp("anna", "Anna Beispiel", "start", T08),
-        ]);
+        await notifier.SendAsync([new AppliedOfflineStamp("max", "Max Mustermann", "start", T08)]);
+        await notifier.SendAsync([new AppliedOfflineStamp("anna", "Anna Beispiel", "start", T08)]);
 
-        // The first failed send does not cost the second employee's notice.
+        // The failed send does not cost the next round its notice.
         Assert.Equal(2, telegram.Messages.Count);
         Assert.All(telegram.Messages, text => Assert.EndsWith("(nachgetragen)", text));
     }
@@ -283,7 +306,7 @@ public sealed class OfflineClockServiceTests
     [Fact]
     public async Task StampNotifier_SendsNothing_WhenTelegramWasTurnedOffMeanwhile()
     {
-        var (notifier, telegram, kimai) = CreateStampNotifier(enabled: false);
+        var (notifier, telegram, _, kimai) = CreateStampNotifier(enabled: false);
 
         await notifier.SendAsync([new AppliedOfflineStamp("max", "Max Mustermann", "start", T08)]);
 
@@ -291,14 +314,22 @@ public sealed class OfflineClockServiceTests
         Assert.Equal(0, kimai.TimezoneCalls);
     }
 
-    private static (OfflineStampNotifier Notifier, RecordingTelegramNotifier Telegram, FakeKimaiClient Kimai)
+    /// <summary>The pacing delay only advances the manual clock and records the wait.</summary>
+    private static (OfflineStampNotifier Notifier, RecordingTelegramNotifier Telegram, List<TimeSpan> Waits, FakeKimaiClient Kimai)
         CreateStampNotifier(bool enabled = true)
     {
         var telegram = new RecordingTelegramNotifier();
         var kimai = new FakeKimaiClient();
+        var clock = new ManualClock(T1230);
+        var waits = new List<TimeSpan>();
         var notifier = new OfflineStampNotifier(new InMemorySettingsStore(TelegramSettings(enabled)), kimai, telegram,
-            NullLogger<OfflineStampNotifier>.Instance, new ManualClock(T1230));
-        return (notifier, telegram, kimai);
+            NullLogger<OfflineStampNotifier>.Instance, clock, wait =>
+            {
+                waits.Add(wait);
+                clock.Advance(wait);
+                return Task.CompletedTask;
+            });
+        return (notifier, telegram, waits, kimai);
     }
 
     [Fact]
