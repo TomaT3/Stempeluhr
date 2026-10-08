@@ -66,6 +66,7 @@ builder.Services.AddHttpClient(TelegramBotApi.PollClientName, client =>
 builder.Services.AddHostedService<TelegramUpdatePoller>();
 builder.Services.AddSingleton<ITelegramNotifier, TelegramNotifier>();
 builder.Services.AddSingleton<OfflineRejectionNotifier>();
+builder.Services.AddSingleton<IOfflineStampNotifier, OfflineStampNotifier>();
 // Telegram warning after 6 h without a break or 10 h per shift.
 builder.Services.AddSingleton(sp => new WorkTimeAlertStore(
     Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "work-time-alerts.json"),

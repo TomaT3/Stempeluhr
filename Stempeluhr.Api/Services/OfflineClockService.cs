@@ -42,7 +42,8 @@ public sealed class OfflineClockService(
     RejectedOfflineEventStore rejectedEvents,
     ILogger<OfflineClockService> logger,
     OfflineRejectionNotifier? rejectionNotifier = null,
-    PinAttemptGuard? pinAttempts = null) : IOfflineClockService
+    PinAttemptGuard? pinAttempts = null,
+    IOfflineStampNotifier? stampNotifier = null) : IOfflineClockService
 {
     private const string BufferedStatus = "buffered";
     private const string BufferedMessage = "Kimai nicht erreichbar - wird automatisch nachgetragen.";
@@ -68,6 +69,10 @@ public sealed class OfflineClockService(
     // Telegram kick then fires once when the lock is released, so a batch or
     // flush round becomes one summary - even when the round aborts.
     private bool _announceRejections;
+
+    // Guarded by _syncLock. Stamps of this round that changed Kimai; reported
+    // once the lock is released, like _announceRejections (issue #117).
+    private readonly List<AppliedOfflineStamp> _appliedStamps = [];
 
     public async Task<OfflineSyncResultDto> SyncKioskAsync(IReadOnlyList<OfflineKioskClockEventDto> events, CancellationToken cancellationToken = default)
     {
@@ -185,7 +190,8 @@ public sealed class OfflineClockService(
 
                 try
                 {
-                    var (message, state) = await ApplyKioskEventAsync(entry, cancellationToken);
+                    var (message, state, stamp) = await ApplyKioskEventAsync(entry, cancellationToken);
+                    if (stamp is not null) _appliedStamps.Add(stamp);
                     accepted++;
                     results.Add(new OfflineSyncEventResultDto(entry.EventId, "applied", message, state));
                 }
@@ -364,7 +370,12 @@ public sealed class OfflineClockService(
         }
     }
 
-    private async Task<(string Message, string State)> ApplyKioskEventAsync(OfflineKioskClockEventDto entry, CancellationToken cancellationToken)
+    /// <summary>
+    /// Returns the stamp to announce only when the event changed Kimai (no
+    /// no-op) and Telegram is on.
+    /// </summary>
+    private async Task<(string Message, string State, AppliedOfflineStamp? Stamp)> ApplyKioskEventAsync(
+        OfflineKioskClockEventDto entry, CancellationToken cancellationToken)
     {
         var settings = settingsStore.Load();
         var employee = ResolveKioskEmployee(settings, entry);
@@ -382,7 +393,23 @@ public sealed class OfflineClockService(
         }
 
         var action = NormalizeKioskAction(entry.Action);
-        return await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
+        var outcome = await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
+        var stamp = outcome.Mutated && settings.TelegramEnabled
+            ? new AppliedOfflineStamp(employee.Id, employee.DisplayName, action, entry.PerformedAt, outcome.TaskLabel)
+            : null;
+        return (outcome.Message, outcome.State, stamp);
+    }
+
+    /// <summary>
+    /// Result of one replayed action. <see cref="Mutated"/>: Kimai was
+    /// changed - only then is the stamp announced. A plain
+    /// (message, state) tuple converts into a no-op, so every branch that
+    /// does not explicitly claim a change stays silent.
+    /// </summary>
+    private sealed record KioskApplyOutcome(string Message, string State, bool Mutated = false, string? TaskLabel = null)
+    {
+        public static implicit operator KioskApplyOutcome((string Message, string State) noOp) =>
+            new(noOp.Message, noOp.State);
     }
 
     /// <summary>
@@ -470,7 +497,7 @@ public sealed class OfflineClockService(
     /// human-readable result plus the resulting clock state
     /// ("working"/"paused"/"clockedOut").
     /// </summary>
-    private async Task<(string Message, string State)> ApplyActionAsync(
+    private async Task<KioskApplyOutcome> ApplyActionAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
         string action,
@@ -499,9 +526,12 @@ public sealed class OfflineClockService(
 
                 var (startTarget, fellBack) = ResolveStartTarget(settings, employee, taskId);
                 await kimai.StartAtAsync(settings, employee, startTarget, timestamp, cancellationToken);
-                return (fellBack
+                // Live parity (ClockService.StartClockAsync): the task is only
+                // named when the employee has further tasks.
+                return new KioskApplyOutcome(fellBack
                     ? $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm} ({DeletedTaskNote})"
-                    : $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}", "working");
+                    : $"Nachgetragen: Einstempeln {timestamp.ToLocalTime():HH:mm}", "working", Mutated: true,
+                    employee.Tasks is { Length: > 0 } ? startTarget.Label ?? TelegramMessageFactory.DefaultTaskName : null);
 
             case "stop":
                 if (!status.IsRunning || status.ActiveTimesheetId is not int stopId)
@@ -525,7 +555,7 @@ public sealed class OfflineClockService(
                 }
 
                 await kimai.StopAtAsync(settings, employee, stopId, timestamp, cancellationToken);
-                return ($"Nachgetragen: Ausstempeln {timestamp.ToLocalTime():HH:mm}", "clockedOut");
+                return new KioskApplyOutcome($"Nachgetragen: Ausstempeln {timestamp.ToLocalTime():HH:mm}", "clockedOut", Mutated: true);
 
             case "pauseStart":
                 // A pause that already runs is this very action applied live
@@ -565,7 +595,7 @@ public sealed class OfflineClockService(
                 // timesheet) would risk double-applying on ambiguous failures.
                 await kimai.StopAtAsync(settings, employee, pauseStopId, timestamp, cancellationToken);
                 await kimai.StartAtAsync(settings, employee, pause, timestamp, cancellationToken);
-                return ($"Nachgetragen: Pausenbeginn {timestamp.ToLocalTime():HH:mm}", "paused");
+                return new KioskApplyOutcome($"Nachgetragen: Pausenbeginn {timestamp.ToLocalTime():HH:mm}", "paused", Mutated: true);
 
             case "pauseEnd":
                 return await ApplyTransitionAsync(eventId, () =>
@@ -587,9 +617,9 @@ public sealed class OfflineClockService(
     /// failure (the event buffers and comes back); any final outcome -
     /// applied, no-op, rejected - ends it.
     /// </summary>
-    private async Task<(string Message, string State)> ApplyTransitionAsync(
+    private async Task<KioskApplyOutcome> ApplyTransitionAsync(
         string eventId,
-        Func<Task<(string Message, string State)>> apply)
+        Func<Task<KioskApplyOutcome>> apply)
     {
         try
         {
@@ -673,7 +703,7 @@ public sealed class OfflineClockService(
     /// Pause end: stop the pause sheet, resume the task the pause interrupted
     /// from the event's timestamp on (live parity, ClockService.EndPauseAsync).
     /// </summary>
-    private async Task<(string Message, string State)> ApplyPauseEndAsync(
+    private async Task<KioskApplyOutcome> ApplyPauseEndAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
         ClockStatusDto status,
@@ -681,7 +711,7 @@ public sealed class OfflineClockService(
         DateTimeOffset timestamp,
         CancellationToken cancellationToken)
     {
-        var applied = ($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working");
+        var applied = new KioskApplyOutcome($"Nachgetragen: Pausenende {timestamp.ToLocalTime():HH:mm}", "working", Mutated: true);
 
         // Mirror the live path: only end a pause that is actually running.
         if (status.State == "paused" && status.ActiveTimesheetId is int endPauseId)
@@ -754,7 +784,7 @@ public sealed class OfflineClockService(
     /// sheet newer than the event), so a switch that was applied live AND
     /// queued never books twice.
     /// </summary>
-    private async Task<(string Message, string State)> ApplySwitchAsync(
+    private async Task<KioskApplyOutcome> ApplySwitchAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
         ClockStatusDto status,
@@ -787,7 +817,7 @@ public sealed class OfflineClockService(
                 }
 
                 await kimai.StartAtAsync(settings, employee, target, timestamp, cancellationToken);
-                return (SwitchAppliedMessage(target, timestamp), "working");
+                return SwitchApplied(target, timestamp);
             }
 
             var stopped = (await FindInterruptedTransitionAsync(settings, employee, timestamp, stoppedPause: false, 1, cancellationToken))?[0];
@@ -836,12 +866,14 @@ public sealed class OfflineClockService(
 
         await StopTransitionAsync(settings, employee, eventId, switchStopId, timestamp, cancellationToken);
         await kimai.StartAtAsync(settings, employee, target, timestamp, cancellationToken);
-        return (SwitchAppliedMessage(target, timestamp), "working");
+        return SwitchApplied(target, timestamp);
     }
 
-    private static string SwitchAppliedMessage(KimaiTimesheetTarget target, DateTimeOffset timestamp)
+    private static KioskApplyOutcome SwitchApplied(KimaiTimesheetTarget target, DateTimeOffset timestamp)
     {
-        return $"Nachgetragen: Wechsel zu {WorkTargetResolver.DisplayName(target)} {timestamp.ToLocalTime():HH:mm}";
+        return new KioskApplyOutcome(
+            $"Nachgetragen: Wechsel zu {WorkTargetResolver.DisplayName(target)} {timestamp.ToLocalTime():HH:mm}",
+            "working", Mutated: true, target.Label);
     }
 
     /// <summary>
@@ -1026,8 +1058,11 @@ public sealed class OfflineClockService(
     {
         var announce = _announceRejections;
         _announceRejections = false;
+        AppliedOfflineStamp[] stamps = [.. _appliedStamps];
+        _appliedStamps.Clear();
         _syncLock.Release();
         if (announce) rejectionNotifier?.Report();
+        if (stamps.Length > 0) stampNotifier?.Report(stamps);
     }
 
     /// <summary>
@@ -1076,7 +1111,8 @@ public sealed class OfflineClockService(
 
             try
             {
-                var (message, _) = await ApplyKioskEventAsync(kioskEntry, cancellationToken);
+                var (message, _, stamp) = await ApplyKioskEventAsync(kioskEntry, cancellationToken);
+                if (stamp is not null) _appliedStamps.Add(stamp);
                 logger.LogInformation("Outbox: offline kiosk event {EventId} applied ({Message})", kioskEntry.EventId, message);
                 _kioskOutboxIds.Remove(kioskEntry.EventId);
                 drained++;

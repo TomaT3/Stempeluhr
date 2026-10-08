@@ -49,6 +49,62 @@ public static class TelegramMessageFactory
             : $"⚠️ {count} Offline-Stempel nicht übernommen\nErster Fall: {Describe(first, firstZone)}\nLetzter Fall: {Describe(last, lastZone)}\nBitte in Kimai nachtragen.";
     }
 
+    /// <summary>
+    /// Höchstlänge von <c>sendMessage</c>. Telegram zählt Zeichen, .NET
+    /// UTF-16-Einheiten - ein Emoji zählt hier doppelt, die Grenze hält also.
+    /// </summary>
+    public const int MaxMessageLength = 4096;
+
+    /// <summary>Höchstens so viele Stempelzeilen pro Nachtrags-Nachricht.</summary>
+    public const int OfflineStampNoticeLineLimit = 15;
+
+    /// <summary>Namen und Tätigkeiten sind im Admin nicht begrenzt.</summary>
+    private const int OfflineStampNameLimit = 80;
+
+    /// <summary>
+    /// Nachgetragene Offline-Stempel eines Mitarbeiters aus einer Runde. Ein
+    /// Stempel liest sich wie live, mehrere stehen unter einer Kopfzeile. Die
+    /// Zeit ist die des Stempels am Terminal, mit Datum, wenn sie nicht auf
+    /// den lokalen heutigen Tag fällt (Nachtschicht, langer Ausfall). Gekürzte
+    /// Namen und Tätigkeiten halten jede Zeile unter etwa 130 Zeichen; mit
+    /// höchstens <see cref="OfflineStampNoticeLineLimit"/> Zeilen, Kopfzeile
+    /// und Restzähler bleibt die Nachricht weit unter <see cref="MaxMessageLength"/>.
+    /// </summary>
+    public static string BuildOfflineStampNotice(
+        string employeeName, IReadOnlyList<AppliedOfflineStamp> stamps, TimeZoneInfo timeZone, DateTimeOffset now)
+    {
+        static string? Clip(string? value) =>
+            value is null || value.Length <= OfflineStampNameLimit ? value : value[..(OfflineStampNameLimit - 1)] + "…";
+        employeeName = Clip(employeeName)!;
+        var today = TimeZoneInfo.ConvertTime(now, timeZone).Date;
+        (string Emoji, string Text) Describe(AppliedOfflineStamp stamp)
+        {
+            // Der Nachtrag normalisiert die Aktion vorher; ein unbekannter
+            // Wert darf die Meldung trotzdem nicht verhindern.
+            var (emoji, label) = Actions.TryGetValue(stamp.Action, out var known)
+                ? (known.Emoji, known.Label(Clip(stamp.TaskLabel)))
+                : ("🕒", "gestempelt");
+            var local = TimeZoneInfo.ConvertTime(stamp.PerformedAt, timeZone);
+            var when = local.Date == today ? $"um {local:HH:mm}" : $"am {local:dd.MM.} um {local:HH:mm}";
+            return (emoji, $"{label} {when}");
+        }
+
+        if (stamps.Count == 1)
+        {
+            var (emoji, text) = Describe(stamps[0]);
+            return $"{emoji} {employeeName} · {text} (nachgetragen)";
+        }
+
+        var lines = stamps.Take(OfflineStampNoticeLineLimit).Select(Describe)
+            .Select(line => $"{line.Emoji} {line.Text}")
+            .Prepend($"📥 {employeeName} · {stamps.Count} Stempel nachgetragen");
+        if (stamps.Count > OfflineStampNoticeLineLimit)
+        {
+            lines = lines.Append($"… und {stamps.Count - OfflineStampNoticeLineLimit} weitere");
+        }
+        return string.Join('\n', lines);
+    }
+
     /// <summary>Warnung: länger als <see cref="WorkTimeLimitCalculator.ContinuousLimit"/> ohne Pause.</summary>
     public static string BuildContinuousWorkWarning(
         string employeeName, DateTimeOffset startUtc, int workedSeconds, TimeZoneInfo timeZone)
