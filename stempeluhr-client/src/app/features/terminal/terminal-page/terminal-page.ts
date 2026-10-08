@@ -14,6 +14,10 @@ import { CorrectionFlow } from '../../clock/correction-flow/correction-flow';
   imports: [CorrectionEntry, CorrectionFlow, DatePipe, DurationPipe, HoursOverviewCard, VersionBadge],
   templateUrl: './terminal-page.html',
   styleUrl: './terminal-page.scss',
+  host: {
+    // Touch-Kiosk: langes Tippen öffnet kein Kontextmenü (siehe :host-Styles).
+    '(contextmenu)': '$event.preventDefault()',
+  },
 })
 export class TerminalPage extends ClockWorkflow {
   private readonly theme = inject(ThemeService);

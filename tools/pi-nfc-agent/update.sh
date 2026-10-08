@@ -9,6 +9,8 @@
 #   3. Link "current" atomar umsetzen, Agent neu starten
 #   4. Health-Check über http://127.0.0.1:<port>/health - schlägt er fehl,
 #      zurück auf die vorherige Version
+#   0. vorab bei jedem Lauf: journald-Konfiguration und Kiosk-Touch
+#      (kiosk_setup.py) des installierten Bundles nachziehen
 #   5. nach jedem erfolgreichen Lauf: fehlt der PC/SC-Fix, die Paketmigration
 #      des installierten Bundles losgelöst starten (pcsc_maintenance.py);
 #      eine durch Neustart unterbrochene Migration auch nach Fehlern zurückrollen
@@ -119,9 +121,19 @@ install_journal() { # release-verzeichnis (auch alte Bundles ohne Datei)
   fi
 }
 
+# Touch scrolling and pinch lock of the kiosk session, also for terminals set up
+# before (install.sh is not re-run there). Changes only the kiosk user's files
+# and takes effect with the next session start.
+configure_kiosk() { # release-verzeichnis (auch alte Bundles ohne Datei)
+  if [ -f "$1/kiosk_setup.py" ] && ! python3 "$1/kiosk_setup.py" --discover; then
+    log "WARNUNG: Kiosk-Touch-Einrichtung fehlgeschlagen; nächster Versuch beim nächsten Update-Lauf." >&2
+  fi
+}
+
 # The first upgrade may still run an old updater. On its next timer run,
 # configure the installed bundle before same-version/offline early exits.
 install_journal "$BASE_DIR/current"
+configure_kiosk "$BASE_DIR/current"
 
 [ -f "$CONFIG" ] || fail "$CONFIG fehlt"
 BASE_URL="$(json_value "$CONFIG" api_base_url "")"

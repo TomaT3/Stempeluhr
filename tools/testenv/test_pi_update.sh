@@ -157,6 +157,7 @@ if run_update --force; then ok "update.sh --force endet erfolgreich"; else bad "
 [ "$(health_version)" = "1.0.0" ] && ok "/health meldet 1.0.0" || bad "/health meldet $(health_version)"
 [ -f "$WORK/systemd/stempeluhr-nfc-agent-update.timer" ] && ok "systemd-Units installiert" || bad "Units fehlen"
 [ -f "$WORK/opt/current/terminal_diagnostics.py" ] && ok "Diagnosemodul im Bundle" || bad "Diagnosemodul fehlt"
+[ -f "$WORK/opt/current/kiosk_setup.py" ] && ok "Kiosk-Touch-Einrichtung im Bundle" || bad "kiosk_setup.py fehlt"
 [ -f "$WORK/opt/current/pcsc_maintenance.py" ] && [ -f "$WORK/opt/current/probe_reader.py" ] \
   && ok "PC/SC-Migration und Leserprüfung im Bundle" || bad "PC/SC-Hilfsdateien fehlen"
 grep -q '^Storage=persistent' "$WORK/journald/stempeluhr.conf" \
@@ -182,6 +183,15 @@ rm "$WORK/journald/stempeluhr.conf"
 if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
 [ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent wurde nicht neu gestartet" || bad "Agent unnötig neu gestartet"
 [ -f "$WORK/journald/stempeluhr.conf" ] && ok "Gleiche Version repariert Journal nach altem Updater" || bad "Journal fehlt weiterhin"
+
+say "2b: Fehler der Kiosk-Touch-Einrichtung blockieren kein Update"
+KIOSK_SETUP="$(readlink -f "$WORK/opt/current")/kiosk_setup.py"
+printf 'raise SystemExit("kaputt")\n' > "$KIOSK_SETUP"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+grep -q 'WARNUNG: Kiosk-Touch-Einrichtung fehlgeschlagen' "$WORK/update.log" \
+  && ok "Fehler wird gemeldet" || bad "Kiosk-Warnung fehlt"
+[ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent läuft unverändert weiter" || bad "Agent neu gestartet"
+cp "$AGENT_SRC/kiosk_setup.py" "$KIOSK_SETUP"
 
 say "3: Server liefert neue Version"
 publish 1.1.0

@@ -50,6 +50,9 @@ weitergereicht. Die Queue bleibt dabei erhalten.
   mit Originalsicherung und Rollback; Leserprüfung ohne Scan. Die Pakete kommen
   aus dem fixierten Paket-Image (`tools/pcsc`); `update.sh` startet die Migration
   automatisch, wenn der Fixstand fehlt.
+- `kiosk_setup.py` – Touch ohne labwc-Mausemulation und `--disable-pinch` für
+  den Chromium-Kiosk; aus `install.sh --kiosk-user` und bei jedem
+  `update.sh`-Lauf (siehe [Pi-Anleitung](../../docs/raspberry-pi-kiosk-nfc.md#touchscreen-wischen-statt-markieren))
 - `config.example.json` – Beispielkonfiguration
 - `test_scan_handling.py`, `test_local_scan_server.py` – Selbsttests ohne
   Kartenleser (`python3 <datei>`); Updater-Test:
