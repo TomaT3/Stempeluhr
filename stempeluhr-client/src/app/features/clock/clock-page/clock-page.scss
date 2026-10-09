@@ -97,9 +97,9 @@ h2 {
   box-shadow: var(--shadow-panel);
 }
 
-.keypad button:hover {
+.keypad button:not(.key-ok):hover:not(:disabled) {
   border-color: var(--color-border-strong);
-  background: var(--color-surface-muted);
+  background: var(--color-surface-hover);
 }
 
 .keypad .key-muted {

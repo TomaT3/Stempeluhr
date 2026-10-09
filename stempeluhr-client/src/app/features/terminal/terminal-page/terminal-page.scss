@@ -153,8 +153,7 @@ p {
   background: var(--color-surface);
   color: var(--color-text);
   font-size: clamp(1.45rem, 4.2vw, 2rem);
-  /* Auf dunklem Grund trennen vor allem Rahmen und Flaeche die Taste. */
-  box-shadow: 0 5px 12px rgba(24, 39, 75, 0.07);
+  box-shadow: var(--shadow-panel);
 }
 
 .keypad .key-muted {
@@ -278,7 +277,7 @@ p {
   color: #ffffff;
   font-size: clamp(1.35rem, 3.2vw, 2.35rem);
   line-height: 1;
-  box-shadow: 0 16px 30px rgba(38, 51, 77, 0.16);
+  box-shadow: var(--shadow-panel);
 }
 
 .action-button.single {
@@ -487,7 +486,7 @@ p {
   border: 1px solid var(--color-danger-border);
   border-radius: var(--radius);
   background: var(--color-danger-surface);
-  box-shadow: 0 6px 16px rgba(24, 39, 75, 0.18);
+  box-shadow: var(--shadow-panel);
   color: var(--color-danger-text);
   font-size: clamp(0.72rem, 1.5vw, 0.85rem);
   line-height: 1.15;
