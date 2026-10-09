@@ -104,15 +104,25 @@ describe('offline-cache', () => {
       await expect(resolveEmployeeByPin('')).resolves.toBeNull();
     });
 
-    it('never stores the PIN itself', async () => {
-      await rememberEmployeePin('4711', employee);
+    it.each([
+      // Random salt and hash may legitimately contain the PIN's digits.
+      ['47110000000000000000000000000000', '7ae579c4f5c733c2444af387154bde3ccd8217ffb3bf462ba36c43c671ddce91'],
+      ['00000000000000000000000000000851', '5cb9f17b050f5f4c5aee71bf9b58ccd233aa04e1b2c57d1b308aa47115872ecd'],
+    ])('stores only a salted SHA-256 verifier with salt %s', async (salt, verifier) => {
+      const randomValues = vi.spyOn(crypto, 'getRandomValues').mockImplementationOnce(array => {
+        const bytes = new Uint8Array(array!.buffer, array!.byteOffset, array!.byteLength);
+        bytes.set(salt.match(/../g)!.map(byte => parseInt(byte, 16)));
+        return array;
+      });
+      try {
+        await rememberEmployeePin('4711', employee);
 
-      const entries = JSON.parse(window.localStorage.getItem(PIN_CACHE_KEY) ?? '[]');
-      expect(entries).toHaveLength(1);
-      expect(entries[0].verifier).toMatch(/^[0-9a-f]{64}$/);
-      expect(entries[0].verifier).not.toContain('4711');
-      expect(entries[0].salt).not.toContain('4711');
-      expect(Object.keys(entries[0])).toEqual(['salt', 'verifier', 'employee']);
+        const entries = JSON.parse(window.localStorage.getItem(PIN_CACHE_KEY) ?? '[]');
+        expect(randomValues).toHaveBeenCalledOnce();
+        expect(entries).toEqual([{ salt, verifier, employee }]);
+      } finally {
+        randomValues.mockRestore();
+      }
     });
 
     it('keeps one entry per employee when the PIN changes', async () => {
