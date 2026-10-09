@@ -24,8 +24,8 @@ input {
 .employee-status-row {
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 10px 24px rgba(24, 39, 75, 0.07);
+  background: var(--color-surface-translucent);
+  box-shadow: var(--shadow-panel);
 }
 
 .status-toolbar {
@@ -36,7 +36,7 @@ input {
 
 .back-link {
   width: fit-content;
-  color: var(--color-primary);
+  color: var(--color-primary-strong);
   font-weight: 850;
   text-decoration: none;
 }
@@ -51,7 +51,7 @@ input {
 label {
   display: grid;
   gap: 6px;
-  color: #435064;
+  color: var(--color-muted);
   font-size: 0.9rem;
   font-weight: 800;
 }
@@ -63,7 +63,7 @@ input {
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   background: var(--color-surface);
-  color: #172033;
+  color: var(--color-text);
   font-size: 1rem;
 }
 
@@ -88,7 +88,7 @@ button:disabled {
 
 .session-state {
   align-self: center;
-  color: #435064;
+  color: var(--color-muted);
   font-size: 0.9rem;
   font-weight: 800;
 }
@@ -102,7 +102,7 @@ button:disabled {
 button.logout {
   border-color: var(--color-border);
   background: var(--color-surface);
-  color: var(--color-primary);
+  color: var(--color-primary-strong);
 }
 
 .status-summary {
@@ -120,14 +120,14 @@ button.logout {
 }
 
 .status-summary span {
-  color: #152033;
+  color: var(--color-text);
   font-size: 1.75rem;
   font-weight: 850;
   line-height: 1;
 }
 
 .status-summary small {
-  color: #657083;
+  color: var(--color-muted);
   font-weight: 800;
 }
 
@@ -152,7 +152,7 @@ button.logout {
 }
 
 .employee-main h2 {
-  color: #152033;
+  color: var(--color-text);
   font-size: 1.1rem;
   font-weight: 850;
   line-height: 1.2;
@@ -170,21 +170,21 @@ button.logout {
 }
 
 .status-details dt {
-  color: #657083;
+  color: var(--color-muted);
   font-size: 0.8rem;
   font-weight: 800;
   text-transform: uppercase;
 }
 
 .status-details dd {
-  color: #243045;
+  color: var(--color-text);
   font-weight: 850;
   font-variant-numeric: tabular-nums;
 }
 
 .message,
 .empty-state {
-  color: #8a3a2f;
+  color: var(--color-danger-text);
   font-size: 1.05rem;
   font-weight: 800;
   text-align: center;
@@ -195,7 +195,7 @@ button.logout {
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   background: var(--color-surface);
-  color: #657083;
+  color: var(--color-muted);
 }
 
 @media (min-width: 980px) {

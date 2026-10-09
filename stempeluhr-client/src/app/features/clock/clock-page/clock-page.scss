@@ -26,7 +26,7 @@ p {
 }
 
 h2 {
-  color: #152033;
+  color: var(--color-text);
   font-size: clamp(1.85rem, 4.6vw, 3.55rem);
   font-weight: 850;
   line-height: 1.05;
@@ -49,9 +49,9 @@ h2 {
   gap: clamp(18px, 3vh, 24px);
   width: min(430px, 100%);
   padding: clamp(18px, 3vw, 28px);
-  border: 1px solid rgba(216, 224, 235, 0.9);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--color-surface-translucent);
   box-shadow: var(--shadow-soft);
 }
 
@@ -65,7 +65,7 @@ h2 {
 .pin-dots span {
   width: clamp(18px, 4vw, 24px);
   height: clamp(18px, 4vw, 24px);
-  border: 3px solid #9aa7b8;
+  border: 3px solid var(--color-indicator);
   border-radius: 50%;
   background: var(--color-surface);
 }
@@ -94,17 +94,17 @@ h2 {
   font-size: clamp(1.55rem, 4vw, 2rem);
   font-weight: 850;
   cursor: pointer;
-  box-shadow: 0 6px 14px rgba(24, 39, 75, 0.06);
+  box-shadow: var(--shadow-panel);
 }
 
 .keypad button:hover {
   border-color: var(--color-border-strong);
-  background: #fdfefe;
+  background: var(--color-surface-muted);
 }
 
 .keypad .key-muted {
-  background: #eef2f7;
-  color: #566277;
+  background: var(--color-surface-subtle);
+  color: var(--color-muted);
 }
 
 .keypad .key-ok {
@@ -134,7 +134,7 @@ h2 {
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   background: var(--color-surface);
-  color: #243045;
+  color: var(--color-text);
   font: inherit;
   font-size: clamp(1.8rem, 4vw, 2.4rem);
   line-height: 1;
@@ -171,9 +171,9 @@ h2 {
   padding: clamp(10px, 1.8vw, 14px) clamp(12px, 2vw, 18px);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--color-surface-translucent);
   text-align: center;
-  box-shadow: 0 8px 20px rgba(24, 39, 75, 0.06);
+  box-shadow: var(--shadow-panel);
 }
 
 .time-info dt {
@@ -185,7 +185,7 @@ h2 {
 
 .time-info dd {
   margin: 0;
-  color: #172033;
+  color: var(--color-text);
   font-size: clamp(1.2rem, 3.6vw, 2rem);
   font-variant-numeric: tabular-nums;
   font-weight: 900;
@@ -210,7 +210,7 @@ h2 {
   letter-spacing: 0;
   line-height: 1;
   cursor: pointer;
-  box-shadow: 0 18px 36px rgba(38, 51, 77, 0.16);
+  box-shadow: var(--shadow-raised);
 }
 
 .stamp-label {
@@ -364,7 +364,7 @@ h2 {
 
 .message {
   min-height: 32px;
-  color: #8a3a2f;
+  color: var(--color-danger-text);
   font-size: clamp(1rem, 2.2vw, 1.35rem);
   font-weight: 800;
   text-align: center;

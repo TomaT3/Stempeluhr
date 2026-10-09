@@ -153,8 +153,7 @@ p {
   background: var(--color-surface);
   color: var(--color-text);
   font-size: clamp(1.45rem, 4.2vw, 2rem);
-  /* Schatten der Tastenkacheln: in beiden Themes derselbe Wert — auf dunklem
-     Grund praktisch unsichtbar, dort trennen Rahmen und Flaeche die Taste. */
+  /* Auf dunklem Grund trennen vor allem Rahmen und Flaeche die Taste. */
   box-shadow: 0 5px 12px rgba(24, 39, 75, 0.07);
 }
 
@@ -567,8 +566,7 @@ app-hours-overview-card {
 
 /* In normal document flow as the first grid item: it spans all columns and
    pushes the content down instead of overlaying the top-right back button.
-   Warnfarbe mit weisser Schrift: bewusst in beiden Themes gleich (der Banner
-   muss auch im dunklen Design als Warnung auffallen). */
+   Warnfarbe mit weisser Schrift, damit der Banner im dunklen Design auffaellt. */
 .offline-banner {
   grid-column: 1 / -1;
   display: flex;

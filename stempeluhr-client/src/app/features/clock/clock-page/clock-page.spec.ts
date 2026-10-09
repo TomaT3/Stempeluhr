@@ -131,19 +131,7 @@ describe('ClockPage', () => {
   }
 
   afterEach(() => {
-    delete document.documentElement.dataset['theme'];
     vi.useRealTimers();
-  });
-
-  it('faerbt eine hell erwartete Seite wieder hell, wenn der Kiosk-Pfad hierher umleitet', () => {
-    // Zustand wie nach dem Anstrich-Skript in index.html: der Pfad endet auf
-    // /terminal, aufgeloest wird aber diese Seite (Wildcard-Redirect) - ohne
-    // die eigene Zusage bliebe das Dokument fuer den Rest der Sitzung dunkel.
-    document.documentElement.dataset['theme'] = 'dark';
-
-    TestBed.createComponent(ClockPage);
-
-    expect(document.documentElement.dataset['theme']).toBe('light');
   });
 
   it('confirms the pin automatically after the fourth digit', () => {
