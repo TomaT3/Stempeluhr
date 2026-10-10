@@ -142,7 +142,6 @@ describe('TerminalPage', () => {
   afterEach(() => {
     vi.useRealTimers();
     window.localStorage.clear();
-    delete document.documentElement.dataset['theme'];
   });
 
   /** Types the full PIN and resolves the pending pinLogin with a session. */
@@ -420,17 +419,6 @@ describe('TerminalPage', () => {
     fixture.componentInstance.back();
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.rejected-notice')).not.toBeNull();
-  });
-
-  it('schaltet den Kiosk auf das dunkle Design und beim Verlassen zurueck auf hell', () => {
-    const fixture = TestBed.createComponent(TerminalPage);
-    fixture.detectChanges();
-
-    expect(document.documentElement.dataset['theme']).toBe('dark');
-
-    fixture.destroy();
-
-    expect(document.documentElement.dataset['theme']).toBe('light');
   });
 
   it('unterdrueckt am Touch-Kiosk das Kontextmenue bei langem Druck', () => {

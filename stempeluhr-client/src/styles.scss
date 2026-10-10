@@ -11,65 +11,23 @@ body {
 }
 
 /*
- * Farb- und Schatten-Tokens. Die Komponenten greifen ausschliesslich hierauf zu,
- * damit ein Theme nur diesen Block austauscht. Ausnahme: Werte, die auf einer
- * farbigen Aktionsflaeche liegen (weisse Schrift/Glyphen auf gruen/rot/amber/blau)
- * bleiben literal - sie sind in beiden Themes gleich.
+ * Gemeinsames dunkles Design fuer Terminal, Mitarbeiteransicht und Verwaltung.
+ * Komponenten verwenden diese Tokens; weisse Schrift/Glyphen auf farbigen
+ * Aktionsflaechen bleiben literal.
  */
 :root {
-  color-scheme: light;
-  --color-page: #f4f7fb;
-  --color-surface: #ffffff;
-  --color-surface-muted: #f7f9fc;
-  /* Setzt sich sichtbar vom Panel ab (Loeschtaste des Tastenfelds, Zurueck-Knopf) */
-  --color-surface-subtle: #eef2f7;
-  /* Panels, Topbar und Karten: leicht durchscheinend ueber dem Seitenhintergrund */
-  --color-surface-translucent: rgba(255, 255, 255, 0.92);
-  --color-page-glow: rgba(33, 87, 214, 0.12);
-  --color-text: #172033;
-  --color-muted: #607086;
-  --color-border: #d8e0eb;
-  --color-border-strong: #c4cfdd;
-  --color-primary: #2157d6;
-  --color-primary-strong: #173fa5;
   --color-success: #16865c;
   --color-danger: #c9432f;
   --gradient-start: linear-gradient(180deg, #199968, var(--color-success));
   --gradient-pause: linear-gradient(180deg, #d09221, #b7791f);
   --gradient-stop: linear-gradient(180deg, #d8523d, var(--color-danger));
-  --gradient-switch: linear-gradient(180deg, #3d6fd8, var(--color-primary));
-  /* Fehlermeldungen am Kiosk (Hinweiszeile, abgelehnter Nachtrag) */
-  --color-danger-text: #8a3a2f;
-  --color-danger-border: #d8b4a6;
-  --color-danger-surface: #fdf3ef;
-  /* Neutraler Punkt: Ring der PIN-Punkte, Statuspunkt */
-  --color-indicator: #9aa7b8;
-  /* Versions-Badge (liegt immer ueber Karten und Panel-Ecken) */
-  --color-badge-surface: rgba(15, 23, 42, 0.55);
-  --color-badge-text: rgba(255, 255, 255, 0.85);
-  /* Fokusrahmen der Bedienelemente (Tastaturbedienung am Kiosk) */
-  --color-focus-ring: rgba(33, 87, 214, 0.28);
-  --shadow-soft: 0 14px 34px rgba(24, 39, 75, 0.1);
-  --shadow-raised: 0 22px 48px rgba(24, 39, 75, 0.16);
-  --shadow-panel: 0 10px 24px rgba(24, 39, 75, 0.1);
   --radius: 8px;
-}
-
-/*
- * Dunkles Design fuer den Kiosk (Issue #39). Das Display steht den ganzen Tag im
- * Raum, ein helles Vollflaechen-UI blendet. Bewusst KEIN Neubau der Komponenten:
- * derselbe Token-Satz, andere Werte.
- *
- * --color-success/--color-danger bleiben absichtlich unveraendert: sie tragen
- * nur die Stempelflaechen (gruen/rot mit weisser Schrift) und sind in beiden
- * Themes gleich.
- */
-:root[data-theme='dark'] {
   color-scheme: dark;
   --color-page: #0f1621;
   --color-surface: #1a2231;
   --color-surface-muted: #232d3f;
-  --color-surface-subtle: #232d3f;
+  --color-surface-subtle: #2a3549;
+  --color-surface-hover: #34425b;
   --color-surface-translucent: rgba(26, 34, 49, 0.92);
   --color-page-glow: rgba(63, 116, 232, 0.2);
   --color-text: #e7edf7;
@@ -78,15 +36,22 @@ body {
   --color-border-strong: #4e5e78;
   --color-primary: #3a6ee2;
   --color-primary-strong: #6f9bf5;
+  --color-primary-surface: #202f4c;
+  --color-primary-border: #405b89;
+  --color-success-text: #82d9b1;
+  --color-success-border: #32664e;
+  --color-success-surface: #192f28;
+  --color-warning: #c98a17;
+  --color-warning-text: #efc36f;
+  --color-warning-border: #765c30;
+  --color-warning-surface: #342b1c;
   --gradient-switch: linear-gradient(180deg, #5b8afa, var(--color-primary));
   --color-danger-text: #f0a08f;
   --color-danger-border: #6b3a2c;
   --color-danger-surface: #33201a;
-  --color-indicator: #55647d;
+  --color-indicator: #6b7a94;
   --color-badge-surface: rgba(255, 255, 255, 0.16);
   --color-badge-text: rgba(233, 239, 248, 0.9);
-  /* Der helle Fokusrahmen (Blau mit 28 % Deckkraft) verschwindet auf dunklem
-     Grund (1,1:1 gegen die Knopfflaeche). Hier ein helles Blau: 5,8:1. */
   --color-focus-ring: #6f9bf5;
   --shadow-soft: 0 14px 34px rgba(0, 0, 0, 0.45);
   --shadow-raised: 0 22px 48px rgba(0, 0, 0, 0.55);
@@ -102,7 +67,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -116,7 +83,9 @@ button {
 
 button,
 a,
-input {
+input,
+select,
+textarea {
   transition:
     border-color 140ms ease,
     background-color 140ms ease,
@@ -127,7 +96,19 @@ input {
 
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
   outline: 3px solid var(--color-focus-ring);
   outline-offset: 2px;
+}
+
+a {
+  color: var(--color-primary-strong);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-muted);
+  opacity: 1;
 }
