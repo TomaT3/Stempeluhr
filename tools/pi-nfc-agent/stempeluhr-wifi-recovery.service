@@ -13,3 +13,6 @@ TimeoutStartSec=3min
 RuntimeDirectory=stempeluhr-wifi-recovery
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
+# Only the marker of a running radio reset; must survive a reboot.
+StateDirectory=stempeluhr-wifi-recovery
+StateDirectoryMode=0700

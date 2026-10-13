@@ -270,10 +270,13 @@ Terminal und wird einmalig aktiviert.
   wartet er 1, 2, 4, 8, höchstens 15 Minuten.
 - Nach drei erfolglosen Versuchen schaltet er den WLAN-Funk einmal aus und
   wieder ein, danach frühestens wieder nach 30 Minuten. Einen Neustart des Pis
-  löst er nie aus.
+  löst er nie aus. Fällt während dieses Resets der Strom aus, schaltet er den
+  Funk nach dem Boot wieder ein (Marker unter
+  `/var/lib/stempeluhr-wifi-recovery`).
 - Ein verbundenes WLAN bleibt immer unberührt, auch wenn Server, Kimai, DNS,
   Internet oder Tailscale ausfallen. Ebenso ein bewusst ausgeschalteter
-  WLAN-Funk, ein nicht verwaltetes Gerät und ein verbundenes Ethernet.
+  WLAN-Funk, ein nicht verwaltetes Gerät, ein verbundenes Ethernet und ein
+  weiteres verbundenes WLAN-Gerät (z. B. USB-Adapter).
 - Profil und Gerät ermittelt er selbst: das WLAN-Profil mit Autoconnect und der
   höchsten Priorität, bei Gleichstand das zuletzt verbundene.
 

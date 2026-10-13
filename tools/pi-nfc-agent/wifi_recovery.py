@@ -20,7 +20,10 @@ Optional settings in config.json (all keys may be missing):
 
 State lives in /run (cleared on reboot) and uses the monotonic clock, which
 is shared between runs of one boot and unaffected by NTP jumps after a
-reconnect. Never reads or logs secrets (no --show-secrets, no --ask).
+reconnect. Only the marker of a running radio reset is kept in /var/lib:
+NetworkManager stores the radio switch persistently, so a reboot between
+"off" and "on" must still end with the radio switched on again.
+Never reads or logs secrets (no --show-secrets, no --ask).
 """
 from __future__ import annotations
 
@@ -37,6 +40,8 @@ from typing import Callable, List, Optional, Tuple
 
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
 STATE_DIR = Path(os.environ.get("STEMPELUHR_WIFI_STATE", "/run/stempeluhr-wifi-recovery"))
+RESET_MARKER = Path(os.environ.get("STEMPELUHR_WIFI_PERSISTENT_STATE",
+                                   "/var/lib/stempeluhr-wifi-recovery")) / "radio-reset-pending"
 WIFI_TYPE = "802-11-wireless"
 # A running NetworkManager attempt (incl. need-auth, which ends after ~2 min)
 # is only interrupted once it hangs longer than this.
@@ -79,6 +84,11 @@ class Observation:
     device_state: str = "disconnected"
     state_detail: str = ""
     ethernet_connected: bool = False
+    # Another WLAN device is connected: radio off would cut it, and the profile
+    # could be active there and would be moved away by the activation.
+    other_wifi_connected: bool = False
+    # Reboot-proof marker of our own radio reset (see RESET_MARKER).
+    radio_reset_pending: bool = False
     profile: Optional[str] = None
     profile_problem: str = ""
 
@@ -202,6 +212,7 @@ def observe(nmcli: Runner, settings: Settings) -> Observation:
     if status.returncode != 0:
         observation.nm_running = False
         return observation
+    wifi = []
     for line in status.stdout.splitlines():
         fields = split_terse(line)
         if len(fields) < 3:
@@ -209,10 +220,15 @@ def observe(nmcli: Runner, settings: Settings) -> Observation:
         name, kind, state = fields[:3]
         if kind == "ethernet" and device_category(state) == "connected":
             observation.ethernet_connected = True
-        if kind == "wifi" and observation.device is None and settings.interface in ("", name):
+        if kind == "wifi":
+            wifi.append((name, state))
+    for name, state in wifi:
+        if observation.device is None and settings.interface in ("", name):
             observation.device = name
             observation.device_state = device_category(state)
             observation.state_detail = state
+        elif device_category(state) == "connected":
+            observation.other_wifi_connected = True
     if observation.device is None or observation.device_state == "connected":
         return observation
 
@@ -256,7 +272,7 @@ def decide(observation: Observation, state: dict, now: float, settings: Settings
     if not observation.nm_running:
         return Decision(SKIP, "NetworkManager läuft nicht")
     if not observation.radio_enabled:
-        if state.get("radio_reset_pending"):
+        if observation.radio_reset_pending:
             return Decision(RESTORE_RADIO, "eigener Funk-Reset wurde unterbrochen")
         return Decision(SKIP, "WLAN-Funk ist ausgeschaltet")
     if observation.device is None:
@@ -267,6 +283,8 @@ def decide(observation: Observation, state: dict, now: float, settings: Settings
         return Decision(SKIP, f"WLAN-Gerät {observation.device} ist {observation.state_detail or observation.device_state}")
     if observation.ethernet_connected:
         return Decision(SKIP, "Ethernet verbunden")
+    if observation.other_wifi_connected:
+        return Decision(SKIP, "anderes WLAN-Gerät verbunden")
     if observation.profile is None:
         return Decision(SKIP, observation.profile_problem)
 
@@ -294,8 +312,9 @@ def short_error(result: CommandResult) -> str:
 class Recovery:
     def __init__(self, nmcli: Runner, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
-                 persist: Callable[[dict], None] = lambda state: None):
+                 persist: Callable[[dict], None] = lambda state: None, marker: Path = RESET_MARKER):
         self.nmcli, self.clock, self.sleep, self.log, self.persist = nmcli, clock, sleep, log, persist
+        self.marker = marker
 
     def tick(self, state: dict, settings: Settings) -> Decision:
         """One check; updates state in place and returns what was decided."""
@@ -303,7 +322,8 @@ class Recovery:
         observation = observe(self.nmcli, settings)
         if observation.nmcli_available and observation.nm_running and observation.radio_enabled:
             # Radio is on: a later deliberate switch-off must stay off.
-            state["radio_reset_pending"] = False
+            self.clear_marker()
+        observation.radio_reset_pending = self.marker.exists()
         new_outage = False
         if observation.device and observation.device_state in ("disconnected", "connecting"):
             if state.get("disconnected_since") is None:
@@ -350,6 +370,9 @@ class Recovery:
                 self.log(f"WARNUNG: nmcli connection reload fehlgeschlagen: {short_error(reload)}")
             state["reloaded"] = True
         state["attempts"] = state.get("attempts", 0) + 1
+        # nmcli --wait only limits the client; NetworkManager may continue this
+        # activation. A later "connecting" gets the full window from here.
+        state["connecting_since"] = self.clock()
         self.log(f"WLAN-Recovery Versuch {state['attempts']}: aktiviere Profil {observation.profile} "
                  f"auf {observation.device} ({observation.state_detail}).")
         result = self.nmcli(["--wait", str(ACTIVATION_WAIT_SECONDS), "connection", "up", "uuid",
@@ -364,11 +387,16 @@ class Recovery:
                      f"nächster Versuch frühestens in {delay:.0f} s.")
 
     def reset_radio(self, state: dict, reason: str) -> None:
-        self.log(f"WLAN-Recovery: {reason} - schalte WLAN-Funk aus und wieder ein.")
-        # Persisted before switching off: a killed run must not leave the radio
-        # off, which the next run would otherwise take as deliberate.
-        state["radio_reset_pending"] = True
+        # Also a skipped reset waits for the cooldown; activations continue meanwhile.
         state["last_radio_reset_at"] = self.clock()
+        # Written to disk before switching off: a killed run or a reboot must not
+        # leave the radio off, which later runs would take as deliberate.
+        try:
+            self.write_marker()
+        except OSError as error:
+            self.log(f"WARNUNG: Funk-Reset übersprungen, Marker {self.marker} nicht schreibbar: {error}")
+            return
+        self.log(f"WLAN-Recovery: {reason} - schalte WLAN-Funk aus und wieder ein.")
         self.persist(state)
         try:
             off = self.nmcli(["radio", "wifi", "off"], READ_TIMEOUT_SECONDS)
@@ -380,11 +408,28 @@ class Recovery:
             self.restore_radio(state)
         # Give NetworkManager's own autoconnect a chance before the next activation.
         state["next_attempt_at"] = self.clock() + BACKOFF_BASE_SECONDS
+        state["connecting_since"] = self.clock()
+
+    def clear_marker(self) -> None:
+        if self.marker.exists():
+            self.marker.unlink()
+
+    def write_marker(self) -> None:
+        self.marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with self.marker.open("w") as handle:
+            handle.write("radio wifi off\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        directory = os.open(self.marker.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     def restore_radio(self, state: dict) -> None:
         on = self.nmcli(["radio", "wifi", "on"], READ_TIMEOUT_SECONDS)
         if on.returncode == 0:
-            state["radio_reset_pending"] = False
+            self.clear_marker()
             self.log("WLAN-Funk wieder eingeschaltet.")
         else:
             self.log(f"FEHLER: WLAN-Funk ließ sich nicht einschalten: {short_error(on)}; nächster Versuch beim nächsten Lauf.")
@@ -416,7 +461,7 @@ def main(argv: Optional[List[str]] = None, nmcli: Runner = run_nmcli) -> int:
             return 0  # another run is active
         state = load_state()
         try:
-            Recovery(nmcli, persist=save_state).tick(state, load_settings(args.config))
+            Recovery(nmcli, persist=save_state, marker=RESET_MARKER).tick(state, load_settings(args.config))
         finally:
             save_state(state)
     return 0

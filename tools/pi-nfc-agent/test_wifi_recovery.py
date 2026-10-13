@@ -14,6 +14,10 @@ UUID = "0b9f6e4a-1111-4c2e-9a3f-000000000001"
 OTHER = "0b9f6e4a-2222-4c2e-9a3f-000000000002"
 
 
+class PowerLoss(BaseException):
+    """Ends a run abruptly, like a reboot: no finally block may reach nmcli."""
+
+
 class FakeNmcli:
     """Answers the nmcli calls of wifi_recovery from plain attributes."""
 
@@ -27,14 +31,22 @@ class FakeNmcli:
         self.reason = "7 (Secrets were required, but not provided)"
         # uuid, type, autoconnect, priority, timestamp, interface-name
         self.profiles = [(UUID, "802-11-wireless", "yes", "0", "1760300000", "")]
+        # CommandResult or a callable returning one (e.g. advancing the clock).
         self.up_results = []
         self.radio_results = {}
         self.calls = []
+        self.marker = None
+        self.marker_at_off = None
+        self.power_lost = False
 
     def __call__(self, args, timeout):
         if self.missing:
             raise FileNotFoundError("nmcli")
+        if self.power_lost:
+            raise PowerLoss()
         self.calls.append(list(args))
+        if args == ["radio", "wifi", "off"] and self.marker is not None:
+            self.marker_at_off = self.marker.exists()
         if args == ["-t", "-f", "RUNNING", "general"]:
             return CommandResult(0 if self.running else 8, "running\n" if self.running else "",
                                  "" if self.running else "Error: NetworkManager is not running.")
@@ -57,7 +69,8 @@ class FakeNmcli:
         if args == ["connection", "reload"]:
             return CommandResult(0)
         if "up" in args:
-            return self.up_results.pop(0) if self.up_results else CommandResult(0)
+            result = self.up_results.pop(0) if self.up_results else CommandResult(0)
+            return result() if callable(result) else result
         raise AssertionError(f"unexpected nmcli call {args}")
 
     def set_wifi(self, state):
@@ -72,14 +85,21 @@ class FakeNmcli:
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.marker = Path(folder.name) / "persistent" / "radio-reset-pending"
         self.nmcli = FakeNmcli()
+        self.nmcli.marker = self.marker
         self.now = 1000.0
         self.logs = []
         self.state = {}
         self.settings = Settings()
         self.persisted = []
-        self.recovery = Recovery(self.nmcli, clock=lambda: self.now, sleep=lambda seconds: None,
-                                 log=self.logs.append, persist=lambda state: self.persisted.append(dict(state)))
+        self.recovery = self.new_recovery()
+
+    def new_recovery(self, sleep=lambda seconds: None):
+        return Recovery(self.nmcli, clock=lambda: self.now, sleep=sleep, log=self.logs.append,
+                        persist=lambda state: self.persisted.append(dict(state)), marker=self.marker)
 
     def tick(self, advance=0):
         self.now += advance
@@ -198,8 +218,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.nmcli.ups()), 3)
         self.assertEqual(self.tick(240), wifi_recovery.RADIO_RESET)
         self.assertEqual(self.nmcli.radio_switches(), ["off", "on"])
-        self.assertTrue(self.persisted[-1]["radio_reset_pending"])
-        self.assertFalse(self.state["radio_reset_pending"])
+        self.assertTrue(self.nmcli.marker_at_off, "Marker muss vor dem Ausschalten auf der Platte stehen")
+        self.assertFalse(self.marker.exists())
         self.assertEqual(self.tick(60), wifi_recovery.ACTIVATE)
         # Further failures within the cooldown only activate again.
         self.assertEqual(self.tick(900), wifi_recovery.ACTIVATE)
@@ -219,31 +239,89 @@ class RecoveryTests(unittest.TestCase):
         self.nmcli.radio_results["off"] = CommandResult(1, "", "Error: not authorized")
         self.assertEqual(self.tick(), wifi_recovery.RADIO_RESET)
         self.assertEqual(self.nmcli.radio, "enabled")
-        self.assertFalse(self.state["radio_reset_pending"])
+        self.assertFalse(self.marker.exists())
 
-    def test_interrupted_radio_reset_is_repaired(self):
-        self.nmcli.radio = "disabled"
-        self.state["radio_reset_pending"] = True
-        self.assertEqual(self.tick(), wifi_recovery.RESTORE_RADIO)
+    def test_unwritable_marker_skips_radio_reset(self):
+        self.marker.parent.parent.mkdir(exist_ok=True)
+        self.marker.parent.write_text("kein Verzeichnis")
+        self.state.update(disconnected_since=0, attempts=3, next_attempt_at=0)
+        self.assertEqual(self.tick(), wifi_recovery.RADIO_RESET)
+        self.assertEqual(self.nmcli.radio_switches(), [])
+        self.assertIn("Funk-Reset übersprungen", self.logs[-1])
+        # Cooldown applies: activations go on instead of retrying the reset.
+        self.assertEqual(self.tick(60), wifi_recovery.ACTIVATE)
+
+    def test_radio_reset_interrupted_by_reboot_is_repaired(self):
+        def power_loss(seconds):
+            self.nmcli.power_lost = True
+
+        self.recovery = self.new_recovery(sleep=power_loss)
+        self.state.update(disconnected_since=0, attempts=3, next_attempt_at=0)
+        with self.assertRaises(PowerLoss):
+            self.tick()
+        self.assertEqual(self.nmcli.radio, "disabled")
+        # Reboot: volatile state in /run is gone, NetworkManager keeps the radio off.
+        self.nmcli.power_lost = False
+        self.state = {}
+        self.recovery = self.new_recovery()
+        self.assertEqual(self.tick(180), wifi_recovery.RESTORE_RADIO)
         self.assertEqual(self.nmcli.radio, "enabled")
-        self.assertFalse(self.state["radio_reset_pending"])
+        self.assertFalse(self.marker.exists())
         # Afterwards a deliberate switch-off is respected.
         self.nmcli.radio = "disabled"
         self.assertEqual(self.tick(60), wifi_recovery.SKIP)
-        self.assertEqual(self.nmcli.radio_switches(), ["on"])
+        self.assertEqual(self.nmcli.radio_switches(), ["off", "on"])
 
     def test_failed_radio_restore_is_retried(self):
         self.nmcli.radio = "disabled"
-        self.state["radio_reset_pending"] = True
+        self.recovery.write_marker()
         self.nmcli.radio_results["on"] = CommandResult(1, "", "Error")
         self.assertEqual(self.tick(), wifi_recovery.RESTORE_RADIO)
-        self.assertTrue(self.state["radio_reset_pending"])
+        self.assertTrue(self.marker.exists())
         del self.nmcli.radio_results["on"]
         self.assertEqual(self.tick(60), wifi_recovery.RESTORE_RADIO)
         self.assertEqual(self.nmcli.radio, "enabled")
+        self.assertFalse(self.marker.exists())
+
+    def test_marker_is_dropped_once_radio_is_on(self):
+        self.recovery.write_marker()
+        self.tick()
+        self.assertFalse(self.marker.exists())
+        self.nmcli.radio = "disabled"
+        self.assertEqual(self.tick(60), wifi_recovery.SKIP)
+
+    def test_timed_out_activation_gets_full_connecting_window(self):
+        # NetworkManager has been connecting for 180 s; the replacement attempt
+        # times out after 30 s while NetworkManager continues it.
+        self.nmcli.set_wifi("connecting (need authentication)")
+
+        def still_connecting():
+            self.now += 30
+            return CommandResult(None)
+
+        self.nmcli.up_results = [still_connecting, CommandResult(4)]
+        self.tick()
+        self.assertEqual(self.tick(180), wifi_recovery.ACTIVATE)  # started at 1180
+        self.assertEqual(self.tick(60), wifi_recovery.WAIT)  # backoff over, 90 s since start
+        self.assertEqual(self.tick(89), wifi_recovery.WAIT)
+        self.assertEqual(self.tick(1), wifi_recovery.ACTIVATE)  # 180 s after the own attempt
+        self.assertEqual(len(self.nmcli.ups()), 2)
+
+    def test_connected_second_wifi_is_never_interrupted(self):
+        for interface in ("wlan0", ""):
+            with self.subTest(interface=interface):
+                self.setUp()
+                self.nmcli.devices.append(("wlan1", "wifi", "connected"))
+                self.settings.interface = interface
+                self.state.update(disconnected_since=0, attempts=3, next_attempt_at=0)
+                for _ in range(5):
+                    self.assertEqual(self.tick(900), wifi_recovery.SKIP)
+                self.assertEqual(self.nmcli.radio_switches(), [])
+                self.assertEqual(self.nmcli.ups(), [])
+                self.assertIn("anderes WLAN-Gerät verbunden", self.logs[0])
 
     def test_configured_interface_and_uuid(self):
-        self.nmcli.devices.insert(0, ("wlan1", "wifi", "connected"))
+        self.nmcli.devices.insert(0, ("wlan1", "wifi", "disconnected"))
         self.nmcli.profiles.append((OTHER, "802-11-wireless", "no", "0", "1", ""))
         self.settings.interface = "wlan0"
         self.settings.connection_uuid = OTHER
@@ -304,7 +382,8 @@ class ConfigAndMainTests(unittest.TestCase):
 
     def test_main_persists_state_between_runs(self):
         nmcli = FakeNmcli()
-        with patch.object(wifi_recovery, "STATE_DIR", self.root / "state"):
+        with patch.object(wifi_recovery, "STATE_DIR", self.root / "state"), \
+                patch.object(wifi_recovery, "RESET_MARKER", self.root / "persistent" / "radio-reset-pending"):
             self.assertEqual(wifi_recovery.main(["--config", str(self.config)], nmcli), 0)
             first = json.loads((self.root / "state" / "state.json").read_text())
             self.assertIsNotNone(first["disconnected_since"])
