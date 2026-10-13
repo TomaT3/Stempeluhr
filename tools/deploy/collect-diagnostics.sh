@@ -22,6 +22,10 @@ section "Services"
 systemctl --failed --no-pager
 section "Agent journal (may contain card IDs from older agents)"
 journalctl -u stempeluhr-nfc-agent -u stempeluhr-nfc-agent-update --since "$SINCE" --no-pager -a
+section "WLAN recovery and NetworkManager"
+systemctl is-active stempeluhr-wifi-recovery.timer || true
+nmcli -t -f DEVICE,TYPE,STATE device status || true
+journalctl -u stempeluhr-wifi-recovery -u NetworkManager --since "$SINCE" --no-pager -a
 section "Kernel journal"
 journalctl -k --since "$SINCE" --no-pager
 section "Previous boot kernel"

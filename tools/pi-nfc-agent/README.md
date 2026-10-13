@@ -53,6 +53,11 @@ weitergereicht. Die Queue bleibt dabei erhalten.
 - `kiosk_setup.py` – Touch ohne labwc-Mausemulation und `--disable-pinch` für
   den Chromium-Kiosk; aus `install.sh --kiosk-user` und bei jedem
   `update.sh`-Lauf (siehe [Pi-Anleitung](../../docs/raspberry-pi-kiosk-nfc.md#touchscreen-wischen-statt-markieren))
+- `wifi_recovery.py`, `stempeluhr-wifi-recovery.service` / `.timer` –
+  WLAN-Recovery als eigener root-Timer (alle 45 s): aktiviert nach längerer
+  Trennung das gespeicherte WLAN-Profil neu, z. B. nach `no-secrets`.
+  `update.sh` installiert die Units bei jedem Lauf nach und aktiviert den
+  Timer einmalig (siehe [Pi-Anleitung](../../docs/raspberry-pi-kiosk-nfc.md#7-wlan-recovery))
 - `config.example.json` – Beispielkonfiguration
 - `test_scan_handling.py`, `test_local_scan_server.py` – Selbsttests ohne
   Kartenleser (`python3 <datei>`); Updater-Test:
@@ -82,6 +87,7 @@ SIGTERM wird er freigegeben.
 | `local_port` | `8737` | Port des Loopback-Servers |
 | `selection_timeout_seconds` | `10` | Wartezeit auf das Ack der Kiosk-App |
 | `kiosk_origin` | Origin von `api_base_url` | Nur nötig, wenn der Kiosk die Seite von einer anderen Adresse lädt als `api_base_url`. Das Journal meldet abgelehnte Origins. |
+| `wifi_recovery` | – | optionale Einstellungen der WLAN-Recovery, siehe [Pi-Anleitung](../../docs/raspberry-pi-kiosk-nfc.md#7-wlan-recovery); der Agent selbst liest sie nicht |
 
 Schlüssel älterer Versionen (`reader_token`, `queue_path`, `fallback_mode`)
 werden ignoriert.

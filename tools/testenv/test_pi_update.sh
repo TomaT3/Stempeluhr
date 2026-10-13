@@ -5,7 +5,7 @@
 # Fake-systemctl startet den echten Agenten (mit gestubbtem pyscard) aus
 # releases/<version>. Geprüft werden Erstinstallation, "nichts zu tun",
 # Update, manipulierte Prüfsumme, Rollback bei defektem Agenten, Server
-# offline und Dev-Server.
+# offline, Dev-Server und die Einrichtung der WLAN-Recovery.
 #
 # Voraussetzungen: bash, python3, curl, sha256sum, tar (Linux).
 # Usage: bash tools/testenv/test_pi_update.sh
@@ -108,10 +108,11 @@ case "\$1" in
       --config "$WORK/config.json" > "$WORK/agent.log" 2>&1 &
     echo \$! > "$WORK/agent.pid"
     ;;
-  *) ;;
+  *) echo "\$*" >> "$WORK/systemctl.log" ;;
 esac
 EOF
 chmod +x "$WORK/systemctl"
+wifi_enables() { grep -c '^enable --now stempeluhr-wifi-recovery.timer$' "$WORK/systemctl.log" 2>/dev/null || true; }
 
 run_update() {
   STEMPELUHR_AGENT_CONFIG="$WORK/config.json" \
@@ -164,6 +165,11 @@ grep -q '^Storage=persistent' "$WORK/journald/stempeluhr.conf" \
   && ok "Journal überlebt Neustarts" || bad "Persistentes Journal fehlt"
 grep -q "current/stempeluhr_nfc_agent.py" "$WORK/systemd/stempeluhr-nfc-agent.service" \
   && ok "Service startet aus current/" || bad "Service-Unit zeigt nicht auf current/"
+[ -f "$WORK/opt/current/wifi_recovery.py" ] && [ -f "$WORK/systemd/stempeluhr-wifi-recovery.service" ] \
+  && [ -f "$WORK/systemd/stempeluhr-wifi-recovery.timer" ] \
+  && ok "WLAN-Recovery im Bundle, Units installiert" || bad "WLAN-Recovery fehlt"
+[ "$(wifi_enables)" = 1 ] && [ -f "$WORK/opt/.wifi-recovery-enabled" ] \
+  && ok "WLAN-Recovery-Timer einmal aktiviert" || bad "Timer-Aktivierung: $(wifi_enables)x"
 
 # Existing config deliberately has no terminal_token. Capability discovery must
 # fail explicitly while the original scan bridge stays usable after update.
@@ -192,6 +198,21 @@ grep -q 'WARNUNG: Kiosk-Touch-Einrichtung fehlgeschlagen' "$WORK/update.log" \
   && ok "Fehler wird gemeldet" || bad "Kiosk-Warnung fehlt"
 [ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent läuft unverändert weiter" || bad "Agent neu gestartet"
 cp "$AGENT_SRC/kiosk_setup.py" "$KIOSK_SETUP"
+
+say "2c: WLAN-Recovery nach Upgrade durch alten Updater"
+# The old updater installed the bundle but neither these units nor the timer.
+rm "$WORK/systemd/stempeluhr-wifi-recovery.service" "$WORK/systemd/stempeluhr-wifi-recovery.timer" \
+  "$WORK/opt/.wifi-recovery-enabled"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ -f "$WORK/systemd/stempeluhr-wifi-recovery.timer" ] && [ "$(wifi_enables)" = 2 ] \
+  && ok "Gleiche Version installiert und aktiviert WLAN-Recovery" || bad "WLAN-Recovery nicht nachgezogen ($(wifi_enables)x)"
+[ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent dabei nicht neu gestartet" || bad "Agent neu gestartet"
+# Disabled by hand for maintenance (marker stays): never enabled again.
+echo "# geändert" >> "$WORK/systemd/stempeluhr-wifi-recovery.service"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+cmp -s "$AGENT_SRC/stempeluhr-wifi-recovery.service" "$WORK/systemd/stempeluhr-wifi-recovery.service" \
+  && ok "Geänderte Unit wird ersetzt" || bad "Unit nicht ersetzt"
+[ "$(wifi_enables)" = 2 ] && ok "Bereits eingerichteter Timer wird nicht erneut aktiviert" || bad "Timer erneut aktiviert"
 
 say "3: Server liefert neue Version"
 publish 1.1.0
@@ -256,6 +277,17 @@ say "8: Server zurückgerollt -> Agent folgt"
 publish 1.0.0
 if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
 [ "$(health_version)" = "1.0.0" ] && ok "Agent folgt auf 1.0.0" || bad "/health meldet $(health_version)"
+
+say "8b: Rollback auf ein Bundle ohne WLAN-Recovery"
+cp -r "$AGENT_SRC" "$WORK/old-src"
+rm "$WORK/old-src/wifi_recovery.py" "$WORK/old-src"/stempeluhr-wifi-recovery.*
+sed -i 's/ wifi_recovery.py//; s/ stempeluhr-wifi-recovery.service stempeluhr-wifi-recovery.timer//' "$WORK/old-src/build-bundle.sh"
+publish 0.9.0 "$WORK/old-src"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(health_version)" = "0.9.0" ] && ok "Agent folgt auf 0.9.0" || bad "/health meldet $(health_version)"
+[ ! -f "$WORK/opt/current/wifi_recovery.py" ] \
+  && grep -q '^ConditionPathExists=/opt/stempeluhr-nfc-agent/current/wifi_recovery.py$' "$WORK/systemd/stempeluhr-wifi-recovery.service" \
+  && ok "Vorhandene WLAN-Units bleiben, Dienst überspringt sich ohne Skript" || bad "WLAN-Recovery nach Rollback inkonsistent"
 
 say "9: Fehlender PC/SC-Fix startet die Paketmigration automatisch"
 [ ! -f "$WORK/systemd-run.log" ] && ok "Bundles ohne Pakete starten keine Migration" || bad "Migration ohne Pakete gestartet"
