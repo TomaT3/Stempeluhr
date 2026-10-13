@@ -251,6 +251,60 @@ wifi.powersave = 2
 Danach `sudo systemctl restart NetworkManager`; `iw dev wlan0 get power_save`
 muss `off` melden.
 
+## 7. WLAN-Recovery
+
+Scheitert ein WPA-Handshake (z. B. bei einem AP-/Repeater-Wechsel), verlangt
+NetworkManager neue Zugangsdaten. Ohne Desktop-Passwortdialog liefert sie
+niemand. Die Aktivierung endet dann mit `no-secrets`, und NetworkManager
+versucht es nicht erneut. Bisher half nur ein Neustart.
+
+Der Timer `stempeluhr-wifi-recovery.timer` prüft das WLAN deshalb alle 45 s,
+getrennt vom NFC-Agenten. Er kommt mit dem Agent-Update automatisch auf jedes
+Terminal und wird einmalig aktiviert.
+
+- Erst nach 120 s zusammenhängender Trennung greift er ein. Einen laufenden
+  NetworkManager-Verbindungsversuch unterbricht er erst nach 180 s.
+- Er aktiviert das gespeicherte WLAN-Profil mit
+  `nmcli --wait 30 connection up uuid … ifname …` neu. Dabei nutzt er die
+  gespeicherten Zugangsdaten und fragt kein Passwort ab. Zwischen den Versuchen
+  wartet er 1, 2, 4, 8, höchstens 15 Minuten.
+- Nach drei erfolglosen Versuchen schaltet er den WLAN-Funk einmal aus und
+  wieder ein, danach frühestens wieder nach 30 Minuten. Einen Neustart des Pis
+  löst er nie aus.
+- Ein verbundenes WLAN bleibt immer unberührt, auch wenn Server, Kimai, DNS,
+  Internet oder Tailscale ausfallen. Ebenso ein bewusst ausgeschalteter
+  WLAN-Funk, ein nicht verwaltetes Gerät und ein verbundenes Ethernet.
+- Profil und Gerät ermittelt er selbst: das WLAN-Profil mit Autoconnect und der
+  höchsten Priorität, bei Gleichstand das zuletzt verbundene.
+
+Optional in `config.json` (alle Schlüssel dürfen fehlen):
+
+```json
+"wifi_recovery": {
+  "enabled": true,
+  "interface": "wlan0",
+  "connection_uuid": "<UUID aus nmcli connection show>",
+  "disconnect_grace_seconds": 120,
+  "radio_reset": true
+}
+```
+
+Für Wartungsarbeiten am WLAN `sudo systemctl disable --now
+stempeluhr-wifi-recovery.timer` ausführen. Der Updater schaltet den Timer nicht
+wieder ein; danach mit `enable --now` wieder aktivieren. Das Protokoll zeigt
+`journalctl -u stempeluhr-wifi-recovery`, inkl. NetworkManager-Grund der
+Trennung (z. B. `Secrets were required, but not provided`).
+
+Abnahme am Terminal:
+
+1. AP bzw. Repeater für einige Minuten ausschalten und offline stempeln.
+   Nach dem Einschalten muss der Pi ohne Neustart wieder verbinden und die
+   Stempel nachtragen.
+2. Den `no-secrets`-Fall nachstellen: WLAN-Passwort am AP kurz ändern, bis
+   `journalctl -u NetworkManager` `need-auth -> failed (reason 'no-secrets')`
+   zeigt. Dann das Passwort zurücksetzen. Die Recovery muss das Profil
+   innerhalb weniger Minuten wieder aktivieren.
+
 ## Hinweise
 
 - `terminal_id` in `config.json` und `terminalId` in der Kiosk-URL müssen

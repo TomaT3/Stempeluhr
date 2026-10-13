@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the WLAN connection of the Stempeluhr terminal
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=45s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

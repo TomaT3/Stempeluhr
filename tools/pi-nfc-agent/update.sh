@@ -9,8 +9,9 @@
 #   3. Link "current" atomar umsetzen, Agent neu starten
 #   4. Health-Check über http://127.0.0.1:<port>/health - schlägt er fehl,
 #      zurück auf die vorherige Version
-#   0. vorab bei jedem Lauf: journald-Konfiguration und Kiosk-Touch
-#      (kiosk_setup.py) des installierten Bundles nachziehen
+#   0. vorab bei jedem Lauf: journald-Konfiguration, Kiosk-Touch
+#      (kiosk_setup.py) und WLAN-Recovery-Units des installierten Bundles
+#      nachziehen
 #   5. nach jedem erfolgreichen Lauf: fehlt der PC/SC-Fix, die Paketmigration
 #      des installierten Bundles losgelöst starten (pcsc_maintenance.py);
 #      eine durch Neustart unterbrochene Migration auch nach Fehlern zurückrollen
@@ -33,6 +34,9 @@ SYSTEMD_RUN="${SYSTEMD_RUN:-systemd-run}"
 HEALTH_TIMEOUT_SECONDS="${STEMPELUHR_HEALTH_TIMEOUT:-30}"
 KEEP_RELEASES=3
 UNITS=(stempeluhr-nfc-agent.service stempeluhr-nfc-agent-update.service stempeluhr-nfc-agent-update.timer)
+# Not part of UNITS: older bundles (rollback) do not contain them.
+WIFI_UNITS=(stempeluhr-wifi-recovery.service stempeluhr-wifi-recovery.timer)
+WIFI_ENABLED_MARKER="$BASE_DIR/.wifi-recovery-enabled"
 DEV_VERSION="0.0.0-local"
 
 FORCE=0
@@ -130,10 +134,42 @@ configure_kiosk() { # release-verzeichnis (auch alte Bundles ohne Datei)
   fi
 }
 
+# WLAN recovery (wifi_recovery.py) as its own root timer. Bundles without it
+# change nothing; an installed service then skips itself (ConditionPathExists).
+# The timer is enabled once: a timer disabled by hand for maintenance stays
+# disabled. Errors only warn and never block an agent update.
+install_wifi_recovery() { # release-verzeichnis (auch alte Bundles ohne Dateien)
+  local changed=0 unit
+  for unit in "${WIFI_UNITS[@]}"; do
+    [ -f "$1/$unit" ] || return 0
+  done
+  for unit in "${WIFI_UNITS[@]}"; do
+    if ! cmp -s "$1/$unit" "$SYSTEMD_DIR/$unit"; then
+      if ! install -m 644 "$1/$unit" "$SYSTEMD_DIR/$unit"; then
+        log "WARNUNG: WLAN-Recovery nicht installiert; nächster Versuch beim nächsten Update-Lauf." >&2
+        return 0
+      fi
+      changed=1
+    fi
+  done
+  if [ "$changed" -eq 1 ] && ! "$SYSTEMCTL" daemon-reload; then
+    log "WARNUNG: systemctl daemon-reload nach WLAN-Recovery-Installation fehlgeschlagen." >&2
+  fi
+  if [ ! -f "$WIFI_ENABLED_MARKER" ]; then
+    if "$SYSTEMCTL" enable --now stempeluhr-wifi-recovery.timer; then
+      touch "$WIFI_ENABLED_MARKER"
+      log "WLAN-Recovery aktiviert (journalctl -u stempeluhr-wifi-recovery)."
+    else
+      log "WARNUNG: WLAN-Recovery-Timer nicht aktiviert; nächster Versuch beim nächsten Update-Lauf." >&2
+    fi
+  fi
+}
+
 # The first upgrade may still run an old updater. On its next timer run,
 # configure the installed bundle before same-version/offline early exits.
 install_journal "$BASE_DIR/current"
 configure_kiosk "$BASE_DIR/current"
+install_wifi_recovery "$BASE_DIR/current"
 
 [ -f "$CONFIG" ] || fail "$CONFIG fehlt"
 BASE_URL="$(json_value "$CONFIG" api_base_url "")"
@@ -196,6 +232,7 @@ install_units() { # release-verzeichnis
     "$SYSTEMCTL" daemon-reload
   fi
   install_journal "$1"
+  install_wifi_recovery "$1"
 }
 
 switch_current() { # release-verzeichnis

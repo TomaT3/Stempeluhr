@@ -56,6 +56,7 @@ REMOTE_EOF
 STATUS_SCRIPT=$(cat <<'REMOTE_EOF'
 echo "  Agent:  $(curl -s --max-time 3 http://127.0.0.1:8737/health || echo 'nicht erreichbar')"
 echo "  Timer:  $(systemctl is-active stempeluhr-nfc-agent-update.timer 2>/dev/null || true)"
+echo "  WLAN-Recovery: $(systemctl is-active stempeluhr-wifi-recovery.timer 2>/dev/null || true)"
 REMOTE_EOF
 )
 

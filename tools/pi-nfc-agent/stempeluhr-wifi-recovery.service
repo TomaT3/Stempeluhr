@@ -1,0 +1,15 @@
+[Unit]
+Description=Stempeluhr WLAN recovery (reactivates the saved WLAN profile)
+# Skipped after a rollback to an agent bundle without the script.
+ConditionPathExists=/opt/stempeluhr-nfc-agent/current/wifi_recovery.py
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+# Root: nmcli connection up/radio need NetworkManager privileges.
+ExecStart=/usr/bin/python3 /opt/stempeluhr-nfc-agent/current/wifi_recovery.py --config /etc/stempeluhr-nfc-agent/config.json
+TimeoutStartSec=3min
+# State of the current outage; /run is cleared on reboot.
+RuntimeDirectory=stempeluhr-wifi-recovery
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes

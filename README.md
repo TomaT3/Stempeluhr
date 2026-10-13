@@ -683,6 +683,7 @@ cd ..
 
 python3 tools/pi-nfc-agent/test_scan_handling.py
 python3 tools/pi-nfc-agent/test_local_scan_server.py
+python3 tools/pi-nfc-agent/test_wifi_recovery.py
 bash tools/testenv/test_pi_update.sh     # Linux: Bundle + Updater
 bash tools/testenv/run_e2e_test.sh       # Linux: Fake-Kimai + echte API
 ```

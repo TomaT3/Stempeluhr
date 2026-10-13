@@ -195,5 +195,5 @@ EOF
 fi
 
 log "Fertig. Terminal '$TERMINAL_ID' holt Agent-Updates jetzt selbst von $SERVER."
-echo "    Status:  systemctl status stempeluhr-nfc-agent stempeluhr-nfc-agent-update.timer"
+echo "    Status:  systemctl status stempeluhr-nfc-agent stempeluhr-nfc-agent-update.timer stempeluhr-wifi-recovery.timer"
 echo "    Version: curl -s http://127.0.0.1:8737/health"
