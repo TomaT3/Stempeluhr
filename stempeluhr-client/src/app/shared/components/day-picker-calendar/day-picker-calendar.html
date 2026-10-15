@@ -1,0 +1,30 @@
+<div class="calendar" [class.disabled]="disabled()">
+  <div class="calendar-head">
+    <button type="button" class="nav" (click)="previous()" [disabled]="!canGoBack()" aria-label="Vorheriger Monat">‹</button>
+    <strong aria-live="polite">{{ title() }}</strong>
+    <button type="button" class="nav" (click)="next()" [disabled]="!canGoForward()" aria-label="Nächster Monat">›</button>
+  </div>
+  <div class="grid" role="grid" [attr.aria-label]="title()">
+    @for (name of weekdays; track name) {
+      <span class="weekday" aria-hidden="true">{{ name }}</span>
+    }
+    @for (cell of cells(); track $index) {
+      @if (cell) {
+        <button
+          type="button"
+          class="day"
+          [class.selected]="cell.selected"
+          [class.today]="cell.today"
+          [class.blocked]="cell.blocked"
+          [attr.data-tone]="cell.blocked?.tone ?? null"
+          [attr.aria-pressed]="cell.selected"
+          [attr.aria-label]="cell.label"
+          [title]="cell.blocked?.label ?? ''"
+          [disabled]="disabled() || (!cell.selectable && !cell.selected)"
+          (click)="toggle(cell)">{{ cell.number }}</button>
+      } @else {
+        <span class="pad" aria-hidden="true"></span>
+      }
+    }
+  </div>
+</div>

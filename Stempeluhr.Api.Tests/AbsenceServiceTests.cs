@@ -555,6 +555,11 @@ public sealed class AbsenceServiceTests : IDisposable
 
         Assert.Equal([("max", "1001", 30m), ("anna", null, 25m)],
             balances.Select(balance => (balance.EmployeeId, balance.PersonnelNumber, balance.Balance.Entitlement)));
+
+        var entered = new AbsenceService(
+            new MemorySettingsStore(Settings(Max(entryDate: D(3, 15)))), new EmployeeService(), _kimai, _store, _notifier, clock: _clock);
+        var max = Assert.Single(entered.GetBalances(2026));
+        Assert.Equal((9, D(3, 15), (DateOnly?)null), (max.FullMonths, max.EntryDate, max.ExitDate));
         await Task.CompletedTask;
     }
 

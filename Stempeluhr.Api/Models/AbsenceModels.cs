@@ -193,4 +193,10 @@ public sealed record AdminVacationBalanceDto(
     bool IsEnabled,
     decimal? VacationDaysPerYear,
     string? Note,
-    VacationBalanceDto Balance);
+    VacationBalanceDto Balance)
+{
+    /// <summary>Volle Beschäftigungsmonate im Jahr, Grundlage des Anspruchs.</summary>
+    public int FullMonths { get; init; }
+    public DateOnly? EntryDate { get; init; }
+    public DateOnly? ExitDate { get; init; }
+}
