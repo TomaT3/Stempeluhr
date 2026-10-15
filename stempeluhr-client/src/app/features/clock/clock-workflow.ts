@@ -793,8 +793,20 @@ export abstract class ClockWorkflow implements OnDestroy {
     // Ebenso der aufgeschobene Reset nach einem Offline-Stempel: Anders als
     // die Korrektur ist die Abwesenheit bei wartenden Stempeln offen, und das
     // Recovery-Signal des Nachtrags würde sonst back() rufen und den Ablauf
-    // samt Auswahl schließen. Die Sitzung läuft jetzt online weiter.
-    this.pendingResetOnRecovery = false;
+    // samt Auswahl schließen. Die Sitzung läuft online weiter - aber der
+    // angezeigte Status ist nur projiziert (der Nachtrag kann abgelehnt
+    // werden): bis zum frischen Status nach dem Nachtrag sind die
+    // Stempelaktionen gesperrt, wie nach einer Anmeldung mit Rückstand.
+    if (this.pendingResetOnRecovery) {
+      this.pendingResetOnRecovery = false;
+      this.clockState.clear();
+      if (this.hasPendingForEmployee(this.selectedEmployee()!.id)) {
+        // Der Recovery-Handler lädt den Status, sobald der Rückstand weg ist.
+        this.replayStatusPending.set(true);
+      } else {
+        this.refreshStatusAfterReplay();
+      }
+    }
     this.taskPickerOpen.set(false);
     this.startChoiceOpen.set(false);
     this.closeCorrection();
@@ -803,7 +815,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       pin: this.pin(),
       nfcCardId: this.nfcCardId,
     });
-    this.message.set('');
+    this.message.set(this.replayStatusPending() ? 'Ausstehende Stempel werden nachgetragen.' : '');
     this.absenceOpen.set(true);
   }
 
