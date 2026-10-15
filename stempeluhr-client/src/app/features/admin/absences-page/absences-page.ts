@@ -2,7 +2,7 @@ import { DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { Observable, Subscription, catchError, forkJoin, map, of, switchMap } from 'rxjs';
+import { Observable, Subscription, catchError, forkJoin, map, of, switchMap, throwError } from 'rxjs';
 
 import {
   AbsenceKind,
@@ -148,7 +148,10 @@ export class AbsencesPage {
   readonly balances = signal<AdminVacationBalance[]>([]);
   readonly drafts = signal<Record<string, BalanceDraft>>({});
 
-  readonly yearOptions = [this.currentYear - 2, this.currentYear - 1, this.currentYear, this.currentYear + 1];
+  /** Zwei Jahre zurück bis zum letzten Jahr, in dem sich Urlaub erfassen lässt (18 Monate voraus). */
+  readonly yearOptions = Array.from(
+    { length: Number(adminWindow('vacation', this.today).max.slice(0, 4)) - this.currentYear + 3 },
+    (_, index) => this.currentYear - 2 + index);
 
   readonly absencesConfigured = computed(() => {
     const settings = this.settings();
@@ -401,14 +404,21 @@ export class AbsencesPage {
       password, this.createEmployeeId(), this.createKind(), this.createDays(), this.createComment().trim());
     this.run(password, call.pipe(
       // Danach die belegten Tage neu laden; ein Fehler dabei verdeckt das Ergebnis nicht.
+      // Ein 401 dabei beendet trotzdem die Sitzung (unten), das Ergebnis bleibt sichtbar.
       switchMap(result => this.adminApi.getAbsences(password, 'all').pipe(
-        map(all => ({ result, all })),
-        catchError(() => of({ result, all: this.allAbsences() })),
+        map(all => ({ result, all, unauthorized: false })),
+        catchError((error: HttpErrorResponse) =>
+          of({ result, all: this.allAbsences(), unauthorized: error?.status === 401 })),
       )),
-    ), ({ result, all }) => {
+    ), ({ result, all, unauthorized }) => {
       this.allAbsences.set(all);
       this.createResult.set(result);
       this.createStep.set('result');
+      if (unauthorized) {
+        this.adminSession.clear();
+        this.adminPassword.set('');
+        this.message.set('Erfasst. Das Admin-Passwort gilt nicht mehr – bitte neu anmelden.');
+      }
     });
   }
 
@@ -524,7 +534,8 @@ export class AbsencesPage {
         // Nur ein Zusatz: ohne Konten bleibt die Liste nutzbar.
         return forkJoin(years.map(year => this.adminApi.getVacationBalances(password, year).pipe(
           map(balances => this.cacheBalances(year, balances)),
-          catchError(() => of(undefined)),
+          // 401 gehört der Sitzung (run meldet ab); andere Fehler lassen nur den Rest weg.
+          catchError((error: HttpErrorResponse) => error?.status === 401 ? throwError(() => error) : of(undefined)),
         ))).pipe(map(() => entries));
       }),
     );

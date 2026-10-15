@@ -242,6 +242,31 @@ describe('AbsencesPage', () => {
     fixture.destroy();
   });
 
+  it('forgets the password when only the follow-up balance request is refused', async () => {
+    const { fixture, http, component } = await setup();
+
+    http.expectOne('/api/admin/settings').flush(settings);
+    expectAbsences(http, 'open').flush([absence()]);
+    expectBalances(http, 2026).flush({}, { status: 401, statusText: 'Unauthorized' });
+
+    expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+    expect(component.hasLoaded()).toBe(false);
+    expect(component.message()).toBe('Admin-Passwort stimmt nicht.');
+    fixture.destroy();
+  });
+
+  it('offers every year up to the end of the vacation window', async () => {
+    const { fixture, http, component, page } = await setup();
+    flushRequests(http, []);
+    fixture.detectChanges();
+
+    // 15.10.2026 + 18 months = 15.04.2028.
+    expect(component.yearOptions).toEqual([2024, 2025, 2026, 2027, 2028]);
+    expect(Array.from(page.querySelectorAll('.filter-bar select option'), option => option.textContent?.trim()))
+      .toEqual(['Alle Jahre', '2024', '2025', '2026', '2027', '2028']);
+    fixture.destroy();
+  });
+
   it('filters by all and by year', async () => {
     const { fixture, http, component } = await setup();
     flushRequests(http, []);
@@ -354,6 +379,25 @@ describe('AbsencesPage', () => {
 
       expect(page.textContent).toContain('Nicht eingetragen');
       expect(page.textContent).toContain('kein Platz mehr');
+      fixture.destroy();
+    });
+
+    it('keeps the result but ends the session when the refresh after creating is refused', async () => {
+      const { fixture, http, page, component } = await openCreate();
+      component.selectKind('sick');
+      component.createDays.set(['2026-10-19']);
+      component.showSummary();
+      fixture.detectChanges();
+
+      button(page, 'Jetzt erfassen').click();
+      http.expectOne(candidate => candidate.url === '/api/admin/absences' && candidate.method === 'POST')
+        .flush(absence({ kind: 'sick', status: 'applied', days: ['2026-10-19'] }));
+      expectAbsences(http, 'all').flush({}, { status: 401, statusText: 'Unauthorized' });
+      fixture.detectChanges();
+
+      expect(page.textContent).toContain('In Kimai eingetragen');
+      expect(sessionStorage.getItem(AdminSession.StorageKey)).toBeNull();
+      expect(component.message()).toContain('bitte neu anmelden');
       fixture.destroy();
     });
 
