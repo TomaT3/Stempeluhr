@@ -790,6 +790,11 @@ export abstract class ClockWorkflow implements OnDestroy {
       window.clearTimeout(this.resetTimer);
       this.resetTimer = null;
     }
+    // Ebenso der aufgeschobene Reset nach einem Offline-Stempel: Anders als
+    // die Korrektur ist die Abwesenheit bei wartenden Stempeln offen, und das
+    // Recovery-Signal des Nachtrags würde sonst back() rufen und den Ablauf
+    // samt Auswahl schließen. Die Sitzung läuft jetzt online weiter.
+    this.pendingResetOnRecovery = false;
     this.taskPickerOpen.set(false);
     this.startChoiceOpen.set(false);
     this.closeCorrection();

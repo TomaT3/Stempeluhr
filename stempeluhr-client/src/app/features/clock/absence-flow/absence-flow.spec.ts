@@ -405,7 +405,8 @@ describe('AbsenceFlow', () => {
       expect(text()).toContain('Zurückgezogen');
       expect(text()).toContain('Antrag zurückgezogen.');
       expect(button('Zurückziehen')).toBeUndefined();
-      expect(absenceOverview).toHaveBeenCalledTimes(2);
+      // Loaded on start, with the list and after withdrawing.
+      expect(absenceOverview).toHaveBeenCalledTimes(3);
     });
 
     it('Nein keeps the request', () => {
@@ -434,6 +435,45 @@ describe('AbsenceFlow', () => {
       expect(root().querySelector('.flow-error')?.textContent).toContain('schon entschieden');
       expect(text()).toContain('Eingetragen');
       expect(button('Zurückziehen')).toBeUndefined();
+    });
+
+    it('frees the days in calendar and account when the boss rejected meanwhile (409, review #142)', () => {
+      const pending = absence({ id: 'p1', days: ['2026-10-20'] });
+      const freed = {
+        ...ABSENCE_OVERVIEW,
+        balances: [{ ...ABSENCE_OVERVIEW.balances[0], planned: 0, remaining: 12 }, ABSENCE_OVERVIEW.balances[1]],
+        days: ABSENCE_OVERVIEW.days.filter(day => day.day !== '2026-10-20'),
+      };
+      // Start and list still see the open request; the rejection lands before "Ja".
+      absenceOverview.mockReturnValueOnce(of(ABSENCE_OVERVIEW)).mockReturnValueOnce(of(ABSENCE_OVERVIEW)).mockReturnValue(of(freed));
+      myAbsences.mockReturnValueOnce(of([pending]));
+      myAbsences.mockReturnValueOnce(of([{ ...pending, status: 'rejected' as const, decisionNote: 'Personal fehlt' }]));
+      withdrawAbsence.mockReturnValue(throwError(() => ({ status: 409, error: { message: 'Der Antrag ist schon entschieden.' } })));
+      create();
+      press('Meine Abwesenheiten');
+      press('Zurückziehen');
+      press('Ja');
+      expect(text()).toContain('Abgelehnt');
+
+      press('Zurück');
+      expect(words(root().querySelector('.absence-balance > .rest')!)).toBe('Rest 2026 12');
+      press('Urlaub');
+      expect(day('2026-10-20').disabled).toBe(false);
+      expect(day('2026-10-20').getAttribute('aria-label')).not.toContain('beantragt');
+    });
+
+    it('loads the account again with the list - it may show decisions the account does not know yet', () => {
+      create();
+      absenceOverview.mockReturnValue(of({
+        ...ABSENCE_OVERVIEW,
+        days: ABSENCE_OVERVIEW.days.filter(day => day.day !== '2026-10-20'),
+      }));
+      press('Meine Abwesenheiten');
+      press('Zurück');
+      press('Urlaub');
+
+      expect(absenceOverview).toHaveBeenCalledTimes(2);
+      expect(day('2026-10-20').disabled).toBe(false);
     });
 
     it('says so when there are none', () => {

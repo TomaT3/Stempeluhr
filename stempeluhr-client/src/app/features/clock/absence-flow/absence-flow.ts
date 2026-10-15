@@ -372,6 +372,9 @@ export class AbsenceFlow implements OnInit {
       list => {
         this.mine.set(list);
         this.go('mine');
+        // Die Liste kann Entscheidungen zeigen, die das Konto noch nicht
+        // kennt: Kalender und Rest sollen danach denselben Stand haben.
+        this.reloadOverview();
       },
       error => this.error.set(this.describe(error, 'list')),
     );
@@ -417,9 +420,11 @@ export class AbsenceFlow implements OnInit {
         this.withdrawingId.set(null);
         this.confirmingId.set(null);
         this.error.set(this.describe(error, 'withdraw'));
-        // 404/409: der Antrag ist inzwischen entschieden - den neuen Stand zeigen.
+        // 404/409: der Antrag ist inzwischen entschieden - den neuen Stand
+        // zeigen, in der Liste wie in Kalender und Konto.
         if (error.status === 404 || error.status === 409) {
           this.reloadMine();
+          this.reloadOverview();
         }
       },
     );

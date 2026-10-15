@@ -305,6 +305,35 @@ describe('ClockPage offline behaviour', () => {
     expect(component.isUnlocked()).toBe(false);
     expect(component.selectedEmployee()).toBeNull();
   });
+  it('does not close an absence flow opened while the offline stamps are still being sent (review #142)', () => {
+    terminalIdValue = null;
+    healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true, absencesConfigured: true });
+    const fixture = createComponent();
+    const component = fixture.componentInstance;
+    component.pressDigit('1');
+    component.pressDigit('2');
+    component.pressDigit('3');
+    component.pressDigit('4');
+    pinLoginResult.next(session);
+
+    // Offline stamp: the reset to the idle screen waits for the recovery.
+    component.stop();
+    clockResult.error({ status: 0 });
+    expect(component.isOffline()).toBe(true);
+
+    // The health poll sees the server again before the queue reports back.
+    vi.advanceTimersByTime(15_000);
+    expect(component.isOffline()).toBe(false);
+    component.openAbsence();
+    expect(component.absenceOpen()).toBe(true);
+
+    // The sync finishes: the employee is using the session online now.
+    recovered$.next();
+    expect(component.absenceOpen()).toBe(true);
+    expect(component.isUnlocked()).toBe(true);
+    expect(component.selectedEmployee()?.id).toBe('max');
+  });
+
   it('keeps pause actions usable offline and hides the banner only on recovery', async () => {
     const fixture = createComponent();
     const component = fixture.componentInstance;
