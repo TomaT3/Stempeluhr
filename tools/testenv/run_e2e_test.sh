@@ -84,11 +84,16 @@ cat > "$WORK/settings.json" <<EOF
   "defaultProjectId": 1,
   "defaultActivityId": 1,
   "pauseActivityId": 2,
+  "absenceProjectId": 40,
+  "vacationActivityId": 41,
+  "sickActivityId": 42,
+  "flexDayActivityId": 43,
   "adminPassword": "e2e-admin",
   "terminalTokens": { "test-terminal": "integration-terminal-token" },
   "employees": [
     { "id": "test-max",  "displayName": "Max Mustermann", "pin": "1234", "nfcCardId": "04A2B3C4",
       "apiToken": "test-token", "projectId": 1, "activityId": 1,
+      "vacationDaysPerYear": 30, "absenceDayHours": 8,
       "tasks": [ { "id": "kx", "label": "Kunde X", "projectId": 5, "activityId": 6 } ] },
     { "id": "test-anna", "displayName": "Anna Beispiel",  "pin": "4321", "nfcCardId": "04D5E6F7",
       "apiToken": "test-token", "projectId": 1, "activityId": 1 }
@@ -442,6 +447,59 @@ R=$(curl -s -m 30 -X POST -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/c
 assert_status '"status":"rejected"' "$R" "Genehmigen nach dem Ablehnen bleibt abgelehnt"
 AFTER=$(curl -s "$KIMAI_URL/_bookings" | grep -o '"id"' | wc -l)
 [ "$AFTER" = "$BEFORE" ] && ok "Abgelehnte Anträge buchen nichts" || bad "Abgelehnte Anträge haben gebucht ($BEFORE -> $AFTER)"
+
+# ------------------------------------------------- Test 3d: Abwesenheiten
+say "Test 3d: Urlaub für zwei Tage beantragen, über die Admin-API genehmigen und stornieren"
+
+# Zwei Tage in drei Wochen: dort bucht der Test sonst nichts.
+ABS_DAY1=$(TZ=Europe/Berlin date -d "21 days" +%F)
+ABS_DAY2=$(TZ=Europe/Berlin date -d "22 days" +%F)
+ABS_SUBMIT="{\"employeeId\":\"test-max\",\"pin\":\"1234\",\"kind\":\"vacation\",\"days\":[\"$ABS_DAY1\",\"$ABS_DAY2\"],\"source\":\"e2e\"}"
+abs_count() { # activity -> Anzahl der Einträge mit dieser Aktivität in /_bookings
+  curl -s "$KIMAI_URL/_bookings" | python3 -c "import json,sys; print(sum(1 for s in json.load(sys.stdin)['timesheets'] if s['activity'] == $1))"
+}
+
+[ "$(corr_code /api/kiosk/absences "${ABS_SUBMIT/1234/9999}")" = "401" ]   && ok "Falsche PIN -> 401" || bad "Falsche PIN erwartet 401"
+ABS_FOREIGN_CARD="{\"employeeId\":\"test-max\",\"nfcCardId\":\"04D5E6F7\",\"kind\":\"vacation\",\"days\":[\"$ABS_DAY1\"]}"
+[ "$(corr_code /api/kiosk/absences "$ABS_FOREIGN_CARD")" = "401" ]   && ok "Karte eines anderen Mitarbeiters -> 401" || bad "Fremde Karte erwartet 401"
+
+R=$(corr_post /api/kiosk/absences "$ABS_SUBMIT")
+assert_status '"status":"pending"' "$R" "Urlaubsantrag wird angenommen"
+ABS_ID=$(echo "$R" | grep -oP '"id":"\K[0-9a-f]+' | head -1)
+[ "$(corr_code /api/kiosk/absences "$ABS_SUBMIT")" = "400" ]   && ok "Dieselben Tage ein zweites Mal -> 400" || bad "Doppelter Antrag erwartet 400"
+[ "$(abs_count 41)" = "0" ] && ok "Vor der Genehmigung steht nichts in Kimai" || bad "Abwesenheit vor der Genehmigung gebucht"
+
+R=$(corr_post /api/kiosk/absences/balance '{"employeeId":"test-max","pin":"1234"}')
+echo "$R" | python3 -c "import json,sys; b=json.load(sys.stdin)['balances']; y=[x for x in b if x['year']==int('$ABS_DAY1'[:4])][0]; sys.exit(0 if y['planned']==2 else 1)"   && ok "Urlaubskonto zählt die zwei Tage als beantragt" || bad "Urlaubskonto zeigt die beantragten Tage nicht: $R"
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$API_URL/api/admin/absences/$ABS_ID/approve")" = "401" ]   && ok "Genehmigen ohne Admin-Passwort -> 401" || bad "Genehmigen ohne Passwort erwartet 401"
+R=$(curl -s -m 30 -X POST -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/absences/$ABS_ID/approve")
+assert_status '"status":"applied"' "$R" "Admin genehmigt: Urlaub ist eingetragen"
+R=$(curl -s -m 30 -X POST -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/absences/$ABS_ID/approve")
+assert_status '"status":"applied"' "$R" "Doppeltes Genehmigen liefert den Stand"
+
+python3 - "$KIMAI_URL" "$ABS_DAY1" "$ABS_DAY2" <<'PY' && ok "/_bookings: zwei Urlaubseinträge 08:00-16:00, nicht abrechenbar" || bad "/_bookings zeigt nicht die zwei Urlaubseinträge"
+import json, sys, urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
+base, day1, day2 = sys.argv[1:4]
+berlin = ZoneInfo("Europe/Berlin")
+def local(value):
+    return datetime.fromisoformat(value).astimezone(berlin).strftime("%Y-%m-%d %H:%M")
+sheets = json.load(urllib.request.urlopen(base + "/_bookings"))["timesheets"]
+mine = sorted((local(s["begin"]), local(s["end"]), s["project"], s["billable"], s["description"])
+              for s in sheets if s["activity"] == 41)
+expected = [(f"{d} 08:00", f"{d} 16:00", 40, False, "Urlaub (Stempeluhr)") for d in (day1, day2)]
+print(mine)
+sys.exit(0 if mine == expected else 1)
+PY
+
+R=$(curl -s -m 10 -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/absences/balances")
+assert_status '"employeeId":"test-max"' "$R" "Admin sieht die Urlaubskonten"
+R=$(curl -s -m 30 -X POST -H 'X-Admin-Password: e2e-admin' "$API_URL/api/admin/absences/$ABS_ID/cancel")
+assert_status '"status":"cancelled"' "$R" "Admin storniert den Urlaub"
+[ "$(abs_count 41)" = "0" ] && ok "Nach dem Storno sind die Einträge aus Kimai gelöscht" || bad "Urlaubseinträge nach dem Storno noch in Kimai"
+[ "$(corr_code "/api/kiosk/absences/$ABS_ID/withdraw" '{"employeeId":"test-max","pin":"1234"}')" = "409" ]   && ok "Zurückziehen nach der Entscheidung -> 409" || bad "Zurückziehen erwartet 409"
 
 # ------------------------------------------------- Test 4: Agent-Level-Offline-Identifikation
 # Grenze: Ein vollständiges Browser-/Angular-E2E ist hier nicht machbar - der

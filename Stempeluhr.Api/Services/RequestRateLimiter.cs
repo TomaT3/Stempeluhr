@@ -87,6 +87,7 @@ public static class KioskRateLimiters
     public const string IdentifyKey = "kiosk-identify";
     public const string CorrectionKey = "kiosk-corrections";
     public const string WorkTimeHintKey = "kiosk-work-time-hints";
+    public const string AbsenceKey = "kiosk-absences";
 
     public static IServiceCollection AddKioskRateLimiters(this IServiceCollection services)
     {
@@ -105,6 +106,9 @@ public static class KioskRateLimiters
         // Work time hints run after every login (one Kimai read each): their
         // own budget keeps them from using up the correction budget.
         services.AddKeyedSingleton(WorkTimeHintKey, (_, _) => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 60));
+        // Absence requests: like corrections (overview, submit, own requests),
+        // with their own budget so both features can be used in one session.
+        services.AddKeyedSingleton(AbsenceKey, (_, _) => new RequestRateLimiter(TimeSpan.FromSeconds(60), maxRequests: 30));
         return services;
     }
 }

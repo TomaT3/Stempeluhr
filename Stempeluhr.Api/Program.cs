@@ -13,6 +13,9 @@ builder.Services.AddSingleton(sp => new RejectedOfflineEventStore(
 builder.Services.AddSingleton(sp => new TimeCorrectionStore(
     Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "time-corrections.json"),
     sp.GetRequiredService<ILogger<TimeCorrectionStore>>()));
+builder.Services.AddSingleton(sp => new AbsenceStore(
+    Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "absences.json"),
+    sp.GetRequiredService<ILogger<AbsenceStore>>()));
 builder.Services.AddSingleton<IEmployeeService, EmployeeService>();
 builder.Services.AddSingleton<IAdminAuthorizationService, AdminAuthorizationService>();
 builder.Services.AddSingleton<INfcClockEventStore, NfcClockEventStore>();
@@ -38,6 +41,9 @@ builder.Services.AddSingleton<TelegramBotApi>();
 builder.Services.AddSingleton<TelegramTimeCorrectionNotifier>();
 builder.Services.AddSingleton<ITimeCorrectionNotifier>(services => services.GetRequiredService<TelegramTimeCorrectionNotifier>());
 builder.Services.AddSingleton<ITimeCorrectionService, TimeCorrectionService>();
+// Abwesenheiten: Telegram-Freigabe folgt (#137), bis dahin meldet der Notifier nichts.
+builder.Services.AddSingleton<IAbsenceNotifier, NullAbsenceNotifier>();
+builder.Services.AddSingleton<IAbsenceService, AbsenceService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 // Telegram-Notifier: Singleton + named HttpClient. Die Notify-Task läuft
 // bewusst nach dem Request-Ende (fire-and-forget) - ein scope-gebundener

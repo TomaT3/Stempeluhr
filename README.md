@@ -421,6 +421,112 @@ erreicht keinen anderen Mitarbeiter. Nach 2 min ohne Tipp geht der Kiosk in den
 Ruhezustand; der Auto-Reload bei neuer Version wartet, bis niemand mehr im Ablauf
 ist.
 
+### Abwesenheiten (Urlaub, Krank, Gleittag)
+
+Urlaubs-, Krankheits- und Gleittage laufen wie Korrekturanträge: Der
+Mitarbeiter beantragt sie (nur online, es gibt keine Offline-Queue), Chef oder
+Admin genehmigt oder lehnt ab, erst dann schreibt die API mit dem
+**Mitarbeiter-Token** in Kimai. Der Admin kann auch **für einen Mitarbeiter
+erfassen**, z. B. für Inklusionsmitarbeiter. Das gilt sofort als genehmigt.
+Abwesenheiten sind keine Stempel: gestempelt wird weiter nur über
+`/api/kiosk/clock`.
+
+**Tage:** Jeder im Kalender gewählte Tag zählt als ein Tag. Es gibt keinen
+Feiertagskalender und keine festen Arbeitstage, weil die Dienstpläne im Hotel
+wechseln. Ein Antrag umfasst 1 bis 62 Tage.
+
+**In Kimai** entsteht pro Tag ein Timesheet auf dem Abwesenheits-Projekt,
+nicht abrechenbar, in der Kimai-Zeitzone des Mitarbeiters:
+
+| Art | Aktivität | Dauer | Beschreibung |
+| --- | --- | --- | --- |
+| Urlaub | Aktivität Urlaub | Stunden pro Abwesenheitstag | „Urlaub (Stempeluhr)“ |
+| Krank | Aktivität Krank | Stunden pro Abwesenheitstag | „Krank (Stempeluhr)“ |
+| Gleittag | Aktivität Gleittag | 0 (Beginn = Ende), deckt kein Soll | „Gleittag (Stempeluhr)“ |
+
+Der Eintrag beginnt zum „Beginn der Abwesenheitseinträge“ (Standard 08:00).
+Überlappt ein bestehender Eintrag, etwa das Ende einer Nachtschicht vom Vortag,
+beginnt er direkt danach (volle Minute). Passt er dann nicht mehr in den
+Kalendertag, scheitert der Antrag mit einer Meldung. Vor jedem Anlegen sucht
+die API einen Eintrag am selben Tag mit derselben Abwesenheits-Aktivität und
+übernimmt ihn, statt doppelt zu buchen. Der Fortschritt wird nach jedem Tag
+gespeichert.
+
+**Regeln** (beim Absenden und beim Genehmigen):
+
+| Art | frühester Tag | spätester Tag |
+| --- | --- | --- |
+| Urlaub | heute − 31 Tage | heute + 18 Monate |
+| Krank | heute − 31 Tage | heute + 14 Tage |
+| Gleittag | heute − 31 Tage | heute + 12 Monate |
+
+- Der Admin darf bis 90 Tage zurück erfassen; beim Genehmigen gilt das auch.
+- Jeder Tag liegt zwischen Ein- und Austritt.
+- Pro Tag gibt es höchstens einen offenen oder eingetragenen Antrag, egal
+  welcher Art, und keine andere Abwesenheit in Kimai.
+- An einem Tag, an dem schon Arbeit **begonnen** hat, gibt es keine
+  Abwesenheit. Bei Krank heißt es dann „Am Tag mit Arbeit bitte ab dem
+  Folgetag krankmelden“. Das Ende einer Nachtschicht vom Vortag zählt nicht.
+- Urlaub über dem Rest lehnt die API für den Mitarbeiter ab. Der Admin darf
+  trotzdem erfassen und bekommt eine Warnung.
+- Fehlen Projekt, Aktivität, Beginn, die Stunden pro Abwesenheitstag oder (bei
+  Urlaub) die Urlaubstage pro Jahr, nennt die Meldung, was fehlt.
+
+**Urlaubsanspruch:** Jahresurlaub × volle Beschäftigungsmonate im Jahr / 12.
+Ein Monat ist voll, wenn der Mitarbeiter am 1. und am letzten Tag beschäftigt
+ist; ohne Ein- bzw. Austritt ist die Seite offen. Ein Bruchteil ab 0,5 Tagen
+wird aufgerundet (§ 5 Abs. 2 BUrlG), kleinere bleiben stehen. Beispiel:
+Eintritt 15.03., 30 Tage → April bis Dezember = 9 Monate → 22,5 → 23 Tage.
+Rest = Anspruch + Übertrag + Korrektur − eingetragen − beantragt; gezählt
+werden nur Urlaubstage des Kalenderjahres. Übertrag und Korrektur pflegt der
+Admin pro Jahr. **Rechtlicher Hinweis:** Wer vor dem 1. Juli eintritt und das
+Jahr über bleibt, hat nach der Wartezeit Anspruch auf den vollen gesetzlichen
+Mindesturlaub (§§ 4, 5 BUrlG). Die Monatsregel lässt sich über die Korrektur
+anpassen. Die Regel mit dem Steuerberater abstimmen.
+
+**Voraussetzungen in Kimai:** ein Projekt „Abwesenheit“ mit den Aktivitäten
+Urlaub, Krank und Gleittag, sichtbar für die Teams der Mitarbeiter (die
+Mitarbeiter-Token buchen darauf). `allow_future_times` und `allow_zero_duration`
+bleiben aktiv (Kimai-Standard): Urlaub liegt in der Zukunft, ein Gleittag hat
+Dauer 0. In der Admin-Seite Projekt, Aktivitäten und Beginn unter
+„Abwesenheiten“ wählen, pro Mitarbeiter unter „Vertrag & Urlaub“ Urlaubstage
+und Stunden pro Abwesenheitstag eintragen.
+
+**Wenn ein Antrag `failed` ist** (Kimai lehnt ab, z. B. Sperrzeitraum oder
+fehlende Berechtigung, oder ein Tag hat keinen Platz): Der Grund steht am
+Antrag. Nach der Ursachenbehebung „Erneut versuchen“; es setzt beim ersten Tag
+ohne Eintrag fort. Oder der Admin trägt von Hand in Kimai nach und markiert den
+Antrag als erledigt (`resolvedManually`, zählt im Urlaubskonto wie
+eingetragen). Ist Kimai beim Absenden oder Genehmigen nicht erreichbar, antwortet
+die API mit 503 und der Antrag bleibt unverändert.
+
+**Storno:** Der Admin storniert eingetragene Abwesenheiten. Die API löscht die
+Kimai-Einträge des Antrags (ein schon gelöschter zählt als gelöscht). Erst wenn
+alle weg sind, ist der Antrag `cancelled`. Bei einem Teilfehler bleibt er
+eingetragen mit Fehlermeldung, ein erneutes Storno setzt fort.
+
+Anträge liegen in `data/absences.json`. Eingetragene, stornierte und von Hand
+erledigte bleiben dauerhaft (Urlaubskonto, Monatsexport), abgelehnte und
+zurückgezogene fallen nach drei Jahren heraus.
+
+**API:**
+
+| Endpunkt | Zweck |
+| --- | --- |
+| `POST /api/kiosk/absences/balance` | Urlaubskonten, Zeitfenster je Art, belegte Tage |
+| `POST /api/kiosk/absences` | Antrag `{ kind, days[], comment? }` absenden |
+| `POST /api/kiosk/absences/mine` | eigene Anträge (offen und letzte 12 Monate) |
+| `POST /api/kiosk/absences/{id}/withdraw` | offenen eigenen Antrag zurückziehen |
+| `GET /api/admin/absences?status=open\|all&year=` | Anträge |
+| `POST /api/admin/absences` | für einen Mitarbeiter erfassen `{ employeeId, kind, days[], comment? }` |
+| `POST /api/admin/absences/{id}/approve` · `/reject` · `/retry` · `/cancel` | entscheiden, erneut versuchen, stornieren |
+| `PUT /api/admin/absences/{id}/resolved` | als von Hand erledigt markieren |
+| `GET /api/admin/absences/balances?year=` | Urlaubskonten aller Mitarbeiter |
+| `PUT /api/admin/absences/balances/{employeeId}/{year}` | Übertrag und Korrektur `{ carryOverDays, correctionDays, note? }` |
+
+Die Kiosk-Endpunkte melden sich wie die Korrekturanträge an (Mitarbeiter-ID
+plus PIN oder Karte, Sperre nach falschen PINs, eigenes IP-Limit).
+
 ### Telegram-Benachrichtigung (optional)
 
 Bei jedem echten Live-Stempel (nicht bei No-ops) schickt die API eine Nachricht wie
