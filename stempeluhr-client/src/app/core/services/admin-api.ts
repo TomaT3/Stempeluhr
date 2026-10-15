@@ -2,11 +2,14 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 
 import {
+  AbsenceKind,
+  AdminAbsence,
   AdminEmployeeStatus,
   AdminRejectedOfflineEvent,
   AdminSettings,
   AdminTerminalStatus,
   AdminTimeCorrection,
+  AdminVacationBalance,
   KimaiActivity,
   KimaiProject,
   KimaiUser,
@@ -92,6 +95,57 @@ export class AdminApi {
   resolveCorrection(adminPassword: string, id: string) {
     return this.http.put<AdminTimeCorrection>(`/api/admin/corrections/${encodeURIComponent(id)}/resolved`, {},
       { headers: this.headers(adminPassword) });
+  }
+
+  /** `open`: Status pending und failed; `year`: nur Anträge mit einem Tag in diesem Jahr. */
+  getAbsences(adminPassword: string, status: 'open' | 'all', year: number | null = null) {
+    const params: Record<string, string> = { status };
+    if (year !== null) {
+      params['year'] = String(year);
+    }
+    return this.http.get<AdminAbsence[]>('/api/admin/absences', { headers: this.headers(adminPassword), params });
+  }
+
+  /** Für einen Mitarbeiter erfassen: gilt sofort als genehmigt und wird angewandt. */
+  createAbsence(adminPassword: string, employeeId: string, kind: AbsenceKind, days: string[], comment: string) {
+    return this.http.post<AdminAbsence>('/api/admin/absences',
+      { employeeId, kind, days, comment: comment || null }, { headers: this.headers(adminPassword) });
+  }
+
+  approveAbsence(adminPassword: string, id: string) {
+    return this.http.post<AdminAbsence>(`/api/admin/absences/${encodeURIComponent(id)}/approve`, {},
+      { headers: this.headers(adminPassword) });
+  }
+
+  rejectAbsence(adminPassword: string, id: string, note: string) {
+    return this.http.post<AdminAbsence>(`/api/admin/absences/${encodeURIComponent(id)}/reject`,
+      { note: note || null }, { headers: this.headers(adminPassword) });
+  }
+
+  retryAbsence(adminPassword: string, id: string) {
+    return this.http.post<AdminAbsence>(`/api/admin/absences/${encodeURIComponent(id)}/retry`, {},
+      { headers: this.headers(adminPassword) });
+  }
+
+  resolveAbsence(adminPassword: string, id: string) {
+    return this.http.put<AdminAbsence>(`/api/admin/absences/${encodeURIComponent(id)}/resolved`, {},
+      { headers: this.headers(adminPassword) });
+  }
+
+  cancelAbsence(adminPassword: string, id: string) {
+    return this.http.post<AdminAbsence>(`/api/admin/absences/${encodeURIComponent(id)}/cancel`, {},
+      { headers: this.headers(adminPassword) });
+  }
+
+  getVacationBalances(adminPassword: string, year: number) {
+    return this.http.get<AdminVacationBalance[]>('/api/admin/absences/balances',
+      { headers: this.headers(adminPassword), params: { year: String(year) } });
+  }
+
+  updateVacationYear(adminPassword: string, employeeId: string, year: number, carryOverDays: number, correctionDays: number, note: string) {
+    return this.http.put<AdminVacationBalance>(
+      `/api/admin/absences/balances/${encodeURIComponent(employeeId)}/${year}`,
+      { carryOverDays, correctionDays, note: note || null }, { headers: this.headers(adminPassword) });
   }
 
   latestNfcEvent(terminalId: string, fallbackToAny = false) {

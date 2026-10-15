@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { DatePipe } from '@angular/common';
 import { Component, DestroyRef, OnDestroy, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { catchError, forkJoin, of, switchMap } from 'rxjs';
 
 import { AdminEmployee, AdminEmployeeStatus, AdminEmployeeTask, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../../../core/models/admin.models';
@@ -36,6 +36,7 @@ export class AdminPage implements OnDestroy {
 
   private readonly adminApi = inject(AdminApi);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly route = inject(ActivatedRoute);
 
   readonly adminSession = inject(AdminSession);
   readonly adminPassword = signal(this.adminSession.password());
@@ -54,6 +55,8 @@ export class AdminPage implements OnDestroy {
   readonly initialLoading = signal(false);
   /** Offene Korrekturanträge (pending und failed) für den Quick-Link. */
   readonly openCorrections = signal(0);
+  /** Offene Abwesenheitsanträge (pending und failed) für den Quick-Link. */
+  readonly openAbsences = signal(0);
   /** Eingabe der Freigeber-IDs als Text, damit „12, “ beim Tippen nicht umgeschrieben wird. */
   readonly telegramApproverText = signal('');
 
@@ -115,6 +118,8 @@ export class AdminPage implements OnDestroy {
         this.initialLoading.set(false);
         this.loadAdminEmployeeStatuses();
         this.loadOpenCorrections();
+        this.loadOpenAbsences();
+        this.scrollToRequestedSection();
         this.startNfcPolling();
       },
       error: (error: HttpErrorResponse) => {
@@ -546,6 +551,7 @@ export class AdminPage implements OnDestroy {
     this.adminSettings.set(null);
     this.adminStatuses.set([]);
     this.openCorrections.set(0);
+    this.openAbsences.set(0);
     this.kimaiProjects.set([]);
     this.kimaiActivities.set([]);
     this.kimaiUsers.set([]);
@@ -592,6 +598,22 @@ export class AdminPage implements OnDestroy {
     if (this.nfcPollTimer !== null) {
       window.clearInterval(this.nfcPollTimer);
       this.nfcPollTimer = null;
+    }
+  }
+
+  private loadOpenAbsences(): void {
+    // Wie bei den Korrekturen: nur ein Hinweis, Fehler blenden die Zahl aus.
+    this.adminApi.getAbsences(this.adminPassword(), 'open').pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: absences => this.openAbsences.set(absences.length),
+      error: () => this.openAbsences.set(0),
+    });
+  }
+
+  /** Links wie /admin#absences (z. B. von der Abwesenheiten-Seite) springen nach dem Laden zum Abschnitt. */
+  private scrollToRequestedSection(): void {
+    const fragment = this.route.snapshot.fragment;
+    if (fragment) {
+      setTimeout(() => this.scrollToSection(fragment));
     }
   }
 

@@ -852,7 +852,12 @@ public sealed class AbsenceService(
             employee.IsEnabled,
             employee.VacationDaysPerYear,
             employee.VacationYears.FirstOrDefault(candidate => candidate.Year == year)?.Note,
-            VacationEntitlementCalculator.Calculate(employee, year, requests));
+            VacationEntitlementCalculator.Calculate(employee, year, requests))
+        {
+            FullMonths = VacationEntitlementCalculator.FullMonths(employee, year),
+            EntryDate = employee.EntryDate,
+            ExitDate = employee.ExitDate,
+        };
 
     private static AbsenceDto ToDto(AbsenceRequest request, bool forEmployee)
         => new(

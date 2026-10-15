@@ -1,0 +1,305 @@
+<section class="absences">
+  <div class="toolbar">
+    <a routerLink="/admin">&lt; Admin</a>
+    @if (adminSession.isLoggedIn()) {
+      <span>Als Admin angemeldet</span>
+      <div class="session-actions">
+        <button type="button" (click)="load()" [disabled]="isBusy()">Aktualisieren</button>
+        <button type="button" (click)="logout()">Abmelden</button>
+      </div>
+    } @else {
+      <label>Admin-Passwort
+        <input type="password" [value]="adminPassword()" (input)="adminPassword.set($any($event.target).value)"
+          (keyup.enter)="load()" autocomplete="current-password">
+      </label>
+      <button type="button" (click)="load()" [disabled]="isBusy()">Anmelden</button>
+    }
+  </div>
+  <h1>Abwesenheiten</h1>
+  <p>Urlaub, Krankheit und Gleittage. Erst nach dem Genehmigen trägt die Stempeluhr sie mit dem Token des Mitarbeiters in Kimai ein.</p>
+  @if (!absencesConfigured()) {
+    <p class="hint warning">
+      Abwesenheiten sind noch nicht eingerichtet: Projekt und Aktivitäten fehlen.
+      <a routerLink="/admin" fragment="absences">In der Verwaltung unter „Abwesenheiten“ wählen</a>
+    </p>
+  }
+  @if (message()) { <p class="message" role="alert">{{ message() }}</p> }
+
+  @if (hasLoaded()) {
+    <div class="tabs" role="tablist" aria-label="Bereiche">
+      <button type="button" role="tab" [class.active]="tab() === 'requests'" [attr.aria-selected]="tab() === 'requests'"
+        (click)="setTab('requests')" [disabled]="isBusy()">Anträge</button>
+      <button type="button" role="tab" [class.active]="tab() === 'create'" [attr.aria-selected]="tab() === 'create'"
+        (click)="setTab('create')" [disabled]="isBusy()">Erfassen</button>
+      <button type="button" role="tab" [class.active]="tab() === 'balances'" [attr.aria-selected]="tab() === 'balances'"
+        (click)="setTab('balances')" [disabled]="isBusy()">Urlaubskonten</button>
+    </div>
+
+    @switch (tab()) {
+      @case ('requests') {
+        <div class="filter-bar">
+          <div class="filter" role="group" aria-label="Filter">
+            <button type="button" [class.active]="filter() === 'open'" [attr.aria-pressed]="filter() === 'open'"
+              (click)="setFilter('open')" [disabled]="isBusy()">Offen</button>
+            <button type="button" [class.active]="filter() === 'all'" [attr.aria-pressed]="filter() === 'all'"
+              (click)="setFilter('all')" [disabled]="isBusy()">Alle</button>
+          </div>
+          <label>Jahr
+            <select (change)="setYear($any($event.target).value)" [disabled]="isBusy()">
+              <option value="" [selected]="year() === null">Alle Jahre</option>
+              @for (option of yearOptions; track option) {
+                <option [value]="option" [selected]="year() === option">{{ option }}</option>
+              }
+            </select>
+          </label>
+        </div>
+        <div class="entry-list">
+          @for (entry of entries(); track entry.id) {
+            <article class="entry" [class]="'status-' + entry.status">
+              <header>
+                <strong>{{ entry.employeeName || entry.employeeId }}</strong>
+                <span class="kind" [attr.data-kind]="entry.kind">{{ kindLabel(entry.kind) }}</span>
+                <span class="status">{{ statusLabel(entry.status) }}</span>
+              </header>
+              <dl>
+                <dt>Tage</dt>
+                <dd>{{ days(entry.days) }} <small>({{ count(entry.days.length) }})</small></dd>
+                @for (line of remainderOf(entry); track line.year) {
+                  <dt>{{ entry.status === 'pending' ? 'Rest nach Genehmigung' : 'Rest' }} {{ line.year }}</dt>
+                  <dd [class.error]="line.remaining < 0">{{ count(line.remaining) }}</dd>
+                }
+                @if (entry.comment) {
+                  <dt>Kommentar</dt>
+                  <dd>{{ entry.comment }}</dd>
+                }
+                <dt>Quelle</dt>
+                <dd>{{ sourceLabel(entry.source) }}</dd>
+                <dt>Eingereicht</dt>
+                <dd>{{ entry.createdAt | date: 'dd.MM.yyyy HH:mm' }}, {{ entry.createdBy }}</dd>
+                @if (entry.decidedAt || entry.decidedBy) {
+                  <dt>Entschieden</dt>
+                  <dd>{{ entry.decidedBy || 'Unbekannt' }}@if (entry.decidedAt) {, {{ entry.decidedAt | date: 'dd.MM.yyyy HH:mm' }}}</dd>
+                }
+                @if (entry.decisionNote) {
+                  <dt>Grund</dt>
+                  <dd>{{ entry.decisionNote }}</dd>
+                }
+                @if (entry.cancelledAt) {
+                  <dt>Storniert</dt>
+                  <dd>{{ entry.cancelledBy || 'Unbekannt' }}, {{ entry.cancelledAt | date: 'dd.MM.yyyy HH:mm' }}</dd>
+                }
+                @if (entry.status === 'failed') {
+                  <dt>Kimai-Meldung</dt>
+                  <dd class="error">{{ entry.error || 'Keine Meldung' }}</dd>
+                }
+                @if (entry.status === 'applied' && entry.error) {
+                  <dt>Storno</dt>
+                  <dd class="error">{{ entry.error }}</dd>
+                }
+                @if ((entry.status === 'failed' || isInterrupted(entry)) && entry.appliedDays.length) {
+                  <dt>Schon in Kimai</dt>
+                  <dd class="partial">{{ days(entry.appliedDays) }}. „{{ entry.status === 'failed' ? 'Erneut versuchen' : 'Fortsetzen' }}“ trägt nur die übrigen Tage ein.</dd>
+                }
+              </dl>
+              @if (isInterrupted(entry)) {
+                <p class="hint">Das Eintragen in Kimai wurde unterbrochen. „Fortsetzen“ übernimmt schon angelegte Einträge und trägt den Rest ein.</p>
+                <div class="actions">
+                  <button type="button" class="primary" (click)="approve(entry)" [disabled]="isBusy()">Fortsetzen</button>
+                </div>
+              } @else if (entry.status === 'pending') {
+                @if (rejectingId() === entry.id) {
+                  <div class="reject">
+                    <label>Grund (optional)
+                      <input type="text" [value]="rejectNote()" (input)="rejectNote.set($any($event.target).value)"
+                        (keyup.enter)="sendReject(entry)" [attr.maxlength]="maxNoteLength">
+                    </label>
+                    <div class="actions">
+                      <button type="button" class="danger" (click)="sendReject(entry)" [disabled]="isBusy()">Ablehnung senden</button>
+                      <button type="button" (click)="cancelReject()" [disabled]="isBusy()">Abbrechen</button>
+                    </div>
+                  </div>
+                } @else {
+                  <div class="actions">
+                    <button type="button" class="primary" (click)="approve(entry)" [disabled]="isBusy()">Genehmigen</button>
+                    <button type="button" (click)="startReject(entry)" [disabled]="isBusy()">Ablehnen</button>
+                  </div>
+                }
+              } @else if (entry.status === 'failed') {
+                <div class="actions">
+                  <button type="button" class="primary" (click)="retry(entry)" [disabled]="isBusy()">Erneut versuchen</button>
+                  <button type="button" (click)="resolve(entry)" [disabled]="isBusy()">Manuell in Kimai erledigt</button>
+                </div>
+              } @else if (entry.status === 'applied') {
+                <div class="actions">
+                  <button type="button" class="danger" (click)="cancelAbsence(entry)" [disabled]="isBusy()">
+                    {{ entry.error ? 'Storno fortsetzen' : 'Stornieren' }}
+                  </button>
+                </div>
+              }
+            </article>
+          } @empty {
+            <p>{{ filter() === 'open' ? 'Keine offenen Abwesenheitsanträge.' : 'Keine Abwesenheitsanträge vorhanden.' }}</p>
+          }
+        </div>
+      }
+
+      @case ('create') {
+        @switch (createStep()) {
+          @case ('edit') {
+            <div class="create">
+              <label>Mitarbeiter
+                <select (change)="selectEmployee($any($event.target).value)" [disabled]="isBusy()">
+                  @for (employee of bookableEmployees(); track employee.id) {
+                    <option [value]="employee.id" [selected]="employee.id === createEmployeeId()">{{ employee.displayName }}</option>
+                  } @empty {
+                    <option value="">Keine aktiven Mitarbeiter mit Kimai-Token</option>
+                  }
+                </select>
+              </label>
+              <div class="filter kind-choice" role="group" aria-label="Art">
+                @for (kind of kinds; track kind) {
+                  <button type="button" [class.active]="createKind() === kind" [attr.aria-pressed]="createKind() === kind"
+                    [attr.data-kind]="kind" (click)="selectKind(kind)" [disabled]="isBusy()">{{ kindLabel(kind) }}</button>
+                }
+              </div>
+              <app-day-picker-calendar
+                [selected]="createDays()"
+                (selectedChange)="createDays.set($event)"
+                [blocked]="blockedDays()"
+                [min]="createWindow().min"
+                [max]="createWindow().max"
+                [today]="today"
+                [disabled]="isBusy() || !createEmployeeId()" />
+              <p class="selection">
+                @if (createDays().length) {
+                  {{ days(createDays()) }} <small>({{ count(createDays().length) }})</small>
+                  <button type="button" class="link" (click)="createDays.set([])" [disabled]="isBusy()">Auswahl leeren</button>
+                } @else {
+                  Tage im Kalender antippen. Belegte Tage sind markiert.
+                }
+              </p>
+              <label>Kommentar (optional)
+                <textarea rows="2" [value]="createComment()" (input)="createComment.set($any($event.target).value)"
+                  [attr.maxlength]="maxNoteLength"></textarea>
+              </label>
+              <div class="actions">
+                <button type="button" class="primary" (click)="showSummary()"
+                  [disabled]="isBusy() || !createEmployeeId() || createDays().length === 0">Weiter</button>
+              </div>
+            </div>
+          }
+          @case ('summary') {
+            <div class="entry summary">
+              <h2>Zusammenfassung</h2>
+              <dl>
+                <dt>Mitarbeiter</dt>
+                <dd>{{ createEmployeeName() }}</dd>
+                <dt>Art</dt>
+                <dd>{{ kindLabel(createKind()) }}</dd>
+                <dt>Tage</dt>
+                <dd>{{ days(createDays()) }} <small>({{ count(createDays().length) }})</small></dd>
+                @if (createComment().trim()) {
+                  <dt>Kommentar</dt>
+                  <dd>{{ createComment().trim() }}</dd>
+                }
+                @for (line of remainders(); track line.year) {
+                  <dt>Rest {{ line.year }}</dt>
+                  <dd [class.error]="line.after < 0">vorher {{ count(line.before) }}, nachher {{ count(line.after) }}</dd>
+                }
+              </dl>
+              @if (overRemainder()) {
+                <p class="hint warning">Der Urlaub übersteigt den Rest. Erfassen ist trotzdem möglich.</p>
+              }
+              <p>Die Abwesenheit gilt sofort als genehmigt und wird in Kimai eingetragen.</p>
+              <div class="actions">
+                <button type="button" class="primary" (click)="submitCreate()" [disabled]="isBusy()">Jetzt erfassen</button>
+                <button type="button" (click)="backToEdit()" [disabled]="isBusy()">Zurück</button>
+              </div>
+            </div>
+          }
+          @case ('result') {
+            @if (createResult(); as result) {
+              <div class="entry result" [class]="'status-' + result.status">
+                <h2>{{ result.status === 'applied' ? 'In Kimai eingetragen' : 'Nicht eingetragen' }}</h2>
+                <p>{{ result.employeeName }}: {{ kindLabel(result.kind) }} {{ days(result.days) }} ({{ count(result.days.length) }})</p>
+                @if (result.warning) { <p class="hint warning">{{ result.warning }}</p> }
+                @if (result.status === 'failed') {
+                  <p class="error">{{ result.error || 'Unbekannter Fehler' }}</p>
+                  <p>Der Antrag steht unter „Anträge“ zum erneuten Versuch bereit.</p>
+                }
+                <div class="actions">
+                  <button type="button" class="primary" (click)="createAnother()">Weitere Abwesenheit erfassen</button>
+                  @if (result.status === 'failed') {
+                    <button type="button" (click)="setTab('requests')">Zu den Anträgen</button>
+                  }
+                </div>
+              </div>
+            }
+          }
+        }
+      }
+
+      @case ('balances') {
+        <div class="filter-bar">
+          <label>Jahr
+            <select (change)="setBalanceYear($any($event.target).value)" [disabled]="isBusy()">
+              @for (option of yearOptions; track option) {
+                <option [value]="option" [selected]="balanceYear() === option">{{ option }}</option>
+              }
+            </select>
+          </label>
+        </div>
+        <div class="balance-list">
+          @for (row of balances(); track row.employeeId) {
+            <article class="balance-row" [class.inactive]="!row.isEnabled">
+              <header>
+                <strong>{{ row.employeeName }}</strong>
+                @if (row.personnelNumber) { <small>Pers.-Nr. {{ row.personnelNumber }}</small> }
+                @if (!row.isEnabled) { <small>inaktiv</small> }
+              </header>
+              @if (missingMasterData(row); as missing) {
+                @if (missing.length) {
+                  <p class="hint warning">
+                    {{ missing.join(', ') }}.
+                    <a routerLink="/admin" fragment="employees">Beim Mitarbeiter ergänzen</a>
+                  </p>
+                }
+              }
+              <div class="figures">
+                <span><small>Anspruch</small><strong [title]="fullMonthsLabel(row)">{{ count(row.balance.entitlement) }}</strong><small>{{ fullMonthsLabel(row) }}</small></span>
+                <span><small>Genommen</small><strong>{{ count(row.balance.taken) }}</strong></span>
+                <span><small>Beantragt</small><strong>{{ count(row.balance.planned) }}</strong></span>
+                <span><small>Rest</small><strong [class.error]="row.balance.remaining < 0">{{ count(row.balance.remaining) }}</strong></span>
+              </div>
+              <div class="edit">
+                <label>Übertrag
+                  <input type="text" inputmode="decimal" [value]="draft(row).carryOver"
+                    (input)="updateDraft(row, { carryOver: $any($event.target).value })" [disabled]="isBusy()">
+                </label>
+                <label>Korrektur
+                  <input type="text" inputmode="decimal" [value]="draft(row).correction"
+                    (input)="updateDraft(row, { correction: $any($event.target).value })" [disabled]="isBusy()">
+                </label>
+                <label class="note">Notiz
+                  <input type="text" [value]="draft(row).note" [attr.maxlength]="maxNoteLength"
+                    (input)="updateDraft(row, { note: $any($event.target).value })" [disabled]="isBusy()">
+                </label>
+              </div>
+              <div class="actions">
+                <button type="button" class="primary" (click)="saveBalance(row)"
+                  [disabled]="isBusy() || !isDirty(row) || draftInvalid(row)">Speichern</button>
+                @if (previousRemainder(row); as remainder) {
+                  <button type="button" (click)="takePreviousRemainder(row)" [disabled]="isBusy()">
+                    Rest aus {{ balanceYear() - 1 }} übernehmen ({{ count(remainder) }})
+                  </button>
+                }
+              </div>
+            </article>
+          } @empty {
+            <p>Keine Mitarbeiter vorhanden.</p>
+          }
+        </div>
+      }
+    }
+  }
+</section>
