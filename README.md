@@ -530,6 +530,19 @@ zurückgezogene fallen nach drei Jahren heraus.
 Die Kiosk-Endpunkte melden sich wie die Korrekturanträge an (Mitarbeiter-ID
 plus PIN oder Karte, Sperre nach falschen PINs, eigenes IP-Limit).
 
+**Am Terminal und auf `/clock`** steht in der Sitzung neben „Korrektur“ der
+Knopf „Abwesenheit“. Er erscheint, sobald `/api/health` `absencesConfigured`
+meldet (Projekt und alle drei Aktivitäten eingestellt), und ist offline
+gesperrt („Abwesenheit nur online“). Der Ablauf zeigt das Urlaubskonto des
+laufenden Jahres (Anspruch inkl. Übertrag und Korrektur, genommen, beantragt,
+Rest), dann Art, Tage im Kalender (belegte Tage und Tage außerhalb des Fensters
+sind nicht wählbar), Zusammenfassung und Absenden. Urlaub über dem Rest lässt
+sich gar nicht erst absenden. Unter „Meine Abwesenheiten“ stehen die eigenen
+Anträge; offene lassen sich nach Rückfrage zurückziehen. Ein Kommentar ist nur
+auf `/clock` möglich (das Terminal hat keine Tastatur). Nach jedem
+Schrittwechsel sind Tipps 400 ms gesperrt, damit ein Doppeltipp nicht den Knopf
+darunter auslöst (#59). Der Ablauf wird erst beim Öffnen geladen (`@defer`).
+
 ### Telegram-Benachrichtigung (optional)
 
 Bei jedem echten Live-Stempel (nicht bei No-ops) schickt die API eine Nachricht wie

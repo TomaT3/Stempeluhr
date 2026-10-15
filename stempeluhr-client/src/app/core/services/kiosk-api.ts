@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { timeout } from 'rxjs';
 
+import { Absence, KioskAbsenceOverview, SubmitAbsence } from '../models/absence.models';
 import {
   ClockAction,
   ClockStatus,
@@ -125,6 +126,34 @@ export class KioskApi {
   withdrawCorrection(auth: CorrectionAuth, id: string) {
     return this.http
       .post<KioskCorrection>(`/api/kiosk/corrections/${encodeURIComponent(id)}/withdraw`, authBody(auth))
+      .pipe(timeout(REQUEST_TIMEOUT_MS));
+  }
+
+  /**
+   * Abwesenheiten (Urlaub, Krank, Gleittag; nur online, keine Queue).
+   * Anmeldung wie bei den Korrekturanträgen, Tage als `yyyy-MM-dd`. Ein
+   * unzulässiger Antrag kommt als 400 `{ message }` auf Deutsch. Gebucht wird
+   * hier nichts: erst die Freigabe trägt die Tage in Kimai ein.
+   */
+  absenceOverview(auth: CorrectionAuth) {
+    return this.http
+      .post<KioskAbsenceOverview>('/api/kiosk/absences/balance', authBody(auth))
+      .pipe(timeout(REQUEST_TIMEOUT_MS));
+  }
+
+  submitAbsence(absence: SubmitAbsence) {
+    return this.http.post<Absence>('/api/kiosk/absences', absence).pipe(timeout(REQUEST_TIMEOUT_MS));
+  }
+
+  /** Offene Anträge und die der letzten 12 Monate, neueste zuerst. */
+  myAbsences(auth: CorrectionAuth) {
+    return this.http.post<Absence[]>('/api/kiosk/absences/mine', authBody(auth)).pipe(timeout(REQUEST_TIMEOUT_MS));
+  }
+
+  /** Zieht einen eigenen offenen Antrag zurück (404 fremd/unbekannt, 409 schon entschieden). */
+  withdrawAbsence(auth: CorrectionAuth, id: string) {
+    return this.http
+      .post<Absence>(`/api/kiosk/absences/${encodeURIComponent(id)}/withdraw`, authBody(auth))
       .pipe(timeout(REQUEST_TIMEOUT_MS));
   }
 
