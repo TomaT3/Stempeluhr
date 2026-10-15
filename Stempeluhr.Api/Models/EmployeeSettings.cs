@@ -32,7 +32,35 @@ public sealed class EmployeeSettings
     /// „Büro“. Null = neutraler Text „Standard-Tätigkeit“.
     /// </summary>
     public string? DefaultTaskLabel { get; init; }
+
+    /// <summary>Personalnummer für den Steuerberater.</summary>
+    public string? PersonnelNumber { get; init; }
+
+    /// <summary>Eintrittsdatum; null = Beschäftigung nach vorn offen.</summary>
+    public DateOnly? EntryDate { get; init; }
+
+    /// <summary>Austrittsdatum (letzter Arbeitstag); null = unbefristet.</summary>
+    public DateOnly? ExitDate { get; init; }
+
+    /// <summary>Jahresurlaub in Tagen, z. B. 25 oder 30.</summary>
+    public decimal? VacationDaysPerYear { get; init; }
+
+    /// <summary>Stunden, die pro Urlaubs- bzw. Krankheitstag in Kimai gebucht werden.</summary>
+    public decimal? AbsenceDayHours { get; init; }
+
+    /// <summary>
+    /// Übertrag und manuelle Korrektur des Urlaubskontos pro Kalenderjahr,
+    /// z. B. für Urlaub, der vor Einführung der Abwesenheiten genommen wurde.
+    /// </summary>
+    private readonly EmployeeVacationYear[] vacationYears = [];
+    public EmployeeVacationYear[] VacationYears
+    {
+        get => vacationYears;
+        init => vacationYears = value ?? [];
+    }
 }
+
+public sealed record EmployeeVacationYear(int Year, decimal CarryOverDays, decimal CorrectionDays, string? Note = null);
 
 public sealed class EmployeeTaskSettings
 {

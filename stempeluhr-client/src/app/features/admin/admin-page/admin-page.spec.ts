@@ -3,7 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 
-import { AdminSettings } from '../../../core/models/admin.models';
+import { AdminEmployee, AdminSettings } from '../../../core/models/admin.models';
 import { AdminSession } from '../../../core/services/admin-session';
 import { AdminPage } from './admin-page';
 
@@ -179,6 +179,168 @@ describe('AdminPage', () => {
         telegramCorrectionChatId: null,
         telegramApproverUserIds: null,
       });
+      fixture.destroy();
+    });
+  });
+
+  describe('absence settings and contract data', () => {
+    const anna: AdminEmployee = {
+      id: 'anna',
+      kimaiUserId: 7,
+      displayName: 'Anna',
+      pin: null,
+      nfcCardId: null,
+      hasApiToken: true,
+      projectId: null,
+      activityId: null,
+      color: '#2f7d57',
+      imageUrl: null,
+      description: null,
+      tags: [],
+      billable: true,
+      isEnabled: true,
+      tasks: [],
+      defaultTaskLabel: null,
+      personnelNumber: '1007',
+      entryDate: '2026-03-15',
+      exitDate: '2027-06-30',
+      vacationDaysPerYear: 30,
+      absenceDayHours: 8,
+      vacationYears: [{ year: 2026, carryOverDays: 3.5, correctionDays: 0, note: null }],
+    };
+    const withAbsences: AdminSettings = {
+      ...emptySettings,
+      absenceProjectId: 40,
+      vacationActivityId: 41,
+      sickActivityId: 42,
+      flexDayActivityId: 43,
+      absenceDayStart: '07:30',
+      employees: [anna],
+    };
+
+    async function openPage(settings: AdminSettings) {
+      sessionStorage.setItem(AdminSession.StorageKey, 'pw');
+      const page = await createPage();
+      flushLogin(page.http, 'pw', [], settings);
+      page.fixture.detectChanges();
+      return page;
+    }
+
+    function savedPayload(http: HttpTestingController) {
+      const request = http.expectOne('/api/admin/settings');
+      expect(request.request.method).toBe('PUT');
+      const body = request.request.body as Record<string, unknown> & { employees: Record<string, unknown>[] };
+      request.flush(withAbsences);
+      http.expectOne('/api/admin/employee-statuses').flush([]);
+      return body;
+    }
+
+    it('shows the stored values in their fields', async () => {
+      const { fixture } = await openPage(withAbsences);
+      const page = fixture.nativeElement as HTMLElement;
+
+      const selects = Array.from(page.querySelectorAll<HTMLSelectElement>('#absences select'));
+      expect(selects.map(select => select.value)).toEqual(['40', '41', '42', '43']);
+      expect(page.querySelector<HTMLInputElement>('#absences input[type="time"]')?.value).toBe('07:30');
+      const card = page.querySelector<HTMLElement>('.employee-admin-card')!;
+      expect(Array.from(card.querySelectorAll<HTMLInputElement>('input[type="date"]'), input => input.value))
+        .toEqual(['2026-03-15', '2027-06-30']);
+      expect(Array.from(card.querySelectorAll<HTMLInputElement>('input[type="number"]'), input => input.value))
+        .toEqual(['30', '8']);
+      fixture.destroy();
+    });
+
+    it('sends unchanged values back and keeps the vacation accounts', async () => {
+      const { fixture, component, http } = await openPage(withAbsences);
+
+      component.saveAdminSettings();
+
+      const body = savedPayload(http);
+      expect(body).toMatchObject({
+        includesAbsences: true,
+        absenceProjectId: 40,
+        vacationActivityId: 41,
+        sickActivityId: 42,
+        flexDayActivityId: 43,
+        absenceDayStart: '07:30',
+      });
+      expect(body.employees[0]).toMatchObject({
+        includesContract: true,
+        personnelNumber: '1007',
+        entryDate: '2026-03-15',
+        exitDate: '2027-06-30',
+        vacationDaysPerYear: 30,
+        absenceDayHours: 8,
+        vacationYears: null,
+      });
+      fixture.destroy();
+    });
+
+    it('saves edits and clears fields with null', async () => {
+      const { fixture, component, http } = await openPage(withAbsences);
+      const card = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.employee-admin-card')!;
+
+      const [entry, exit] = Array.from(card.querySelectorAll<HTMLInputElement>('input[type="date"]'));
+      entry.value = '2026-04-01';
+      entry.dispatchEvent(new Event('change'));
+      exit.value = '';
+      exit.dispatchEvent(new Event('change'));
+      const [days, hours] = Array.from(card.querySelectorAll<HTMLInputElement>('input[type="number"]'));
+      days.value = '0';
+      days.dispatchEvent(new Event('input'));
+      hours.value = '';
+      hours.dispatchEvent(new Event('input'));
+      component.updateEmployee(0, { personnelNumber: null });
+      component.updateAbsenceActivity('flexDayActivityId', '');
+      component.updateAbsenceSettings({ absenceProjectId: null, absenceDayStart: '06:00' });
+      component.saveAdminSettings();
+
+      const body = savedPayload(http);
+      expect(body).toMatchObject({ absenceProjectId: null, flexDayActivityId: null, vacationActivityId: 41, absenceDayStart: '06:00' });
+      expect(body.employees[0]).toMatchObject({
+        personnelNumber: null,
+        entryDate: '2026-04-01',
+        exitDate: null,
+        vacationDaysPerYear: 0,
+        absenceDayHours: null,
+      });
+      fixture.destroy();
+    });
+
+    it('drops an absence activity that belongs to another project', async () => {
+      const { fixture, component } = await openPage(withAbsences);
+      component.kimaiActivities.set([
+        { id: 41, name: 'Urlaub', parentTitle: null, projectId: null, visible: true },
+        { id: 42, name: 'Krank', parentTitle: 'Abwesenheit', projectId: 40, visible: true },
+      ]);
+
+      component.updateAbsenceSettings({ absenceProjectId: 50 });
+
+      expect(component.adminSettings()).toMatchObject({ absenceProjectId: 50, vacationActivityId: 41, sickActivityId: null, flexDayActivityId: 43 });
+      fixture.destroy();
+    });
+
+    it('sends contract data for a newly added employee', async () => {
+      const { fixture, component, http } = await openPage(withAbsences);
+
+      component.addEmployee();
+      component.saveAdminSettings();
+
+      expect(savedPayload(http).employees[1]).toMatchObject({ includesContract: true, entryDate: null, vacationYears: null });
+      fixture.destroy();
+    });
+
+    it('leaves the values alone when the backend does not know the fields', async () => {
+      const { fixture, component, http } = await openPage({
+        ...emptySettings,
+        employees: [{ ...anna, personnelNumber: undefined, entryDate: undefined, exitDate: undefined, vacationDaysPerYear: undefined, absenceDayHours: undefined, vacationYears: undefined }],
+      });
+
+      component.saveAdminSettings();
+
+      const body = savedPayload(http);
+      expect(body).toMatchObject({ includesAbsences: false });
+      expect(body.employees[0]).toMatchObject({ includesContract: false, vacationYears: null });
       fixture.destroy();
     });
   });

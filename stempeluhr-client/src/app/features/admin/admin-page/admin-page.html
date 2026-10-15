@@ -48,6 +48,7 @@
       <button type="button" (click)="scrollToSection('booking')">Buchungsvorgaben</button>
       <button type="button" (click)="scrollToSection('nfc')">NFC-Kartenleser</button>
       <button type="button" (click)="scrollToSection('telegram')">Telegram-Freigabe</button>
+      <button type="button" (click)="scrollToSection('absences')">Abwesenheiten</button>
       <button type="button" (click)="scrollToSection('employees')">Mitarbeiter</button>
     </nav>
     <div class="admin-layout">
@@ -191,6 +192,44 @@
         <p class="task-admin-hint">Mehrere User-IDs mit Komma trennen. Bot-Token und Stempel-Chat stehen in der settings.json; so findest du die IDs: README, Abschnitt Telegram.</p>
       </section>
 
+      <section class="admin-section" id="absences">
+        <div class="section-head"><span class="section-number">05</span><div><h2>Abwesenheiten</h2><p>Kimai-Ziele für Urlaub, Krankheit und Gleittage</p></div></div>
+        <div class="form-grid">
+          <label>
+            Abwesenheits-Projekt
+            <select (change)="updateAbsenceSettings({ absenceProjectId: toNumber($any($event.target).value) })">
+              <option value="" [selected]="settings.absenceProjectId == null">Keine Auswahl</option>
+              @if (settings.absenceProjectId != null && !hasKimaiProject(settings.absenceProjectId)) {
+                <option [value]="settings.absenceProjectId" selected>{{ missingProjectLabel(settings.absenceProjectId) }}</option>
+              }
+              @for (project of kimaiProjects(); track project.id) {
+                <option [value]="project.id" [selected]="settings.absenceProjectId === project.id">{{ projectOptionLabel(project) }}</option>
+              }
+            </select>
+          </label>
+          @for (field of absenceActivityFields; track field.key) {
+            @let activityId = settings[field.key] ?? null;
+            <label>
+              {{ field.label }}
+              <select (change)="updateAbsenceActivity(field.key, $any($event.target).value)">
+                <option value="" [selected]="activityId === null">Keine Auswahl</option>
+                @if (activityId !== null && !hasActivityForProject(activityId, settings.absenceProjectId ?? null)) {
+                  <option [value]="activityId" selected>{{ missingActivityLabel(activityId) }}</option>
+                }
+                @for (activity of activitiesForProject(settings.absenceProjectId ?? null); track activity.id) {
+                  <option [value]="activity.id" [selected]="activityId === activity.id">{{ activityOptionLabel(activity) }}</option>
+                }
+              </select>
+            </label>
+          }
+          <label>
+            Beginn der Einträge
+            <input type="time" [value]="settings.absenceDayStart ?? '08:00'" (change)="updateAbsenceSettings({ absenceDayStart: $any($event.target).value })">
+          </label>
+        </div>
+        <p class="task-admin-hint">Pro Abwesenheitstag entsteht ein Kimai-Eintrag ab dieser Uhrzeit; Gleittage mit Dauer 0. Projekt und Aktivitäten müssen in Kimai für die Teams der Mitarbeiter sichtbar sein.</p>
+      </section>
+
       @if (kimaiUsers().length > 0) {
         <section class="admin-section" id="import">
           <h2>Kimai-Mitarbeiter übernehmen</h2>
@@ -207,7 +246,7 @@
       }
 
       <section class="admin-section employee-admin-list" id="employees">
-        <div class="section-head"><span class="section-number">05</span><div><h2>Mitarbeiter <span class="count">{{ settings.employees.length }}</span></h2><p>Zugang, Buchungsregeln und Tätigkeiten pro Person</p></div></div>
+        <div class="section-head"><span class="section-number">06</span><div><h2>Mitarbeiter <span class="count">{{ settings.employees.length }}</span></h2><p>Zugang, Buchungsregeln und Tätigkeiten pro Person</p></div></div>
         <div class="admin-actions">
           <button type="button" (click)="importKimaiUsers()">Aus Kimai laden</button>
           <button type="button" (click)="addEmployee()">Mitarbeiter hinzufügen</button>
@@ -322,6 +361,33 @@
                 <input type="checkbox" [checked]="employee.billable" (change)="updateEmployee(index, { billable: $any($event.target).checked })">
                 abrechenbar
               </label>
+            </div>
+
+            <div class="employee-subsection">
+              <h3>Vertrag &amp; Urlaub</h3>
+              <div class="form-grid">
+              <label>
+                Personalnummer
+                <input [value]="employee.personnelNumber ?? ''" (input)="updateEmployee(index, { personnelNumber: $any($event.target).value || null })" autocomplete="off">
+              </label>
+              <label>
+                Eintritt
+                <input type="date" [value]="employee.entryDate ?? ''" (change)="updateEmployee(index, { entryDate: $any($event.target).value || null })">
+              </label>
+              <label>
+                Austritt
+                <input type="date" [value]="employee.exitDate ?? ''" (change)="updateEmployee(index, { exitDate: $any($event.target).value || null })">
+              </label>
+              <label>
+                Urlaubstage pro Jahr
+                <input type="number" min="0" max="60" step="0.5" inputmode="decimal" [value]="employee.vacationDaysPerYear ?? ''" (input)="updateEmployee(index, { vacationDaysPerYear: toDecimal($any($event.target).value) })">
+              </label>
+              <label>
+                Stunden pro Abwesenheitstag
+                <input type="number" min="0" max="24" step="0.25" inputmode="decimal" [value]="employee.absenceDayHours ?? ''" (input)="updateEmployee(index, { absenceDayHours: toDecimal($any($event.target).value) })">
+              </label>
+              </div>
+              <p class="task-admin-hint">Ohne Eintritt bzw. Austritt gilt die Beschäftigung nach dieser Seite als offen. Urlaubskonten (Übertrag, Korrektur) werden auf der Abwesenheiten-Seite gepflegt.</p>
             </div>
 
             <!-- Weitere Taetigkeiten: Arbeit fuer andere Kunden, auf die am Kiosk

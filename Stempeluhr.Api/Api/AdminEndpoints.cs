@@ -163,6 +163,11 @@ public static class AdminEndpoints
                 return Results.BadRequest(new { message = taskError });
             }
 
+            if (adminService.ValidateAbsences(settings) is { } absenceError)
+            {
+                return Results.BadRequest(new { message = absenceError });
+            }
+
             await settingsStore.SaveAsync(settings, cancellationToken);
 
             return Results.Ok(AdminSettingsDto.FromSettings(settings));

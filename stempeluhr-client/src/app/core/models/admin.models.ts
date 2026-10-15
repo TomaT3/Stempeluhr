@@ -62,6 +62,14 @@ export interface AdminSettings {
   telegramCorrectionChatId?: string | null;
   /** Telegram-User-IDs, die Korrekturanträge entscheiden dürfen; leer = jedes Mitglied des Chats. */
   telegramApproverUserIds?: number[];
+  /** Kimai-Projekt für Abwesenheitstage (Urlaub, Krank, Gleittag). */
+  absenceProjectId?: number | null;
+  vacationActivityId?: number | null;
+  sickActivityId?: number | null;
+  /** Gleittag (Überstundenabbau), in Kimai mit Dauer 0 gebucht. */
+  flexDayActivityId?: number | null;
+  /** Beginn der Abwesenheitseinträge (`HH:mm`, Kimai-Zeitzone des Mitarbeiters). */
+  absenceDayStart?: string;
   employees: AdminEmployee[];
 }
 
@@ -85,6 +93,24 @@ export interface AdminEmployee {
   tasks: AdminEmployeeTask[];
   /** Anzeigename der Haupttätigkeit am Kiosk; leer = „Standard-Tätigkeit“. */
   defaultTaskLabel: string | null;
+  /** Personalnummer für den Steuerberater. */
+  personnelNumber?: string | null;
+  /** Ein- und Austrittsdatum (`yyyy-MM-dd`). */
+  entryDate?: string | null;
+  exitDate?: string | null;
+  vacationDaysPerYear?: number | null;
+  /** In Kimai gebuchte Stunden pro Urlaubs- bzw. Krankheitstag. */
+  absenceDayHours?: number | null;
+  /** Urlaubskonten; gepflegt auf der Abwesenheiten-Seite. */
+  vacationYears?: AdminVacationYear[];
+}
+
+/** Übertrag aus dem Vorjahr und manuelle Korrektur des Urlaubskontos eines Jahres. */
+export interface AdminVacationYear {
+  year: number;
+  carryOverDays: number;
+  correctionDays: number;
+  note: string | null;
 }
 
 export interface AdminEmployeeTask {

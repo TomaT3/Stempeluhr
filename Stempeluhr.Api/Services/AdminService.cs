@@ -70,6 +70,49 @@ public sealed class AdminService(
         return null;
     }
 
+    public string? ValidateAbsences(RuntimeSettings settings)
+    {
+        if (settings.AbsenceDayStartTime is null)
+        {
+            return "Beginn der Abwesenheitseinträge muss eine Uhrzeit (HH:mm) sein.";
+        }
+
+        // Die Art eines Abwesenheitstags ergibt sich in Kimai allein aus der
+        // Aktivität (Idempotenz, Export) - zwei Arten auf einer wären nicht
+        // mehr unterscheidbar.
+        int?[] activities = [settings.VacationActivityId, settings.SickActivityId, settings.FlexDayActivityId];
+        if (activities.OfType<int>().GroupBy(id => id).Any(group => group.Count() > 1))
+        {
+            return "Urlaub, Krank und Gleittag brauchen verschiedene Aktivitäten.";
+        }
+
+        foreach (var employee in settings.Employees)
+        {
+            var name = string.IsNullOrWhiteSpace(employee.DisplayName) ? "Mitarbeiter" : employee.DisplayName;
+            if (employee.VacationDaysPerYear is < 0 or > 60)
+            {
+                return $"{name}: Urlaubstage pro Jahr müssen zwischen 0 und 60 liegen.";
+            }
+
+            if (employee.AbsenceDayHours is < 0 or > 24)
+            {
+                return $"{name}: Stunden pro Abwesenheitstag müssen zwischen 0 und 24 liegen.";
+            }
+
+            if (employee.EntryDate is { } entry && employee.ExitDate is { } exit && exit < entry)
+            {
+                return $"{name}: Das Austrittsdatum liegt vor dem Eintrittsdatum.";
+            }
+
+            if (employee.VacationYears.GroupBy(year => year.Year).Any(group => group.Count() > 1))
+            {
+                return $"{name}: Jedes Jahr darf im Urlaubskonto nur einmal vorkommen.";
+            }
+        }
+
+        return null;
+    }
+
     private async Task<AdminEmployeeStatusDto> GetEmployeeStatusAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,

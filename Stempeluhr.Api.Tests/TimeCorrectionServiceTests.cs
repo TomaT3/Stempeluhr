@@ -883,6 +883,7 @@ public sealed class TimeCorrectionServiceTests : IDisposable
                 """{"errors":{"errors":["Dieses Formular sollte keine zusätzlichen Felder enthalten."],"children":{"project":{}}}}""",
                 "PATCH /api/timesheets", ["end"]);
 
+        public Task DeleteTimesheetAsync(RuntimeSettings s, EmployeeSettings e, int id, CancellationToken ct = default) => inner.DeleteTimesheetAsync(s, e, id, ct);
         public Task<int?> GetCurrentUserIdAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => inner.GetCurrentUserIdAsync(s, e, ct);
         public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => inner.GetCurrentUserTimezoneAsync(s, e, ct);
         public Task<KimaiTimesheetDetailDto?> GetTimesheetAsync(RuntimeSettings s, EmployeeSettings e, int id, CancellationToken ct = default) => inner.GetTimesheetAsync(s, e, id, ct);

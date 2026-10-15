@@ -15,4 +15,10 @@ public interface IAdminService
     /// the admin or null when everything is valid.
     /// </summary>
     string? ValidateTasks(RuntimeSettings settings);
+
+    /// <summary>
+    /// Checks the absence settings and the employees' contract data; returns
+    /// an error message for the admin or null when everything is valid.
+    /// </summary>
+    string? ValidateAbsences(RuntimeSettings settings);
 }

@@ -145,6 +145,14 @@ eingebunden und gesichert werden. `Stempeluhr__DataPath` verlegt den Ordner
   Aktivität, abrechenbar), z. B. Arbeit für andere Kunden, und eine
   Bezeichnung der Haupttätigkeit für den Kiosk (z. B. „Büro“; leer =
   „Standard-Tätigkeit“)
+- Pro Mitarbeiter **Vertrag & Urlaub**: Personalnummer, Ein- und
+  Austrittsdatum, Urlaubstage pro Jahr und Stunden pro Abwesenheitstag
+- **Abwesenheiten**: Kimai-Projekt und die Aktivitäten für Urlaub, Krank und
+  Gleittag (drei verschiedene) sowie der Beginn der Abwesenheitseinträge
+  (Standard 08:00). Projekt und Aktivitäten müssen in Kimai für die Teams der
+  Mitarbeiter sichtbar sein; `allow_future_times` und `allow_zero_duration`
+  bleiben aktiv (Kimai-Standard), weil Urlaub im Voraus und Gleittage mit
+  Dauer 0 gebucht werden.
 
 Secrets werden in Admin-Antworten nie zurückgegeben.
 

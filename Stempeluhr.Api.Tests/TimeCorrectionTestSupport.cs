@@ -244,6 +244,15 @@ internal sealed class FakeKimai : IKimaiClient
         return Task.CompletedTask;
     }
 
+    public Task DeleteTimesheetAsync(RuntimeSettings s, EmployeeSettings e, int id, CancellationToken ct = default)
+    {
+        ThrowIfUnreachable();
+        // Like KimaiClient: an unknown id counts as already deleted.
+        Writes.Add($"delete {id}");
+        Sheets.RemoveAll(sheet => sheet.Id == id);
+        return Task.CompletedTask;
+    }
+
     private static string Hm(DateTimeOffset value) => value.ToOffset(TimeCorrection.Cest).ToString("HH:mm");
 
     /// <summary>Only whether something runs counts (like <c>/api/timesheets/active</c> of the token owner).</summary>

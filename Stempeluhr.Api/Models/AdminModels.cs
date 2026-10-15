@@ -66,6 +66,11 @@ public sealed record AdminSettingsDto(
     public string? InfluxOrg { get; init; }
     public string? InfluxBucket { get; init; }
     public bool HasInfluxToken { get; init; }
+    public int? AbsenceProjectId { get; init; }
+    public int? VacationActivityId { get; init; }
+    public int? SickActivityId { get; init; }
+    public int? FlexDayActivityId { get; init; }
+    public string AbsenceDayStart { get; init; } = RuntimeSettings.DefaultAbsenceDayStart;
 
     public static AdminSettingsDto FromSettings(RuntimeSettings settings)
     {
@@ -88,6 +93,11 @@ public sealed record AdminSettingsDto(
             InfluxOrg = settings.InfluxOrg,
             InfluxBucket = settings.InfluxBucket,
             HasInfluxToken = !string.IsNullOrWhiteSpace(settings.InfluxToken),
+            AbsenceProjectId = settings.AbsenceProjectId,
+            VacationActivityId = settings.VacationActivityId,
+            SickActivityId = settings.SickActivityId,
+            FlexDayActivityId = settings.FlexDayActivityId,
+            AbsenceDayStart = settings.AbsenceDayStart,
         };
     }
 }
@@ -110,6 +120,13 @@ public sealed record AdminEmployeeDto(
     IReadOnlyCollection<AdminEmployeeTaskDto> Tasks,
     string? DefaultTaskLabel)
 {
+    public string? PersonnelNumber { get; init; }
+    public DateOnly? EntryDate { get; init; }
+    public DateOnly? ExitDate { get; init; }
+    public decimal? VacationDaysPerYear { get; init; }
+    public decimal? AbsenceDayHours { get; init; }
+    public IReadOnlyCollection<EmployeeVacationYear> VacationYears { get; init; } = [];
+
     public static AdminEmployeeDto FromSettings(EmployeeSettings employee)
     {
         return new AdminEmployeeDto(
@@ -128,7 +145,15 @@ public sealed record AdminEmployeeDto(
             employee.Billable,
             employee.IsEnabled,
             (employee.Tasks ?? []).Select(AdminEmployeeTaskDto.FromSettings).ToArray(),
-            employee.DefaultTaskLabel);
+            employee.DefaultTaskLabel)
+        {
+            PersonnelNumber = employee.PersonnelNumber,
+            EntryDate = employee.EntryDate,
+            ExitDate = employee.ExitDate,
+            VacationDaysPerYear = employee.VacationDaysPerYear,
+            AbsenceDayHours = employee.AbsenceDayHours,
+            VacationYears = employee.VacationYears,
+        };
     }
 }
 
@@ -175,7 +200,13 @@ public sealed record AdminSettingsUpdateDto(
     string? InfluxBucket = null,
     string? InfluxToken = null,
     string? TelegramCorrectionChatId = null,
-    IReadOnlyCollection<long>? TelegramApproverUserIds = null)
+    IReadOnlyCollection<long>? TelegramApproverUserIds = null,
+    bool IncludesAbsences = false,
+    int? AbsenceProjectId = null,
+    int? VacationActivityId = null,
+    int? SickActivityId = null,
+    int? FlexDayActivityId = null,
+    string? AbsenceDayStart = null)
 {
     public RuntimeSettings ToSettings(RuntimeSettings current)
     {
@@ -212,6 +243,15 @@ public sealed record AdminSettingsUpdateDto(
             InfluxOrg = KeepOrTrim(InfluxOrg, current.InfluxOrg),
             InfluxBucket = KeepOrTrim(InfluxBucket, current.InfluxBucket),
             InfluxToken = KeepOrTrim(InfluxToken, current.InfluxToken),
+            // Ein alter, gecachter Admin-Client kennt die Abwesenheitsfelder
+            // nicht (IncludesAbsences fehlt = false): alle behalten. Ein neuer
+            // Client sendet sie vollständig, dort löscht null bewusst.
+            AbsenceProjectId = IncludesAbsences ? AbsenceProjectId : current.AbsenceProjectId,
+            VacationActivityId = IncludesAbsences ? VacationActivityId : current.VacationActivityId,
+            SickActivityId = IncludesAbsences ? SickActivityId : current.SickActivityId,
+            FlexDayActivityId = IncludesAbsences ? FlexDayActivityId : current.FlexDayActivityId,
+            AbsenceDayStart = IncludesAbsences ? AbsenceDayStart ?? RuntimeSettings.DefaultAbsenceDayStart : current.AbsenceDayStart,
+            PauseEndRecoveryToleranceSeconds = current.PauseEndRecoveryToleranceSeconds,
             TerminalTokens = current.TerminalTokens,
             Employees = employees
         };
@@ -247,7 +287,14 @@ public sealed record AdminEmployeeUpdateDto(
     bool Billable,
     bool IsEnabled,
     IReadOnlyCollection<AdminEmployeeTaskDto>? Tasks = null,
-    string? DefaultTaskLabel = null)
+    string? DefaultTaskLabel = null,
+    bool IncludesContract = false,
+    string? PersonnelNumber = null,
+    DateOnly? EntryDate = null,
+    DateOnly? ExitDate = null,
+    decimal? VacationDaysPerYear = null,
+    decimal? AbsenceDayHours = null,
+    IReadOnlyCollection<EmployeeVacationYear>? VacationYears = null)
 {
     public EmployeeSettings ToSettings(RuntimeSettings current)
     {
@@ -280,7 +327,25 @@ public sealed record AdminEmployeeUpdateDto(
             // leerer String löscht ihn bewusst.
             DefaultTaskLabel = DefaultTaskLabel is null
                 ? existing?.DefaultTaskLabel
-                : string.IsNullOrWhiteSpace(DefaultTaskLabel) ? null : DefaultTaskLabel.Trim()
+                : string.IsNullOrWhiteSpace(DefaultTaskLabel) ? null : DefaultTaskLabel.Trim(),
+            // Vertragsdaten wie die Abwesenheits-Einstellungen: ohne
+            // IncludesContract (alter Client) behalten, sonst gilt der
+            // gesendete Stand, null löscht.
+            PersonnelNumber = IncludesContract
+                ? string.IsNullOrWhiteSpace(PersonnelNumber) ? null : PersonnelNumber.Trim()
+                : existing?.PersonnelNumber,
+            EntryDate = IncludesContract ? EntryDate : existing?.EntryDate,
+            ExitDate = IncludesContract ? ExitDate : existing?.ExitDate,
+            VacationDaysPerYear = IncludesContract ? VacationDaysPerYear : existing?.VacationDaysPerYear,
+            AbsenceDayHours = IncludesContract ? AbsenceDayHours : existing?.AbsenceDayHours,
+            // Die Urlaubskonten pflegt die Abwesenheiten-Seite: null behält,
+            // eine leere Liste löscht.
+            VacationYears = VacationYears is null
+                ? existing?.VacationYears ?? []
+                : VacationYears
+                    .Select(year => year with { Note = string.IsNullOrWhiteSpace(year.Note) ? null : year.Note.Trim() })
+                    .OrderBy(year => year.Year)
+                    .ToArray()
         };
     }
 }

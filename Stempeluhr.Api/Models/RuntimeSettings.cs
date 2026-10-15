@@ -99,6 +99,48 @@ public sealed class RuntimeSettings
     /// gemeldete Ablehnung.
     /// </summary>
     public int PauseEndRecoveryToleranceSeconds { get; init; } = 30;
+
+    /// <summary>Kimai-Projekt, auf das alle Abwesenheitstage gebucht werden.</summary>
+    public int? AbsenceProjectId { get; init; }
+
+    public int? VacationActivityId { get; init; }
+    public int? SickActivityId { get; init; }
+
+    /// <summary>Gleittag (Überstundenabbau), in Kimai mit Dauer 0 gebucht.</summary>
+    public int? FlexDayActivityId { get; init; }
+
+    public const string DefaultAbsenceDayStart = "08:00";
+
+    /// <summary>
+    /// Beginn der Abwesenheits-Timesheets (<c>HH:mm</c>, Kimai-Zeitzone des
+    /// Mitarbeiters). Gültige Werte wie <c>8:00</c> werden auf <c>08:00</c>
+    /// normalisiert, weil <c>&lt;input type="time"&gt;</c> nur zweistellige
+    /// Stunden anzeigt. Ungültige Werte bleiben stehen und lehnt der Admin-Save ab.
+    /// </summary>
+    private readonly string absenceDayStart = DefaultAbsenceDayStart;
+    public string AbsenceDayStart
+    {
+        get => absenceDayStart;
+        init => absenceDayStart = string.IsNullOrWhiteSpace(value) ? DefaultAbsenceDayStart
+            : ParseAbsenceDayStart(value.Trim()) is { } time ? time.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture)
+            : value.Trim();
+    }
+
+    /// <summary><see cref="AbsenceDayStart"/> als Uhrzeit, null wenn ungültig.</summary>
+    [JsonIgnore]
+    public TimeOnly? AbsenceDayStartTime => ParseAbsenceDayStart(AbsenceDayStart);
+
+    private static TimeOnly? ParseAbsenceDayStart(string value) =>
+        TimeOnly.TryParseExact(value, ["HH:mm", "H:mm"], System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var time)
+            ? time
+            : null;
+
+    [JsonIgnore]
+    public bool AbsencesConfigured =>
+        AbsenceProjectId is not null && VacationActivityId is not null
+        && SickActivityId is not null && FlexDayActivityId is not null;
+
     public List<EmployeeSettings> Employees { get; init; } = [];
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(BaseUrl) && Employees.Any(employee => employee.IsEnabled);
