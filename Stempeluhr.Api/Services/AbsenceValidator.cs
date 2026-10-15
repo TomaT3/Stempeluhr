@@ -4,7 +4,10 @@ namespace Stempeluhr.Api.Services;
 
 /// <summary>Was der <see cref="AbsenceValidator"/> für einen Antrag braucht.</summary>
 /// <param name="Others">Die übrigen Anträge des Mitarbeiters (ohne den geprüften).</param>
-/// <param name="Timesheets">Kimai-Einträge rund um die betroffenen Tage (ab dem Vortag).</param>
+/// <param name="Timesheets">
+/// Kimai-Einträge rund um die betroffenen Tage (ab dem Vortag); null prüft nur
+/// die Regeln ohne Kimai (Vorprüfung vor der Abfrage).
+/// </param>
 /// <param name="Applying">
 /// Beim Anwenden: ein Eintrag derselben Art am Tag gehört zum Antrag (eine
 /// verlorene Antwort aus einem früheren Versuch) und ist kein Konflikt.
@@ -17,7 +20,7 @@ public sealed record AbsenceValidationInput(
     EmployeeSettings Employee,
     RuntimeSettings Settings,
     IEnumerable<AbsenceRequest> Others,
-    IEnumerable<KimaiTimesheetEntryDto> Timesheets,
+    IEnumerable<KimaiTimesheetEntryDto>? Timesheets,
     TimeZoneInfo TimeZone,
     string? Comment = null,
     bool Applying = false);
@@ -80,27 +83,36 @@ public static class AbsenceValidator
             : $"{AbsenceKinds.Label(kind)} ist noch nicht eingerichtet. Es fehlt: {string.Join(", ", missing)}.";
     }
 
-    public static AbsenceValidationResult Validate(AbsenceValidationInput input)
+    /// <summary>Regeln, die weder Datum noch Kimai brauchen: Einstellungen, Anzahl der Tage, Kommentar.</summary>
+    public static string? ValidateInput(
+        AbsenceKind kind, IReadOnlyList<DateOnly> days, string? comment, RuntimeSettings settings, EmployeeSettings employee)
     {
-        var (kind, days, settings, employee) = (input.Kind, input.Days, input.Settings, input.Employee);
         if (MissingSettings(kind, settings, employee) is { } missing)
         {
-            return new(missing);
+            return missing;
         }
 
         if (days.Count == 0)
         {
-            return new("Bitte mindestens einen Tag wählen.");
+            return "Bitte mindestens einen Tag wählen.";
         }
 
         if (days.Count > MaxDays)
         {
-            return new($"Ein Antrag umfasst höchstens {MaxDays} Tage.");
+            return $"Ein Antrag umfasst höchstens {MaxDays} Tage.";
         }
 
-        if (input.Comment?.Length > MaxCommentLength)
+        return comment?.Length > MaxCommentLength
+            ? $"Der Kommentar darf höchstens {MaxCommentLength} Zeichen haben."
+            : null;
+    }
+
+    public static AbsenceValidationResult Validate(AbsenceValidationInput input)
+    {
+        var (kind, days, employee) = (input.Kind, input.Days, input.Employee);
+        if (ValidateInput(kind, days, input.Comment, input.Settings, employee) is { } inputError)
         {
-            return new($"Der Kommentar darf höchstens {MaxCommentLength} Zeichen haben.");
+            return new(inputError);
         }
 
         var (earliest, latest) = Window(kind, input.Today, input.IsAdmin);
@@ -133,7 +145,7 @@ public static class AbsenceValidator
             }
         }
 
-        if (CheckTimesheets(input) is { } timesheetError)
+        if (input.Timesheets is not null && CheckTimesheets(input) is { } timesheetError)
         {
             return new(timesheetError);
         }
@@ -145,7 +157,7 @@ public static class AbsenceValidator
     {
         var (settings, timeZone) = (input.Settings, input.TimeZone);
         var days = input.Days.ToHashSet();
-        foreach (var entry in input.Timesheets.Where(entry => entry.Begin is not null).OrderBy(entry => entry.Begin))
+        foreach (var entry in input.Timesheets!.Where(entry => entry.Begin is not null).OrderBy(entry => entry.Begin))
         {
             var day = AbsencePlan.LocalDay(entry.Begin!.Value, timeZone);
             if (!days.Contains(day))

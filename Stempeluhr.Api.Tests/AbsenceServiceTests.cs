@@ -137,6 +137,78 @@ public sealed class AbsenceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task TheStartOfApplying_IsStoredBeforeTheFirstKimaiWrite()
+    {
+        var submitted = await Submitted(Submit("vacation", D(10, 12), D(10, 13)));
+        var seen = new List<(AbsenceStatus, DateTimeOffset?)>();
+        _kimai.BeforeCreate = () => seen.Add((_store.Find(submitted.Id)!.Status, _store.Find(submitted.Id)!.ApplyStartedAt));
+
+        var applied = await Approved(submitted.Id);
+
+        Assert.Equal([(AbsenceStatus.Pending, TimeCorrection.Now), (AbsenceStatus.Pending, TimeCorrection.Now)], seen);
+        Assert.Equal(TimeCorrection.Now, applied.ApplyStartedAt);
+    }
+
+    /// <summary>
+    /// The process stopped after the first day was written to Kimai: the
+    /// request is still Pending, but decided. Review #140: withdrawing or
+    /// rejecting it would orphan the Kimai entry and free the vacation days.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnInterruptedApply_CanNeitherBeWithdrawnNorRejected_AndApprovingContinues(bool idWasSaved)
+    {
+        var day1 = _kimai.Add(TimeCorrection.Day(12, 8), TimeCorrection.Day(12, 16), VacationActivity, Absence.Project);
+        var interrupted = Request(AbsenceKind.Vacation, AbsenceStatus.Pending, D(10, 12), D(10, 13)) with
+        {
+            DecidedAt = TimeCorrection.Now,
+            DecidedBy = "Chef",
+            ApplyStartedAt = TimeCorrection.Now,
+            // Without the id: stopped between the Kimai create and saving its id.
+            AppliedDays = idWasSaved ? new Dictionary<string, int> { ["2026-10-12"] = day1.Id } : new Dictionary<string, int>(),
+        };
+        _store.Add(interrupted);
+
+        Assert.Equal(CorrectionOutcome.Conflict, (await _service.WithdrawAsync(MaxAuth, interrupted.Id)).Outcome);
+        Assert.Equal(AbsenceStatus.Pending, (await _service.RejectAsync(interrupted.Id, null, "Admin")).Value!.Status);
+        var balance = (await _service.GetOverviewAsync(MaxAuth)).Value!.Balances[0];
+        Assert.Equal(28m, balance.Remaining);
+
+        var applied = await Approved(interrupted.Id);
+
+        Assert.Equal((AbsenceStatus.Applied, "Chef"), (applied.Status, applied.DecidedBy));
+        Assert.Equal(["create act=41 proj=40 08:00-16:00 desc=Urlaub (Stempeluhr) billable=False"], Creates);
+        Assert.Equal(2, _kimai.Sheets.Count);
+        Assert.Equal(day1.Id, _store.Find(interrupted.Id)!.AppliedDays["2026-10-12"]);
+    }
+
+    [Theory]
+    [InlineData("0001-01-01", "liegt zu weit zurück")]
+    [InlineData("9999-12-31", "liegt zu weit in der Zukunft")]
+    public async Task ExtremeDates_AreRejectedBeforeKimaiIsQueried(string day, string message)
+    {
+        var employee = await _service.SubmitAsync(new SubmitAbsenceRequest("max", "1234", null, "vacation", [day], null, null));
+        var admin = await _service.CreateForEmployeeAsync(new AdminCreateAbsenceRequest("max", "sick", [day], null), "Admin");
+
+        Assert.Equal(CorrectionOutcome.Invalid, employee.Outcome);
+        Assert.Contains(message, employee.Message);
+        Assert.Equal(CorrectionOutcome.Invalid, admin.Outcome);
+        Assert.Empty(_store.List());
+    }
+
+    [Fact]
+    public async Task InputRules_DoNotNeedKimai()
+    {
+        _kimai.Unreachable = true;
+        var tooMany = Enumerable.Range(0, 63).Select(i => D(11, 2).AddDays(i)).ToArray();
+
+        var result = await _service.SubmitAsync(Submit("flexDay", tooMany));
+
+        Assert.Equal((CorrectionOutcome.Invalid, "Ein Antrag umfasst höchstens 62 Tage."), (result.Outcome, result.Message));
+    }
+
+    [Fact]
     public async Task AKimaiRejection_IsFailedWithTheReason_AndCanBeResolvedManually()
     {
         var submitted = await Submitted(Submit("vacation", D(10, 12)));

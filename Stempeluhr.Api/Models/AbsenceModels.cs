@@ -72,6 +72,20 @@ public sealed record AbsenceRequest
     public string? CancelledBy { get; init; }
 
     /// <summary>
+    /// Gespeichert, bevor das Anwenden zum ersten Mal in Kimai schreibt. Ein
+    /// Antrag mit diesem Zeitpunkt ist entschieden, auch wenn er nach einem
+    /// Prozessabbruch noch <see cref="AbsenceStatus.Pending"/> ist: In Kimai
+    /// können schon Einträge stehen (auch solche, deren ID nicht mehr in
+    /// <see cref="AppliedDays"/> gelandet ist). Er lässt sich dann weder
+    /// zurückziehen noch ablehnen, nur erneut genehmigen - das setzt fort.
+    /// </summary>
+    public DateTimeOffset? ApplyStartedAt { get; init; }
+
+    /// <summary>Wartet noch auf eine Entscheidung; ein begonnenes Anwenden zählt als entschieden.</summary>
+    [JsonIgnore]
+    public bool IsUndecided => Status == AbsenceStatus.Pending && ApplyStartedAt is null;
+
+    /// <summary>
     /// Fortschritt in Kimai: Tag (<c>yyyy-MM-dd</c>) → Timesheet-ID. „Erneut
     /// versuchen“ setzt beim ersten Tag ohne Eintrag fort, das Storno löscht
     /// genau diese Einträge.
@@ -150,7 +164,9 @@ public sealed record AbsenceDto(
     // Tage, die schon in Kimai stehen (yyyy-MM-dd).
     IReadOnlyList<string> AppliedDays,
     DateTimeOffset? CancelledAt,
-    string? CancelledBy)
+    string? CancelledBy,
+    // Pending mit diesem Zeitpunkt: Anwenden wurde unterbrochen, erneut genehmigen setzt fort.
+    DateTimeOffset? ApplyStartedAt)
 {
     /// <summary>Nur bei der Admin-Erfassung: z. B. Urlaub über dem Rest.</summary>
     public string? Warning { get; init; }

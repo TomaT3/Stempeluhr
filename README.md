@@ -498,7 +498,10 @@ Antrag. Nach der Ursachenbehebung „Erneut versuchen“; es setzt beim ersten T
 ohne Eintrag fort. Oder der Admin trägt von Hand in Kimai nach und markiert den
 Antrag als erledigt (`resolvedManually`, zählt im Urlaubskonto wie
 eingetragen). Ist Kimai beim Absenden oder Genehmigen nicht erreichbar, antwortet
-die API mit 503 und der Antrag bleibt unverändert.
+die API mit 503 und der Antrag bleibt unverändert. Bricht die API mitten im
+Eintragen ab (Neustart), bleibt der Antrag `pending`, gilt aber als entschieden
+(`applyStartedAt`): Zurückziehen und Ablehnen gehen nicht mehr, erneutes
+Genehmigen setzt fort und übernimmt schon angelegte Einträge.
 
 **Storno:** Der Admin storniert eingetragene Abwesenheiten. Die API löscht die
 Kimai-Einträge des Antrags (ein schon gelöschter zählt als gelöscht). Erst wenn

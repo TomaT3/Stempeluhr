@@ -149,7 +149,9 @@ public sealed class AbsenceService(
                 return NotFound<AbsenceDto>();
             }
 
-            if (current.Status != AbsenceStatus.Pending)
+            // Auch ein begonnenes Anwenden ist eine Entscheidung: in Kimai
+            // können schon Einträge stehen.
+            if (!current.IsUndecided)
             {
                 return CorrectionResult<AbsenceDto>.Fail(
                     CorrectionOutcome.Conflict, "Der Antrag ist schon entschieden und kann nicht mehr zurückgezogen werden.");
@@ -227,7 +229,15 @@ public sealed class AbsenceService(
                 return Current(current);
             }
 
-            var applied = await ApplyAsync(current with { DecidedAt = _clock.GetUtcNow(), DecidedBy = decidedBy, Error = null });
+            // Nach einem Prozessabbruch mitten im Anwenden (ApplyStartedAt
+            // gesetzt) setzt das erneute Genehmigen fort; die ursprüngliche
+            // Entscheidung bleibt stehen.
+            var applied = await ApplyAsync(current with
+            {
+                DecidedAt = current.DecidedAt ?? _clock.GetUtcNow(),
+                DecidedBy = current.DecidedBy ?? decidedBy,
+                Error = null,
+            });
             if (applied.Unavailable)
             {
                 // Nichts geschrieben: der Antrag bleibt offen (keine Offline-Queue).
@@ -252,7 +262,8 @@ public sealed class AbsenceService(
                 return NotFound<AbsenceDto>();
             }
 
-            if (current.Status != AbsenceStatus.Pending)
+            // Begonnenes Anwenden: nicht mehr ablehnbar, Kimai-Einträge blieben sonst verwaist.
+            if (!current.IsUndecided)
             {
                 return Current(current);
             }
@@ -484,20 +495,39 @@ public sealed class AbsenceService(
 
         var comment = string.IsNullOrWhiteSpace(commentText) ? null : commentText.Trim();
 
-        // Fehlende Einstellungen ohne Kimai-Anfrage melden.
-        if (AbsenceValidator.MissingSettings(kind, settings, employee) is { } missing)
+        // Einstellungen, Anzahl der Tage und Kommentar ohne Kimai und ohne das Gate.
+        if (AbsenceValidator.ValidateInput(kind, days, comment, settings, employee) is { } inputError)
         {
-            return Invalid<Created>(missing);
+            return Invalid<Created>(inputError);
+        }
+
+        TimeZoneInfo timeZone;
+        try
+        {
+            timeZone = await ResolveTimeZoneAsync(settings, employee, cancellationToken);
+        }
+        catch (Exception ex) when (IsKimaiFailure(ex, cancellationToken))
+        {
+            logger?.LogWarning(ex, "Absence request of {Employee}: Kimai time zone not available", employee.Id);
+            return KimaiUnavailable<Created>(ex);
         }
 
         await _submitGate.WaitAsync(cancellationToken);
         try
         {
-            var timeZone = await ResolveTimeZoneAsync(settings, employee, cancellationToken);
-            var entries = await ReadEntriesAsync(settings, employee, days, timeZone, cancellationToken);
-            var validation = AbsenceValidator.Validate(new AbsenceValidationInput(
+            var input = new AbsenceValidationInput(
                 kind, days, isAdmin, Today(timeZone), employee, settings,
-                store.List().Where(other => other.EmployeeId == employee.Id), entries, timeZone, comment));
+                store.List().Where(other => other.EmployeeId == employee.Id), Timesheets: null, timeZone, comment);
+
+            // Erst die Regeln ohne Kimai (Zeitfenster, Beschäftigung, belegte
+            // Tage, Rest): ein Datum wie 0001-01-01 erreicht so nie die Abfrage.
+            if (AbsenceValidator.Validate(input).Error is { } ruleError)
+            {
+                return Invalid<Created>(ruleError);
+            }
+
+            var entries = await ReadEntriesAsync(settings, employee, days, timeZone, cancellationToken);
+            var validation = AbsenceValidator.Validate(input with { Timesheets = entries });
             if (validation.Error is { } error)
             {
                 return Invalid<Created>(error);
@@ -549,7 +579,9 @@ public sealed class AbsenceService(
     private async Task<ApplyOutcome> ApplyAsync(AbsenceRequest request)
     {
         var cancellationToken = CancellationToken.None;
-        var wrote = false;
+        // Ab dem gespeicherten ApplyStartedAt gilt der Antrag als entschieden;
+        // ein Kimai-Ausfall danach ist ein Fehler, kein "nichts geschrieben".
+        var started = false;
         try
         {
             var settings = settingsStore.Load();
@@ -577,6 +609,15 @@ public sealed class AbsenceService(
             var duration = AbsenceKinds.Duration(request.Kind, employee)!.Value;
             var start = settings.AbsenceDayStartTime!.Value;
 
+            if (request.ApplyStartedAt is null)
+            {
+                request = request with { ApplyStartedAt = _clock.GetUtcNow() };
+            }
+            // Vor dem ersten Schreiben in Kimai dauerhaft festhalten, sonst
+            // ließe sich der Antrag nach einem Neustart noch zurückziehen.
+            store.Update(request);
+            started = true;
+
             var applied = new Dictionary<string, int>(request.AppliedDays);
             foreach (var day in request.Days)
             {
@@ -600,7 +641,6 @@ public sealed class AbsenceService(
                         return new(Fail(request, placementError!));
                     }
 
-                    wrote = true;
                     timesheetId = await kimai.CreateTimesheetAsync(
                         settings, employee, target, placement.Begin, placement.End, target.Description, cancellationToken);
                 }
@@ -616,7 +656,7 @@ public sealed class AbsenceService(
         }
         catch (Exception ex) when (IsKimaiFailure(ex, cancellationToken))
         {
-            if (!wrote && IsUnreachable(ex))
+            if (!started && IsUnreachable(ex))
             {
                 logger?.LogWarning(ex, "Absence {Id} of {Employee}: Kimai unreachable, nothing written", request.Id, request.EmployeeId);
                 return new(request, Unavailable: true);
@@ -836,5 +876,6 @@ public sealed class AbsenceService(
                 : null,
             request.AppliedDays.Keys.Order(StringComparer.Ordinal).ToArray(),
             request.CancelledAt,
-            request.CancelledBy);
+            request.CancelledBy,
+            request.ApplyStartedAt);
 }

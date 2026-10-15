@@ -149,6 +149,9 @@ internal sealed class FakeKimai : IKimaiClient
     public int? FailAfterCreate { get; set; }
 
     public HttpStatusCode FailStatus { get; set; } = HttpStatusCode.InternalServerError;
+
+    /// <summary>Runs before every finished-timesheet create, e.g. to inspect the caller's stored state.</summary>
+    public Action? BeforeCreate { get; set; }
     private int _creates;
 
     public Sheet Add(DateTimeOffset begin, DateTimeOffset? end, int activity = TimeCorrection.WorkActivity, int project = TimeCorrection.WorkProject, int? user = TimeCorrection.OwnUserId)
@@ -213,6 +216,7 @@ internal sealed class FakeKimai : IKimaiClient
         RuntimeSettings s, EmployeeSettings e, KimaiTimesheetTarget target, DateTimeOffset begin, DateTimeOffset end, string? description, CancellationToken ct = default)
     {
         ThrowIfUnreachable();
+        BeforeCreate?.Invoke();
         _creates++;
         if (FailBeforeCreate == _creates)
         {
