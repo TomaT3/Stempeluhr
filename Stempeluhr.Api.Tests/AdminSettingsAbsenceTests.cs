@@ -285,6 +285,19 @@ public sealed class AdminSettingsAbsenceTests
         Assert.Null(CreateAdminService().ValidateAbsences(new RuntimeSettings { AbsenceDayStart = start }));
     }
 
+    [Fact]
+    public void ValidStartTimes_AreNormalizedToTwoDigitHours()
+    {
+        // <input type="time"> shows "8:00" as empty - the admin page must get "08:00".
+        var loaded = JsonSerializer.Deserialize<RuntimeSettings>("""{"absenceDayStart":"8:00"}""", FileOptions)!;
+        var saved = SettingsUpdate(EmployeeUpdate(false), includesAbsences: true, absenceDayStart: " 7:05 ").ToSettings(Current());
+
+        Assert.Equal("08:00", loaded.AbsenceDayStart);
+        Assert.Equal("08:00", AdminSettingsDto.FromSettings(loaded).AbsenceDayStart);
+        Assert.Equal("07:05", saved.AbsenceDayStart);
+        Assert.Equal("8 Uhr", new RuntimeSettings { AbsenceDayStart = " 8 Uhr " }.AbsenceDayStart);
+    }
+
     [Theory]
     [InlineData("24:00")]
     [InlineData("8 Uhr")]

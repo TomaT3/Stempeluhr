@@ -113,19 +113,25 @@ public sealed class RuntimeSettings
 
     /// <summary>
     /// Beginn der Abwesenheits-Timesheets (<c>HH:mm</c>, Kimai-Zeitzone des
-    /// Mitarbeiters). Ungültige Werte lehnt der Admin-Save ab.
+    /// Mitarbeiters). Gültige Werte wie <c>8:00</c> werden auf <c>08:00</c>
+    /// normalisiert, weil <c>&lt;input type="time"&gt;</c> nur zweistellige
+    /// Stunden anzeigt. Ungültige Werte bleiben stehen und lehnt der Admin-Save ab.
     /// </summary>
     private readonly string absenceDayStart = DefaultAbsenceDayStart;
     public string AbsenceDayStart
     {
         get => absenceDayStart;
-        init => absenceDayStart = string.IsNullOrWhiteSpace(value) ? DefaultAbsenceDayStart : value.Trim();
+        init => absenceDayStart = string.IsNullOrWhiteSpace(value) ? DefaultAbsenceDayStart
+            : ParseAbsenceDayStart(value.Trim()) is { } time ? time.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture)
+            : value.Trim();
     }
 
     /// <summary><see cref="AbsenceDayStart"/> als Uhrzeit, null wenn ungültig.</summary>
     [JsonIgnore]
-    public TimeOnly? AbsenceDayStartTime =>
-        TimeOnly.TryParseExact(AbsenceDayStart, ["HH:mm", "H:mm"], System.Globalization.CultureInfo.InvariantCulture,
+    public TimeOnly? AbsenceDayStartTime => ParseAbsenceDayStart(AbsenceDayStart);
+
+    private static TimeOnly? ParseAbsenceDayStart(string value) =>
+        TimeOnly.TryParseExact(value, ["HH:mm", "H:mm"], System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.None, out var time)
             ? time
             : null;
