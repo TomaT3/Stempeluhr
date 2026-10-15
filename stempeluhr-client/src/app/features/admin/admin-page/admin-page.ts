@@ -6,6 +6,9 @@ import { RouterLink } from '@angular/router';
 import { catchError, forkJoin, of, switchMap } from 'rxjs';
 
 import { AdminEmployee, AdminEmployeeStatus, AdminEmployeeTask, AdminSettings, KimaiActivity, KimaiProject, KimaiUser } from '../../../core/models/admin.models';
+
+type AbsenceActivityKey = 'vacationActivityId' | 'sickActivityId' | 'flexDayActivityId';
+type AbsenceSettingKey = 'absenceProjectId' | AbsenceActivityKey | 'absenceDayStart';
 import { NfcClockEvent } from '../../../core/models/kiosk.models';
 import { AdminApi } from '../../../core/services/admin-api';
 import { AdminSession } from '../../../core/services/admin-session';
@@ -22,6 +25,14 @@ import { VersionBadge } from '../../../shared/components/version-badge/version-b
 export class AdminPage implements OnDestroy {
   private static readonly NfcTerminalStorageKey = 'stempeluhr.admin.nfcTerminalId';
   private static readonly SessionExpiredMessage = 'Admin-Passwort ungültig. Bitte neu anmelden.';
+  private static readonly EmptyContract: Partial<AdminEmployee> = {
+    personnelNumber: null,
+    entryDate: null,
+    exitDate: null,
+    vacationDaysPerYear: null,
+    absenceDayHours: null,
+    vacationYears: [],
+  };
 
   private readonly adminApi = inject(AdminApi);
   private readonly destroyRef = inject(DestroyRef);
@@ -296,6 +307,7 @@ export class AdminPage implements OnDestroy {
           isEnabled: true,
           tasks: [],
           defaultTaskLabel: null,
+          ...AdminPage.EmptyContract,
         },
       ],
     }));
@@ -330,6 +342,31 @@ export class AdminPage implements OnDestroy {
 
   updatePauseActivityId(value: string): void {
     this.updateSettings(settings => ({ ...settings, pauseActivityId: this.toNumber(value) }));
+  }
+
+  readonly absenceActivityFields: readonly { key: AbsenceActivityKey; label: string }[] = [
+    { key: 'vacationActivityId', label: 'Aktivität Urlaub' },
+    { key: 'sickActivityId', label: 'Aktivität Krank' },
+    { key: 'flexDayActivityId', label: 'Aktivität Gleittag' },
+  ];
+
+  updateAbsenceActivity(key: AbsenceActivityKey, value: string): void {
+    this.updateAbsenceSettings({ [key]: this.toNumber(value) });
+  }
+
+  updateAbsenceSettings(patch: Pick<Partial<AdminSettings>, AbsenceSettingKey>): void {
+    this.updateSettings(settings => {
+      const updated = { ...settings, ...patch };
+      const projectId = updated.absenceProjectId ?? null;
+      // Wie bei den Tätigkeiten: eine projektgebundene Aktivität eines anderen
+      // Projekts würde Kimai erst beim Anwenden eines Antrags ablehnen.
+      for (const { key } of this.absenceActivityFields) {
+        if (!this.isActivityAllowedForProject(updated[key] ?? null, projectId)) {
+          updated[key] = null;
+        }
+      }
+      return updated;
+    });
   }
 
   updateTelegramCorrectionChatId(value: string): void {
@@ -693,6 +730,14 @@ export class AdminPage implements OnDestroy {
       telegramApproverUserIds: settings.telegramApproverUserIds === undefined
         ? null
         : this.parseApproverUserIds(this.telegramApproverText()),
+      // Kennt das Backend die Felder nicht, bleiben sie unverändert; sonst
+      // gilt der gesendete Stand, null löscht.
+      includesAbsences: settings.absenceDayStart !== undefined,
+      absenceProjectId: settings.absenceProjectId ?? null,
+      vacationActivityId: settings.vacationActivityId ?? null,
+      sickActivityId: settings.sickActivityId ?? null,
+      flexDayActivityId: settings.flexDayActivityId ?? null,
+      absenceDayStart: settings.absenceDayStart ?? null,
       employees: settings.employees.map(employee => ({
         id: employee.id,
         kimaiUserId: employee.kimaiUserId,
@@ -718,6 +763,14 @@ export class AdminPage implements OnDestroy {
           activityId: task.activityId,
           billable: task.billable,
         })),
+        includesContract: employee.vacationYears !== undefined,
+        personnelNumber: employee.personnelNumber ?? null,
+        entryDate: employee.entryDate || null,
+        exitDate: employee.exitDate || null,
+        vacationDaysPerYear: employee.vacationDaysPerYear ?? null,
+        absenceDayHours: employee.absenceDayHours ?? null,
+        // null behält die Urlaubskonten; sie werden auf der Abwesenheiten-Seite gepflegt.
+        vacationYears: null,
       })),
     };
   }
@@ -830,6 +883,7 @@ export class AdminPage implements OnDestroy {
       isEnabled: true,
       tasks: [],
       defaultTaskLabel: null,
+      ...AdminPage.EmptyContract,
     };
   }
 
@@ -853,6 +907,12 @@ export class AdminPage implements OnDestroy {
   toNumber(value: string): number | null {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  /** Wie toNumber, aber 0 und Bruchteile sind gültig (Tage, Stunden); leer = null. */
+  toDecimal(value: string): number | null {
+    const parsed = Number(value.replace(',', '.'));
+    return value.trim() !== '' && Number.isFinite(parsed) ? parsed : null;
   }
 
   private nextColor(index: number): string {

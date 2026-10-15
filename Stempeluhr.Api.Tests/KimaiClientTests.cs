@@ -433,6 +433,41 @@ public sealed class KimaiClientTests
         Assert.Equal((3, "Rezeption"), (entry.ProjectId, entry.Description));
     }
 
+    [Fact]
+    public async Task DeleteTimesheet_SendsDeleteWithTheEmployeeToken()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.NoContent));
+
+        await CreateClient(handler).DeleteTimesheetAsync(Settings, Employee, 42);
+
+        Assert.Equal("DELETE /api/timesheets/42", Assert.Single(handler.Requests));
+        Assert.Equal("Bearer token", Assert.Single(handler.Authorizations));
+        Assert.Null(Assert.Single(handler.Bodies));
+    }
+
+    [Fact]
+    public async Task DeleteTimesheet_NotFound_CountsAsDeleted()
+    {
+        var handler = new ScriptedHandler(Resp(HttpStatusCode.NotFound, """{"code":404,"message":"Not Found"}"""));
+
+        await CreateClient(handler).DeleteTimesheetAsync(Settings, Employee, 42);
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task DeleteTimesheet_OtherErrorsThrow_WithoutRetry(HttpStatusCode status)
+    {
+        var handler = new ScriptedHandler(Resp(status, "{}"), Resp(HttpStatusCode.NoContent));
+
+        var error = await Assert.ThrowsAsync<KimaiApiException>(() => CreateClient(handler).DeleteTimesheetAsync(Settings, Employee, 42));
+
+        Assert.Equal(status, error.StatusCode);
+        Assert.Single(handler.Requests);
+    }
+
     private static DateTimeOffset Parse(string value) =>
         DateTimeOffset.Parse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal);
 
@@ -457,11 +492,13 @@ public sealed class KimaiClientTests
 
         public List<string> Requests { get; } = [];
         public List<string?> Bodies { get; } = [];
+        public List<string?> Authorizations { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add($"{request.Method} {request.RequestUri!.PathAndQuery}");
             Bodies.Add(request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken));
+            Authorizations.Add(request.Headers.Authorization?.ToString());
             var response = _next < responses.Length
                 ? responses[_next++]
                 : Resp(HttpStatusCode.InternalServerError);

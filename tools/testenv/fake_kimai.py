@@ -10,6 +10,7 @@ Simuliert die Kimai-REST-Endpoints, die der StempeluhrKimaiClient nutzt:
                                         ohne end bleibt der Eintrag laufend)
 - PATCH /api/timesheets/{id}         -> begin/end nachtragen
 - PATCH /api/timesheets/{id}/stop    -> Timesheet stoppen (end = jetzt)
+- DELETE /api/timesheets/{id}        -> Timesheet löschen (204; 404 für unbekannte IDs)
 
 Alle Buchungen werden im Log (JSONL) protokolliert und als In-Memory-Liste
 gehalten. Ein GET /_bookings gibt den kompletten Zustand zurück - damit
@@ -227,6 +228,23 @@ class Handler(BaseHTTPRequestHandler):
                     sheet["end"] = body["end"]
                 log("patch-stop" if stop else "patch", sheet)
                 self._send(200, sheet)
+            return
+        self._send(404, {"error": "not found"})
+
+    def do_DELETE(self):
+        parts = urlparse(self.path).path.strip("/").split("/")
+        if len(parts) == 3 and parts[:2] == ["api", "timesheets"] and parts[2].isdigit():
+            sheet_id = int(parts[2])
+            with LOCK:
+                sheet = next((t for t in TIMESHEETS if t["id"] == sheet_id), None)
+                if sheet is None:
+                    self._send(404, {"code": 404, "message": "Not Found"})
+                    return
+                # Gelöschte Einträge verschwinden auch aus /_bookings.
+                TIMESHEETS.remove(sheet)
+            log("delete", sheet)
+            self.send_response(204)
+            self.end_headers()
             return
         self._send(404, {"error": "not found"})
 

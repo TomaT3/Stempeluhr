@@ -207,6 +207,25 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         return GetId(created, "id") ?? throw new InvalidOperationException("Kimai returned no timesheet id.");
     }
 
+    /// <inheritdoc />
+    public async Task DeleteTimesheetAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int timesheetId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Kimai answers 204 without a body.
+            await SendForContentAsync(
+                settings.BaseUrl, employee.ApiToken, HttpMethod.Delete, $"api/timesheets/{timesheetId}", null, cancellationToken);
+        }
+        catch (KimaiApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            // Already gone (an earlier attempt whose answer was lost, or deleted in Kimai).
+        }
+    }
+
     private static string FormatTimestamp(DateTimeOffset value) => value.ToString("yyyy-MM-dd'T'HH:mm:sszzz");
 
     /// <summary>
@@ -451,6 +470,19 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
         object? body,
         CancellationToken cancellationToken)
     {
+        var json = await SendForContentAsync(baseUrl, apiToken, method, path, body, cancellationToken);
+        return JsonSerializer.Deserialize<T>(json, JsonOptions)
+            ?? throw new InvalidOperationException("Kimai returned an empty response.");
+    }
+
+    private async Task<string> SendForContentAsync(
+        string baseUrl,
+        string apiToken,
+        HttpMethod method,
+        string path,
+        object? body,
+        CancellationToken cancellationToken)
+    {
         using var request = new HttpRequestMessage(method, BuildUri(baseUrl, path));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -476,9 +508,7 @@ public sealed class KimaiClient(HttpClient httpClient, ILogger<KimaiClient> logg
             throw new KimaiApiException(response.StatusCode, details, operation, rejectedFields);
         }
 
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        return JsonSerializer.Deserialize<T>(json, JsonOptions)
-            ?? throw new InvalidOperationException("Kimai returned an empty response.");
+        return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 
     private static string[] FindRejectedFields(string details, object? body)

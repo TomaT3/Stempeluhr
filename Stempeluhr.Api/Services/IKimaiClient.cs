@@ -142,6 +142,16 @@ public interface IKimaiClient
         DateTimeOffset? begin,
         DateTimeOffset? end,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes a timesheet with the employee's token (absence cancellation).
+    /// Idempotent: a 404 counts as already deleted. Not retried.
+    /// </summary>
+    Task DeleteTimesheetAsync(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        int timesheetId,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Minimal view of a finished timesheet, for replay verification and pause resume.</summary>
