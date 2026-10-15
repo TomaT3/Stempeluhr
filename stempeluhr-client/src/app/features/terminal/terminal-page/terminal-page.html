@@ -11,7 +11,7 @@
   <header class="terminal-clock" aria-label="Aktuelle Uhrzeit und Datum">
     <span class="clock-time">{{ clockState.now() | date: 'HH:mm:ss' }}</span>
     <span class="clock-date">{{ clockState.now() | date: 'dd.MM.yyyy' }}</span>
-    @if (selectedEmployee() && !correctionOpen()) {
+    @if (selectedEmployee() && !correctionOpen() && !absenceOpen()) {
       <!-- Hinweise zur Arbeitszeit, höchstens einer. Bewusst in der Uhr-Spalte:
            In der Mitarbeiter-Spalte schöbe jeder weitere Knopf die Stundenkarte
            bei 800x480 unter den Rand, die Uhr-Spalte hat in der Sitzung Platz. -->
@@ -50,6 +50,14 @@
           [label]="correctionLabel()"
           [disabled]="correctionBlocked()"
           (pressed)="openCorrection()" />
+        @if (absencesConfigured()) {
+          <!-- Urlaub, Krank, Gleittag beantragen: nur online, bucht nichts. -->
+          <app-correction-entry
+            layout="terminal"
+            [label]="absenceLabel()"
+            [disabled]="absenceBlocked()"
+            (pressed)="openAbsence()" />
+        }
       }
     }
   </header>
@@ -145,6 +153,22 @@
           [start]="correctionStart()"
           (closed)="onCorrectionClosed()"
           (timedOut)="onCorrectionTimedOut()" />
+      }
+    } @else if (isUnlocked() && absenceOpen()) {
+      <!-- Wie die Korrektur: ersetzt Stempelknöpfe und Stundenkarte. Erst
+           beim Öffnen geladen (Initial-Budget); der Service Worker hält den
+           Chunk vorrätig. -->
+      @if (absenceAuth(); as auth) {
+        @defer (on immediate) {
+          <app-absence-flow
+            layout="terminal"
+            [auth]="auth"
+            [source]="correctionSource"
+            (closed)="closeAbsence()"
+            (timedOut)="onAbsenceTimedOut()" />
+        } @error {
+          <p class="message" role="alert">Abwesenheit konnte nicht geladen werden. Bitte abmelden und erneut versuchen.</p>
+        }
       }
     } @else if (isUnlocked()) {
       <section

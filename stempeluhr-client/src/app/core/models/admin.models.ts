@@ -1,3 +1,5 @@
+import type { Absence, VacationBalance } from './absence.models';
+
 export type AdminTerminalState = 'online' | 'problem' | 'unreachable' | 'never';
 
 /** Letzter Diagnosebericht eines Terminals (nur technische Felder). */
@@ -209,48 +211,10 @@ export interface AdminTimeCorrection {
   observedEndAtApply: string | null;
 }
 
-export type AbsenceKind = 'vacation' | 'sick' | 'flexDay';
+export type { AbsenceKind, AbsenceStatus, VacationBalance } from './absence.models';
 
-export type AbsenceStatus = 'pending' | 'applied' | 'rejected' | 'failed' | 'withdrawn' | 'resolvedManually' | 'cancelled';
-
-/** Abwesenheitsantrag; Tage als `yyyy-MM-dd` (Kimai-Zeitzone des Mitarbeiters). */
-export interface AdminAbsence {
-  id: string;
-  employeeId: string;
-  employeeName: string;
-  kind: AbsenceKind;
-  status: AbsenceStatus;
-  days: string[];
-  /** Terminal-ID, `clock` oder `admin`. */
-  source: string;
-  createdAt: string;
-  createdBy: string;
-  comment: string | null;
-  decidedAt: string | null;
-  decidedBy: string | null;
-  decisionNote: string | null;
-  /** Kimai-Meldung (failed) oder ein unvollständiges Storno (applied). */
-  error: string | null;
-  /** Tage, die schon in Kimai stehen. */
-  appliedDays: string[];
-  cancelledAt: string | null;
-  cancelledBy: string | null;
-  /** Pending mit Zeitpunkt: das Eintragen wurde unterbrochen, erneut genehmigen setzt fort. */
-  applyStartedAt: string | null;
-  /** Nur nach der Admin-Erfassung, z. B. Urlaub über dem Rest. */
-  warning?: string | null;
-}
-
-/** Urlaubskonto eines Jahres. `remaining` = Anspruch + Übertrag + Korrektur − genommen − beantragt. */
-export interface VacationBalance {
-  year: number;
-  entitlement: number;
-  carryOver: number;
-  correction: number;
-  taken: number;
-  planned: number;
-  remaining: number;
-}
+/** Abwesenheitsantrag, wie ihn die Admin-Seite sieht (mit Kimai-Meldung). */
+export type AdminAbsence = Absence;
 
 export interface AdminVacationBalance {
   employeeId: string;

@@ -1,0 +1,146 @@
+<header class="flow-head">
+  <h2 class="flow-title" #heading tabindex="-1">{{ title() }}</h2>
+  @if (step() === 'days') {
+    <p class="flow-subtitle absence-selection" role="status">{{ selectionLine() }}</p>
+  } @else if (subtitle()) {
+    <p class="flow-subtitle">{{ subtitle() }}</p>
+  }
+</header>
+
+<div class="flow-body">
+  @switch (step()) {
+    @case ('kind') {
+      @if (balance(); as account) {
+        <!-- Urlaubskonto des laufenden Jahres, beantragte Tage sind im Rest schon abgezogen. -->
+        <dl class="absence-balance" [attr.aria-label]="'Urlaubskonto ' + account.year">
+          <div><dt>Anspruch</dt><dd>{{ dayNumber(account.entitlement + account.carryOver + account.correction) }}</dd></div>
+          <div><dt>Genommen</dt><dd>{{ dayNumber(account.taken) }}</dd></div>
+          <div><dt>Beantragt</dt><dd>{{ dayNumber(account.planned) }}</dd></div>
+          <div class="rest" [class.negative]="account.remaining < 0"><dt>Rest {{ account.year }}</dt><dd>{{ dayNumber(account.remaining) }}</dd></div>
+        </dl>
+      }
+      <div class="absence-kinds" role="group" aria-label="Art der Abwesenheit">
+        @for (option of kinds; track option) {
+          <button
+            class="flow-choice absence-kind"
+            type="button"
+            [attr.data-tone]="option"
+            [class.unavailable]="missing(option) !== null"
+            [disabled]="isBusy()"
+            (click)="chooseKind(option)">
+            {{ kindLabels[option] }}
+          </button>
+        }
+      </div>
+      <button class="flow-choice flow-mine" type="button" [disabled]="isBusy()" (click)="openMine()">Meine Abwesenheiten</button>
+      @if (isBusy()) {
+        <p class="flow-note" role="status">Lädt …</p>
+      }
+    }
+    @case ('days') {
+      @if (overRemainder()) {
+        <p class="flow-note flow-warn" role="alert">Mehr Tage als Resturlaub. Bitte weniger Tage wählen oder mit dem Chef sprechen.</p>
+      }
+      <app-day-picker-calendar
+        [selected]="days()"
+        (selectedChange)="setDays($event)"
+        [blocked]="blocked()"
+        [min]="window().min"
+        [max]="window().max"
+        [today]="overview()?.today ?? ''" />
+    }
+    @case ('summary') {
+      <dl class="flow-summary">
+        <dt>Tage</dt>
+        <dd>
+          <span class="flow-line">{{ compactSelection() }}</span>
+          <span class="flow-line">{{ dayCount(days().length) }}</span>
+        </dd>
+        @if (remainders().length > 0) {
+          <dt>Resturlaub</dt>
+          <dd>
+            @for (line of remainders(); track line.year) {
+              <span class="flow-line">{{ line.year }}: {{ dayNumber(line.before) }} → {{ dayNumber(line.after) }}</span>
+            }
+          </dd>
+        }
+      </dl>
+      @if (layout() === 'clock') {
+        <label class="flow-comment">
+          Kommentar (optional)
+          <textarea rows="2" [attr.maxlength]="maxCommentLength" [value]="comment()" (input)="setComment($event)"></textarea>
+          <small>{{ comment().length }}/{{ maxCommentLength }}</small>
+        </label>
+      }
+    }
+    @case ('sent') {
+      <p class="flow-sent" role="status">Antrag gesendet – wartet auf Freigabe</p>
+      @if (sentRemainder() !== null) {
+        <p class="flow-note absence-sent-rest">Resturlaub {{ currentYear() }}: {{ dayNumber(sentRemainder()!) }}</p>
+      }
+    }
+    @case ('mine') {
+      <div class="flow-list" role="group" aria-label="Meine Abwesenheiten">
+        @for (absence of mine(); track absence.id) {
+          <article class="flow-request" [class]="'flow-request status-' + absence.status">
+            <header>
+              <strong class="absence-kind-label" [attr.data-tone]="absence.kind">{{ kindLabels[absence.kind] }}</strong>
+              <span class="flow-status">{{ statusOf(absence) }}</span>
+            </header>
+            <span class="flow-line">{{ compact(absence.days) }}</span>
+            <span class="flow-note">{{ dayCount(absence.days.length) }}@if (absence.source === 'admin') { · vom Chef erfasst}</span>
+            @if (absence.status === 'rejected' && absence.decisionNote) {
+              <p class="flow-reason">Grund: {{ absence.decisionNote }}</p>
+            }
+            @if (absence.status === 'failed' && absence.error) {
+              <p class="flow-reason">{{ absence.error }}</p>
+            }
+            @if (canWithdraw(absence)) {
+              @if (confirmingId() === absence.id) {
+                <div class="absence-confirm" role="group" aria-label="Wirklich zurückziehen?">
+                  <span class="flow-note">Wirklich zurückziehen?</span>
+                  <button class="flow-button" type="button" [disabled]="isBusy()" (click)="cancelWithdraw()">Nein</button>
+                  <button class="flow-button primary" type="button" [disabled]="isBusy()" (click)="withdraw(absence)">
+                    {{ withdrawingId() === absence.id ? 'Zieht zurück …' : 'Ja' }}
+                  </button>
+                </div>
+              } @else {
+                <button class="flow-button" type="button" [disabled]="isBusy()" (click)="askWithdraw(absence)">Zurückziehen</button>
+              }
+            }
+          </article>
+        } @empty {
+          <p class="flow-note">Keine Abwesenheiten in den letzten 12 Monaten.</p>
+        }
+      </div>
+    }
+  }
+</div>
+
+@if (mineNotice()) {
+  <p class="flow-note" role="status">{{ mineNotice() }}</p>
+}
+@if (error()) {
+  <p class="flow-error" role="alert">{{ error() }}</p>
+}
+
+<div class="flow-footer">
+  @switch (step()) {
+    @case ('sent') {
+      <button class="flow-button primary" type="button" (click)="done()">Fertig</button>
+    }
+    @case ('days') {
+      <button class="flow-button" type="button" (click)="back()">Zurück</button>
+      <button class="flow-button primary" type="button" [disabled]="isBusy() || days().length === 0 || overRemainder()" (click)="next()">Weiter</button>
+    }
+    @case ('summary') {
+      <button class="flow-button" type="button" [disabled]="isBusy()" (click)="back()">Zurück</button>
+      <button class="flow-button primary" type="button" [disabled]="isBusy()" (click)="submit()">
+        {{ isBusy() ? 'Sendet …' : 'Absenden' }}
+      </button>
+    }
+    @default {
+      <button class="flow-button" type="button" (click)="back()">Zurück</button>
+    }
+  }
+</div>

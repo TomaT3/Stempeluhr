@@ -17,6 +17,8 @@ import { lastKnownStatus, rememberProjectedStatus } from '../../../core/services
 import { KioskApi } from '../../../core/services/kiosk-api';
 import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
 import { OfflineQueueService } from '../../../core/services/offline-queue';
+import { ABSENCE_NOW, ABSENCE_OVERVIEW, absence } from '../../clock/absence-flow/absence-fixtures';
+import { ABSENCE_IDLE_MS, ABSENCE_TAP_GUARD_MS } from '../../clock/absence-flow/absence-flow';
 import { CORRECTION_IDLE_MS } from '../../clock/correction-flow/correction-flow';
 import { CORRECTION_NOW, CORRECTION_TIMESHEETS, correction } from '../../clock/correction-flow/correction-fixtures';
 import { TerminalPage } from './terminal-page';
@@ -38,6 +40,11 @@ describe('TerminalPage', () => {
   let submitCorrection: ReturnType<typeof vi.fn>;
   let myCorrections: ReturnType<typeof vi.fn>;
   let withdrawCorrection: ReturnType<typeof vi.fn>;
+  let absencesConfigured: boolean;
+  let absenceOverview: ReturnType<typeof vi.fn>;
+  let submitAbsence: ReturnType<typeof vi.fn>;
+  let myAbsences: ReturnType<typeof vi.fn>;
+  let withdrawAbsence: ReturnType<typeof vi.fn>;
 
   const status: ClockStatus = {
     isRunning: false,
@@ -85,6 +92,11 @@ describe('TerminalPage', () => {
     submitCorrection = vi.fn(() => of(correction()));
     myCorrections = vi.fn(() => of([]));
     withdrawCorrection = vi.fn(() => of(correction({ status: 'withdrawn' })));
+    absencesConfigured = false;
+    absenceOverview = vi.fn(() => of(ABSENCE_OVERVIEW));
+    submitAbsence = vi.fn(() => of(absence()));
+    myAbsences = vi.fn(() => of([]));
+    withdrawAbsence = vi.fn(() => of(absence({ status: 'withdrawn' })));
 
     await TestBed.configureTestingModule({
       imports: [TerminalPage],
@@ -97,7 +109,9 @@ describe('TerminalPage', () => {
             hoursOverview,
             workTimeHints,
             ping: vi.fn(() =>
-              failPolls ? throwError(() => ({ status: 0 })) : of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true }),
+              failPolls
+                ? throwError(() => ({ status: 0 }))
+                : of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true, absencesConfigured }),
             ),
             identify: vi.fn(() => new Subject<NfcClockEvent>()),
             health: vi.fn(() => of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true })),
@@ -105,6 +119,10 @@ describe('TerminalPage', () => {
             submitCorrection,
             myCorrections,
             withdrawCorrection,
+            absenceOverview,
+            submitAbsence,
+            myAbsences,
+            withdrawAbsence,
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
@@ -1742,6 +1760,165 @@ describe('TerminalPage', () => {
         expect(document.activeElement?.classList.contains('flow-title')).toBe(true);
         expect(document.activeElement?.textContent?.trim()).toBe('Eintrag wählen');
       });
+    });
+  });
+
+  describe('Abwesenheiten', () => {
+    function login(): ComponentFixture<TerminalPage> {
+      const fixture = TestBed.createComponent(TerminalPage);
+      ['1', '2', '3', '4'].forEach(digit => fixture.componentInstance.pressDigit(digit));
+      pinLoginResult.next(session);
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    const absenceButton = (fixture: ComponentFixture<TerminalPage>) =>
+      ([...fixture.nativeElement.querySelectorAll('app-correction-entry button')] as HTMLButtonElement[])
+        .find(candidate => candidate.textContent?.trim().startsWith('Abwesenheit'));
+
+    /** Öffnet den Ablauf; er wird erst beim Öffnen geladen (@defer). */
+    async function openAbsence(fixture: ComponentFixture<TerminalPage>): Promise<void> {
+      absenceButton(fixture)!.click();
+      // vi.waitFor rückt die Fake-Timer vor, bis der Chunk geladen ist.
+      await vi.waitFor(() => {
+        fixture.detectChanges();
+        expect(fixture.nativeElement.querySelector('app-absence-flow')).not.toBeNull();
+      });
+    }
+
+    function tap(fixture: ComponentFixture<TerminalPage>, text: string): void {
+      vi.advanceTimersByTime(ABSENCE_TAP_GUARD_MS);
+      fixture.detectChanges();
+      const button = ([...fixture.nativeElement.querySelectorAll('app-absence-flow button')] as HTMLButtonElement[])
+        .find(candidate => candidate.textContent?.trim() === text);
+      expect(button, `Knopf "${text}"`).toBeDefined();
+      button!.click();
+      fixture.detectChanges();
+    }
+
+    const flowTitle = (fixture: ComponentFixture<TerminalPage>) =>
+      fixture.nativeElement.querySelector('app-absence-flow .flow-title')?.textContent?.trim();
+
+    beforeEach(() => {
+      absencesConfigured = true;
+      vi.setSystemTime(ABSENCE_NOW);
+    });
+
+    it('offers Abwesenheit next to Korrektur only when the server reports it set up', () => {
+      absencesConfigured = false;
+      const fixture = login();
+      expect(absenceButton(fixture)).toBeUndefined();
+
+      absencesConfigured = true;
+      vi.advanceTimersByTime(1_000);
+      fixture.detectChanges();
+      const labels = ([...fixture.nativeElement.querySelectorAll('app-correction-entry button')] as HTMLButtonElement[])
+        .map(button => button.textContent?.trim());
+      expect(labels).toEqual(['Korrektur', 'Abwesenheit']);
+      expect(absenceButton(fixture)!.disabled).toBe(false);
+    });
+
+    it('is locked offline and says why - there is no queue for absences', () => {
+      const fixture = login();
+      fixture.componentInstance.isOffline.set(true);
+      fixture.detectChanges();
+
+      expect(absenceButton(fixture)?.textContent?.trim()).toBe('Abwesenheit nur online');
+      expect(absenceButton(fixture)?.disabled).toBe(true);
+      fixture.componentInstance.openAbsence();
+      expect(fixture.componentInstance.absenceOpen()).toBe(false);
+      expect(absenceOverview).not.toHaveBeenCalled();
+    });
+
+    it('replaces the stamp buttons and the hours card and sends a request without stamping', async () => {
+      const fixture = login();
+      await openAbsence(fixture);
+
+      expect(flowTitle(fixture)).toBe('Abwesenheit');
+      expect(fixture.nativeElement.querySelector('.action-panel')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.hours-overview')).toBeNull();
+      expect(fixture.nativeElement.querySelector('app-correction-entry')).toBeNull();
+      expect(absenceOverview).toHaveBeenCalledExactlyOnceWith({ employeeId: 'max', pin: '1234', nfcCardId: null });
+
+      tap(fixture, 'Gleittag');
+      vi.advanceTimersByTime(ABSENCE_TAP_GUARD_MS);
+      fixture.detectChanges();
+      const day = ([...fixture.nativeElement.querySelectorAll('app-absence-flow .day')] as HTMLButtonElement[])
+        .find(candidate => candidate.getAttribute('aria-label')?.includes('23.10.2026'));
+      day!.click();
+      fixture.detectChanges();
+      tap(fixture, 'Weiter');
+      tap(fixture, 'Absenden');
+
+      expect(submitAbsence).toHaveBeenCalledExactlyOnceWith({
+        employeeId: 'max', pin: '1234', nfcCardId: null, kind: 'flexDay', days: ['2026-10-23'], comment: null, source: 'term-1',
+      });
+      expect(clockImpl).not.toHaveBeenCalled();
+      expect(enqueueKiosk).not.toHaveBeenCalled();
+
+      tap(fixture, 'Fertig');
+      expect(fixture.componentInstance.absenceOpen()).toBe(false);
+      expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
+      expect(fixture.nativeElement.querySelector('.action-panel')).not.toBeNull();
+    });
+
+    it('a card scan during the flow books nothing and the flow stays', async () => {
+      const fixture = login();
+      await openAbsence(fixture);
+      localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+      vi.advanceTimersByTime(1_000);
+      fixture.detectChanges();
+
+      expect(clockImpl).not.toHaveBeenCalled();
+      expect(enqueueKiosk).not.toHaveBeenCalled();
+      expect(fixture.componentInstance.absenceOpen()).toBe(true);
+      expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
+    });
+
+    it('discards a late account after the identity changed - nothing of Max under Anna', async () => {
+      const late = new Subject<typeof ABSENCE_OVERVIEW>();
+      absenceOverview.mockReturnValue(late);
+      const fixture = login();
+      await openAbsence(fixture);
+
+      fixture.nativeElement.querySelector('.back-button').click();
+      fixture.detectChanges();
+      expect(fixture.componentInstance.absenceOpen()).toBe(false);
+      expect(late.observed).toBe(false);
+
+      pinLogin.mockImplementation(() => of({ employee: { ...session.employee, id: 'anna', displayName: 'Anna Beispiel' }, status }));
+      absenceOverview.mockReturnValue(new Subject());
+      ['4', '3', '2', '1'].forEach(digit => fixture.componentInstance.pressDigit(digit));
+      fixture.detectChanges();
+      await openAbsence(fixture);
+
+      late.next(ABSENCE_OVERVIEW);
+      fixture.detectChanges();
+      expect(absenceOverview).toHaveBeenLastCalledWith({ employeeId: 'anna', pin: '4321', nfcCardId: null });
+      expect(fixture.nativeElement.querySelector('app-absence-flow .absence-balance')).toBeNull();
+    });
+
+    it('Korrektur and Abwesenheit are never open at the same time', async () => {
+      const fixture = login();
+      await openAbsence(fixture);
+      fixture.componentInstance.openCorrection();
+      fixture.detectChanges();
+
+      expect(fixture.componentInstance.absenceOpen()).toBe(false);
+      expect(fixture.componentInstance.correctionOpen()).toBe(true);
+      expect(fixture.nativeElement.querySelector('app-absence-flow')).toBeNull();
+    });
+
+    it('goes back to the idle screen after 2 minutes without a tap in the flow', async () => {
+      const fixture = login();
+      await openAbsence(fixture);
+
+      vi.advanceTimersByTime(ABSENCE_IDLE_MS);
+      fixture.detectChanges();
+
+      expect(fixture.componentInstance.selectedEmployee()).toBeNull();
+      expect(fixture.componentInstance.absenceOpen()).toBe(false);
+      expect(fixture.nativeElement.querySelector('.login-panel')).not.toBeNull();
     });
   });
 });

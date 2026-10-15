@@ -210,6 +210,26 @@ export abstract class ClockWorkflow implements OnDestroy {
    */
   readonly correctionBlocked = computed(() => this.isOffline() || this.actionsBlocked());
   readonly correctionLabel = computed(() => (this.isOffline() ? 'Korrektur nur online' : 'Korrektur'));
+
+  /**
+   * Abwesenheit beantragen (Epic #132). Gehört wie der Korrekturablauf zur
+   * Sitzung: jeder Identitätswechsel, back() und jede Aktion schließt ihn,
+   * mit der Komponente enden ihre Anfragen. Ein Antrag bucht nichts - erst
+   * die Freigabe trägt die Tage in Kimai ein.
+   */
+  readonly absenceOpen = signal(false);
+  /** Anmeldung des Ablaufs, beim Öffnen eingefroren. */
+  readonly absenceAuth = signal<CorrectionAuth | null>(null);
+  /**
+   * Der Server meldet Projekt und Aktivitäten als eingestellt (`/api/health`,
+   * vom Erreichbarkeits-Poll mitgelesen). Bis zur ersten Antwort bleibt der
+   * Knopf weg; offline bleibt der zuletzt gemeldete Stand.
+   */
+  readonly absencesConfigured = signal(false);
+  /** Nur online (keine Queue); wartende Stempel stören einen Antrag nicht. */
+  readonly absenceBlocked = computed(() => this.isOffline() || this.isBusy());
+  readonly absenceLabel = computed(() => (this.isOffline() ? 'Abwesenheit nur online' : 'Abwesenheit'));
+
   /** Eingestempelt seit über 12 h: vermutlich das Ausstempeln vergessen. */
   readonly forgotToStop = computed(() => {
     const status = this.clockState.status();
@@ -503,11 +523,12 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /**
    * Kein Mitarbeiter angemeldet, keine laufende Aktion, keine PIN-Eingabe -
-   * und kein Korrekturablauf (er gehört zu einer Sitzung, zählt aber
-   * ausdrücklich nicht als Ruhezustand).
+   * und kein Korrektur- oder Abwesenheitsablauf (sie gehören zu einer
+   * Sitzung, zählen aber ausdrücklich nicht als Ruhezustand).
    */
   private isIdle(): boolean {
-    return !this.selectedEmployee() && !this.isBusy() && this.pin().length === 0 && !this.correctionOpen();
+    return !this.selectedEmployee() && !this.isBusy() && this.pin().length === 0
+      && !this.correctionOpen() && !this.absenceOpen();
   }
 
   /** True im echten Release-Build; getrennt gehalten, damit Tests den Guard überschreiben können. */
@@ -726,6 +747,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
     this.taskPickerOpen.set(false);
     this.startChoiceOpen.set(false);
+    this.closeAbsence();
     this.correctionAuth.set({
       employeeId: this.selectedEmployee()!.id,
       pin: this.pin(),
@@ -755,6 +777,56 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** 2 min ohne Tipp im Korrekturablauf: zurück in den Ruhezustand. */
   onCorrectionTimedOut(): void {
+    this.back();
+  }
+
+  /** Öffnet „Abwesenheit“ in der Sitzung; nur online und wenn der Server sie eingerichtet meldet. */
+  openAbsence(): void {
+    if (!this.selectedEmployee() || !this.isUnlocked() || this.absenceBlocked() || !this.absencesConfigured()) {
+      return;
+    }
+    // Ein Reset nach einer Aktion (2,2 s) würde den Ablauf unter dem Finger schließen.
+    if (this.resetTimer) {
+      window.clearTimeout(this.resetTimer);
+      this.resetTimer = null;
+    }
+    // Ebenso der aufgeschobene Reset nach einem Offline-Stempel: Anders als
+    // die Korrektur ist die Abwesenheit bei wartenden Stempeln offen, und das
+    // Recovery-Signal des Nachtrags würde sonst back() rufen und den Ablauf
+    // samt Auswahl schließen. Die Sitzung läuft online weiter - aber der
+    // angezeigte Status ist nur projiziert (der Nachtrag kann abgelehnt
+    // werden): bis zum frischen Status nach dem Nachtrag sind die
+    // Stempelaktionen gesperrt, wie nach einer Anmeldung mit Rückstand.
+    if (this.pendingResetOnRecovery) {
+      this.pendingResetOnRecovery = false;
+      this.clockState.clear();
+      if (this.hasPendingForEmployee(this.selectedEmployee()!.id)) {
+        // Der Recovery-Handler lädt den Status, sobald der Rückstand weg ist.
+        this.replayStatusPending.set(true);
+      } else {
+        this.refreshStatusAfterReplay();
+      }
+    }
+    this.taskPickerOpen.set(false);
+    this.startChoiceOpen.set(false);
+    this.closeCorrection();
+    this.absenceAuth.set({
+      employeeId: this.selectedEmployee()!.id,
+      pin: this.pin(),
+      nfcCardId: this.nfcCardId,
+    });
+    this.message.set(this.replayStatusPending() ? 'Ausstehende Stempel werden nachgetragen.' : '');
+    this.absenceOpen.set(true);
+  }
+
+  /** „Fertig“ oder „Zurück“ im Ablauf: zurück in die Sitzung, der Mitarbeiter bleibt angemeldet. */
+  closeAbsence(): void {
+    this.absenceOpen.set(false);
+    this.absenceAuth.set(null);
+  }
+
+  /** 2 min ohne Tipp im Abwesenheitsablauf: zurück in den Ruhezustand. */
+  onAbsenceTimedOut(): void {
     this.back();
   }
 
@@ -853,6 +925,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.taskPickerOpen.set(false);
     this.startChoiceOpen.set(false);
     this.closeCorrection();
+    this.closeAbsence();
     // Die Auswahl direkt nach einem Login bucht ohne Verzögerung.
     this.choiceTapGuardUntil = 0;
     this.sessionGeneration++;
@@ -900,7 +973,8 @@ export abstract class ClockWorkflow implements OnDestroy {
       .health()
       .pipe(timeout(HEALTH_TIMEOUT_MS))
       .subscribe({
-        next: () => {
+        next: health => {
+          this.absencesConfigured.set(health?.absencesConfigured === true);
           const wasOffline = this.isOffline();
           this.isOffline.set(false);
           if (wasOffline) {
@@ -962,7 +1036,8 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.kioskApi.ping().pipe(
       finalize(() => (this.connectivityPollInFlight = false)),
     ).subscribe({
-      next: () => {
+      next: health => {
+        this.absencesConfigured.set(health?.absencesConfigured === true);
         if (this.pendingRecoveryFlush) {
           // Connection just recovered: flush the offline queue ONCE immediately
           // instead of waiting for the retry timer. The deferred back() is NOT

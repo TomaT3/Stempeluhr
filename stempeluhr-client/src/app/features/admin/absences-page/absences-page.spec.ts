@@ -5,7 +5,8 @@ import { provideRouter } from '@angular/router';
 
 import { AdminAbsence, AdminEmployee, AdminSettings, AdminVacationBalance } from '../../../core/models/admin.models';
 import { AdminSession } from '../../../core/services/admin-session';
-import { AbsencesPage, adminWindow, compactDays } from './absences-page';
+import { compactDays } from '../../../shared/absence-format';
+import { AbsencesPage, adminWindow } from './absences-page';
 
 describe('AbsencesPage', () => {
   beforeEach(() => {

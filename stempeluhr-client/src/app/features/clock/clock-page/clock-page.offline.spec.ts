@@ -305,6 +305,100 @@ describe('ClockPage offline behaviour', () => {
     expect(component.isUnlocked()).toBe(false);
     expect(component.selectedEmployee()).toBeNull();
   });
+  describe('Abwesenheit während des Nachtrags (review #142)', () => {
+    const working: ClockStatus = {
+      isRunning: true,
+      activeTimesheetId: 12,
+      startedAt: '2026-10-16T06:00:00Z',
+      durationSeconds: 3600,
+      state: 'working',
+      stateText: 'Eingestempelt',
+    };
+
+    /**
+     * Max arbeitet, stempelt offline aus (der Stop wartet in der Queue), der
+     * Health-Poll sieht den Server wieder, bevor der Nachtrag fertig ist, und
+     * Max öffnet „Abwesenheit“.
+     */
+    function openDuringReplay() {
+      terminalIdValue = null;
+      healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true, absencesConfigured: true });
+      const fixture = createComponent();
+      const component = fixture.componentInstance;
+      component.pressDigit('1');
+      component.pressDigit('2');
+      component.pressDigit('3');
+      component.pressDigit('4');
+      pinLoginResult.next({ ...session, status: working });
+
+      component.stop();
+      clockResult.error({ status: 0 });
+      expect(component.isOffline()).toBe(true);
+      pendingQueue.set([{ kind: 'kiosk', event: { employeeId: 'max' } }]);
+
+      vi.advanceTimersByTime(15_000);
+      expect(component.isOffline()).toBe(false);
+      component.openAbsence();
+      expect(component.absenceOpen()).toBe(true);
+      return component;
+    }
+
+    it('keeps the flow open when the sync finishes', () => {
+      const component = openDuringReplay();
+
+      pendingQueue.set([]);
+      recovered$.next();
+
+      expect(component.absenceOpen()).toBe(true);
+      expect(component.isUnlocked()).toBe(true);
+      expect(component.selectedEmployee()?.id).toBe('max');
+    });
+
+    it('loads a fresh status after a refused stop and keeps stamping locked until it arrives', () => {
+      const pinLogin = TestBed.inject(KioskApi).pinLogin as ReturnType<typeof vi.fn>;
+      const component = openDuringReplay();
+      // The projected "ausgestempelt" is gone: it may not be what Kimai has.
+      expect(component.clockState.status()).toBeNull();
+      expect(component.actionsBlocked()).toBe(true);
+
+      // Kimai refused the stop: the stamp leaves the queue as rejected.
+      pendingQueue.set([]);
+      recovered$.next();
+      expect(pinLogin).toHaveBeenCalledTimes(2);
+      expect(pinLogin).toHaveBeenLastCalledWith('1234');
+      expect(component.actionsBlocked()).toBe(true);
+
+      // Back from the flow: still locked until the answer, then the real status.
+      component.closeAbsence();
+      expect(component.actionsBlocked()).toBe(true);
+      pinLoginResult.next({ ...session, status: working });
+
+      expect(component.clockState.status()?.state).toBe('working');
+      expect(component.actionsBlocked()).toBe(false);
+      expect(component.isUnlocked()).toBe(true);
+    });
+
+    it('asks for the status right away when the stamp already left the queue', () => {
+      const pinLogin = TestBed.inject(KioskApi).pinLogin as ReturnType<typeof vi.fn>;
+      terminalIdValue = null;
+      healthResult = of({ ok: true, version: null, configuredEmployees: 0, settingsConfigured: true, absencesConfigured: true });
+      const component = createComponent().componentInstance;
+      ['1', '2', '3', '4'].forEach(digit => component.pressDigit(digit));
+      pinLoginResult.next({ ...session, status: working });
+      component.stop();
+      clockResult.error({ status: 0 });
+      vi.advanceTimersByTime(15_000);
+
+      component.openAbsence();
+
+      expect(pinLogin).toHaveBeenCalledTimes(2);
+      expect(component.actionsBlocked()).toBe(true);
+      pinLoginResult.next({ ...session, status: working });
+      expect(component.clockState.status()?.state).toBe('working');
+      expect(component.actionsBlocked()).toBe(false);
+    });
+  });
+
   it('keeps pause actions usable offline and hides the banner only on recovery', async () => {
     const fixture = createComponent();
     const component = fixture.componentInstance;

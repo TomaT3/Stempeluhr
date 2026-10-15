@@ -76,6 +76,11 @@ export interface HealthStatus {
   version: string | null;
   configuredEmployees: number;
   settingsConfigured: boolean;
+  /**
+   * Abwesenheits-Projekt und -Aktivitäten sind eingestellt: der Kiosk zeigt
+   * den Knopf „Abwesenheit“. Fehlt bei älteren Servern (= nicht zeigen).
+   */
+  absencesConfigured?: boolean;
 }
 
 export interface EmployeeTask {

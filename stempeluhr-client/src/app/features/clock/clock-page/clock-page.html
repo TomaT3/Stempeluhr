@@ -75,6 +75,21 @@
           (closed)="onCorrectionClosed()"
           (timedOut)="onCorrectionTimedOut()" />
       }
+    } @else if (absenceOpen()) {
+      <!-- Wie die Korrektur: ersetzt Status und Stempelknöpfe. Erst beim
+           Öffnen geladen (Initial-Budget). -->
+      @if (absenceAuth(); as auth) {
+        @defer (on immediate) {
+          <app-absence-flow
+            layout="clock"
+            [auth]="auth"
+            [source]="correctionSource"
+            (closed)="closeAbsence()"
+            (timedOut)="onAbsenceTimedOut()" />
+        } @error {
+          <p class="message" role="alert">Abwesenheit konnte nicht geladen werden. Bitte zurück und erneut versuchen.</p>
+        }
+      }
     } @else if (clockState.status(); as clockStatus) {
       <app-status-badge
         [text]="clockStatus.stateText"
@@ -238,13 +253,20 @@
       }
     }
 
-    @if (isUnlocked() && !correctionOpen()) {
-      <!-- Korrektur beantragen: nur online (keine Queue). -->
+    @if (isUnlocked() && !correctionOpen() && !absenceOpen()) {
+      <!-- Korrektur und Abwesenheit beantragen: nur online (keine Queue). -->
       <app-correction-entry
         layout="clock"
         [label]="correctionLabel()"
         [disabled]="correctionBlocked()"
         (pressed)="openCorrection()" />
+      @if (absencesConfigured()) {
+        <app-correction-entry
+          layout="clock"
+          [label]="absenceLabel()"
+          [disabled]="absenceBlocked()"
+          (pressed)="openAbsence()" />
+      }
     }
 
     @if (message()) {

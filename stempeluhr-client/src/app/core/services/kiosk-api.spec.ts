@@ -23,6 +23,9 @@ describe('KioskApi', () => {
   });
 
   const auth = { employeeId: 'max', pin: '', nfcCardId: '04ABCD' };
+  const absenceSubmission = {
+    kind: 'vacation' as const, days: ['2026-10-26', '2026-10-27'], comment: null, source: 'term-1',
+  };
   const submission = {
     kind: 'setEnd' as const, timesheetId: 7, begin: null, end: '2026-10-04T17:00', pauseBegin: null, pauseEnd: null,
     taskId: null, comment: null, source: 'term-1',
@@ -39,6 +42,10 @@ describe('KioskApi', () => {
     ['submitCorrection', '/api/kiosk/corrections', () => api.submitCorrection({ ...auth, ...submission })],
     ['myCorrections', '/api/kiosk/corrections/mine', () => api.myCorrections(auth)],
     ['withdrawCorrection', '/api/kiosk/corrections/c1/withdraw', () => api.withdrawCorrection(auth, 'c1')],
+    ['absenceOverview', '/api/kiosk/absences/balance', () => api.absenceOverview(auth)],
+    ['submitAbsence', '/api/kiosk/absences', () => api.submitAbsence({ ...auth, ...absenceSubmission })],
+    ['myAbsences', '/api/kiosk/absences/mine', () => api.myAbsences(auth)],
+    ['withdrawAbsence', '/api/kiosk/absences/a1/withdraw', () => api.withdrawAbsence(auth, 'a1')],
   ];
 
   it('sends the event ID the kiosk queues on failure with the live stamp (issue #67)', () => {
@@ -67,6 +74,33 @@ describe('KioskApi', () => {
   it('withdraws by ID with the same authentication', () => {
     api.withdrawCorrection({ employeeId: 'max', pin: '1234', nfcCardId: null }, 'c1').subscribe();
     const request = http.expectOne('/api/kiosk/corrections/c1/withdraw');
+    expect(request.request.body).toEqual({ employeeId: 'max', pin: '1234', nfcCardId: null });
+    request.flush({});
+  });
+
+  it('asks for the absence account with only the login fields', () => {
+    api.absenceOverview({ ...auth, extra: 'x' } as typeof auth).subscribe();
+    const request = http.expectOne('/api/kiosk/absences/balance');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({ employeeId: 'max', pin: '', nfcCardId: '04ABCD' });
+    request.flush({ today: '2026-10-16', balances: [], kinds: [], days: [] });
+  });
+
+  it('submits an absence with its days as local dates and the source', () => {
+    api.submitAbsence({ ...auth, ...absenceSubmission }).subscribe();
+    const request = http.expectOne('/api/kiosk/absences');
+    expect(request.request.body).toEqual({ ...auth, ...absenceSubmission });
+    request.flush({});
+  });
+
+  it('lists and withdraws own absences with the same login, the ID escaped', () => {
+    api.myAbsences(auth).subscribe();
+    const mine = http.expectOne('/api/kiosk/absences/mine');
+    expect(mine.request.body).toEqual(auth);
+    mine.flush([]);
+
+    api.withdrawAbsence({ employeeId: 'max', pin: '1234', nfcCardId: null }, 'a/1').subscribe();
+    const request = http.expectOne('/api/kiosk/absences/a%2F1/withdraw');
     expect(request.request.body).toEqual({ employeeId: 'max', pin: '1234', nfcCardId: null });
     request.flush({});
   });

@@ -1,0 +1,122 @@
+/* Grundgerüst (Kopf, scrollender Körper, Fußzeile, Knöpfe) kommt aus
+   correction-flow.scss; hier nur, was der Abwesenheitsablauf zusätzlich hat. */
+
+/* Tipp-Sperre nach einem Schrittwechsel (Issue #59): der Kalender hält seine
+   Auswahl selbst, deshalb erreicht ihn in der Zeit gar kein Tipp. */
+:host(.tap-guard) .flow-body,
+:host(.tap-guard) .flow-footer {
+  pointer-events: none;
+}
+
+.absence-balance {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.absence-balance div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.absence-balance dt {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.absence-balance dd {
+  font-size: clamp(1rem, 2.4vw, 1.25rem);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.absence-balance .rest dd {
+  color: var(--color-success-text);
+}
+
+.absence-balance .rest.negative dd {
+  color: var(--color-danger-text);
+}
+
+/* Drei große Knöpfe nebeneinander: passen am Terminal in die Spalte und
+   lassen dem Konto und „Meine Abwesenheiten“ Platz. */
+.absence-kinds {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.absence-kind {
+  min-height: 64px;
+  padding: 8px 4px;
+  border-left-width: 4px;
+  text-align: center;
+}
+
+.absence-kind[data-tone='vacation'],
+.absence-kind-label[data-tone='vacation'] {
+  border-left-color: var(--color-success-border);
+}
+
+.absence-kind[data-tone='sick'],
+.absence-kind-label[data-tone='sick'] {
+  border-left-color: var(--color-danger-border);
+}
+
+.absence-kind[data-tone='flexDay'],
+.absence-kind-label[data-tone='flexDay'] {
+  border-left-color: var(--color-warning-border);
+}
+
+/* Nicht eingerichtet: tippbar, damit der Server sagen kann, was fehlt. */
+.absence-kind.unavailable {
+  opacity: 0.6;
+}
+
+.absence-kind-label {
+  padding-left: 6px;
+  border-left: 4px solid transparent;
+}
+
+.absence-selection {
+  color: var(--color-text);
+}
+
+app-day-picker-calendar {
+  justify-self: center;
+}
+
+/* 800x480: Kopf, Auswahlzeile, sechs Kalenderwochen und Fußzeile passen in
+   die Spalte, ohne dass der Körper scrollt. */
+:host(.layout-terminal) app-day-picker-calendar {
+  --day-size: 34px;
+}
+
+.flow-request > .flow-note {
+  font-size: 0.85rem;
+}
+
+.absence-confirm {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.absence-confirm > .flow-note {
+  grid-column: 1 / -1;
+  color: var(--color-text);
+}
+
+.absence-sent-rest {
+  text-align: center;
+}
