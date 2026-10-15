@@ -80,6 +80,8 @@ public static class AdminEndpoints
                 ? CorrectionEndpoints.ToResult(await corrections.ResolveManuallyAsync(id, AdminDecider, cancellationToken))
                 : Results.Unauthorized());
 
+        MapAdminAbsenceEndpoints(app);
+
         app.MapGet("/api/admin/settings", (
             HttpRequest request,
             IRuntimeSettingsStore settingsStore,
@@ -252,6 +254,105 @@ public static class AdminEndpoints
         });
 
         return app;
+    }
+
+    /// <summary>
+    /// Abwesenheiten. Entscheidet oder erfasst der Admin, steht "Admin" im
+    /// Antrag; Kimai-Fehler beim Anwenden kommen als 200 mit Status Failed.
+    /// </summary>
+    private static void MapAdminAbsenceEndpoints(IEndpointRouteBuilder app)
+    {
+        app.MapGet("/api/admin/absences", (
+            string? status,
+            int? year,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            IAbsenceService absences) =>
+            authorization.IsAdmin(request)
+                ? Results.Ok(absences.List(openOnly: !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase), year))
+                : Results.Unauthorized());
+
+        app.MapPost("/api/admin/absences", async (
+            HttpRequest request,
+            AdminCreateAbsenceRequest body,
+            IAdminAuthorizationService authorization,
+            IAbsenceService absences,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await absences.CreateForEmployeeAsync(body, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
+
+        app.MapPost("/api/admin/absences/{id}/approve", async (
+            string id,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            IAbsenceService absences,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await absences.ApproveAsync(id, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
+
+        app.MapPost("/api/admin/absences/{id}/reject", async (
+            string id,
+            HttpRequest request,
+            RejectCorrectionRequest? body,
+            IAdminAuthorizationService authorization,
+            IAbsenceService absences,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await absences.RejectAsync(id, body?.Note, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
+
+        app.MapPost("/api/admin/absences/{id}/retry", async (
+            string id,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            IAbsenceService absences,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await absences.RetryAsync(id, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
+
+        app.MapPut("/api/admin/absences/{id}/resolved", async (
+            string id,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            IAbsenceService absences,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await absences.ResolveManuallyAsync(id, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
+
+        app.MapPost("/api/admin/absences/{id}/cancel", async (
+            string id,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            IAbsenceService absences,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await absences.CancelAsync(id, AdminDecider, cancellationToken))
+                : Results.Unauthorized());
+
+        app.MapGet("/api/admin/absences/balances", (
+            int? year,
+            HttpRequest request,
+            IAdminAuthorizationService authorization,
+            IAbsenceService absences) =>
+            authorization.IsAdmin(request)
+                ? Results.Ok(absences.GetBalances(year ?? DateTime.Now.Year))
+                : Results.Unauthorized());
+
+        app.MapPut("/api/admin/absences/balances/{employeeId}/{year:int}", async (
+            string employeeId,
+            int year,
+            HttpRequest request,
+            UpdateVacationYearRequest body,
+            IAdminAuthorizationService authorization,
+            IAbsenceService absences,
+            CancellationToken cancellationToken) =>
+            authorization.IsAdmin(request)
+                ? CorrectionEndpoints.ToResult(await absences.UpdateVacationYearAsync(employeeId, year, body, cancellationToken))
+                : Results.Unauthorized());
     }
 
     private static string FirstNonEmpty(params string?[] values)

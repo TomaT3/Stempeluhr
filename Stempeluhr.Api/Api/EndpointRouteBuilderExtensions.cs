@@ -10,6 +10,7 @@ public static class EndpointRouteBuilderExtensions
         app.MapEmployeeEndpoints();
         app.MapKioskEndpoints();
         app.MapCorrectionEndpoints();
+        app.MapAbsenceEndpoints();
         app.MapNfcEndpoints();
         app.MapClockEndpoints();
         app.MapAdminEndpoints();
