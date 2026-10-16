@@ -44,6 +44,7 @@ builder.Services.AddSingleton<ITimeCorrectionService, TimeCorrectionService>();
 // Abwesenheiten: Telegram-Freigabe folgt (#137), bis dahin meldet der Notifier nichts.
 builder.Services.AddSingleton<IAbsenceNotifier, NullAbsenceNotifier>();
 builder.Services.AddSingleton<IAbsenceService, AbsenceService>();
+builder.Services.AddSingleton<IMonthlyExportService, MonthlyExportService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 // Telegram-Notifier: Singleton + named HttpClient. Die Notify-Task läuft
 // bewusst nach dem Request-Ende (fire-and-forget) - ein scope-gebundener

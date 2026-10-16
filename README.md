@@ -543,6 +543,53 @@ auf `/clock` möglich (das Terminal hat keine Tastatur). Nach jedem
 Schrittwechsel sind Tipps 400 ms gesperrt, damit ein Doppeltipp nicht den Knopf
 darunter auslöst (#59). Der Ablauf wird erst beim Öffnen geladen (`@defer`).
 
+### Monatsexport
+
+Am Monatsende lädt der Chef im Admin-Bereich unter „Monatsexport“ die Excel-Datei
+für den Steuerberater herunter (Monat wählen, Vormonat ist vorausgewählt, „Export
+herunterladen“). Die API ruft `GET /api/admin/export/month?year=2026&month=10`
+auf (Admin-Passwort, sonst 401; ungültiger Monat 400) und liefert
+`Stempeluhr-Export-2026-10.xlsx`. Die Admin-Seite lädt die Datei per `HttpClient`
+als Blob, weil der Header `X-Admin-Password` nötig ist. Die Datei entsteht ohne
+NuGet-Pakete (`XlsxWriter`, SpreadsheetML in einem ZIP).
+
+Quelle ist Kimai: Für jeden aktiven, im Monat beschäftigten Mitarbeiter liest die
+API die Timesheets mit dessen Token (höchstens vier Mitarbeiter gleichzeitig). Der
+Abwesenheitsspeicher reichert nur an. Ein direkt in Kimai angelegter
+Urlaubseintrag zählt deshalb mit. Einordnung der Einträge: Pause ist die
+Pause-Aktivität, Abwesenheit ist ein Eintrag auf dem Abwesenheits-Projekt (Art
+über die Aktivität), alles andere ist Arbeit. Pausen und Abwesenheiten zählen
+nicht als Arbeitszeit.
+
+**Zuordnung zum Monat:** Maßgeblich ist der **Beginn** eines Eintrags in der
+Kimai-Zeitzone des Mitarbeiters. Eine Nachtschicht vom 31. auf den 1. zählt
+vollständig im Beginnmonat (Arbeitstag und Stunden) und nur dort, wie in der
+Stundenübersicht. Endet ein Monat mitten in einer Schicht aus mehreren
+Einträgen (Arbeit, Pause, Arbeit), steht der Teil nach Mitternacht im Folgemonat.
+
+| Blatt | Spalten |
+| --- | --- |
+| Übersicht | Personalnummer, Name, Arbeitstage (Kalendertage mit begonnener Arbeit), Arbeitsstunden (netto), Urlaubstage, Krankheitstage, Gleittage (verschiedene Tage), Std. Urlaub/Krank, Resturlaub zum Monatsende, Hinweise; dazu eine Summenzeile |
+| Abwesenheiten | Personalnummer, Name, Datum, Art, Stunden, Status, erfasst von. Mit Antrag aus der Verwaltung: dessen Status und Ersteller, sonst „direkt in Kimai“ |
+| Arbeitszeiten | Personalnummer, Name, Datum, Beginn, Ende, Pause (min), netto (Std.), Tätigkeit: Aufzeichnung der Arbeitszeit nach § 17 MiLoG, eine Zeile pro Schicht |
+
+Eine Schicht fasst aufeinanderfolgende Arbeits- und Pausen-Einträge zusammen (Lücke
+höchstens fünf Minuten); sie gehört zum Tag ihres Beginns. Der Resturlaub kommt aus
+dem Urlaubskonto (`VacationEntitlementCalculator`, Stichtag Monatsende) und bleibt leer,
+wenn der Mitarbeiter keinen Jahresurlaub hat. Direkt in Kimai angelegter Urlaub
+mindert ihn nicht, solange es keinen Antrag dazu gibt.
+
+**Hinweise** (Spalte „Hinweise“ je Mitarbeiter) erscheinen, wenn
+- ein angewandter Antrag Tage im Monat ohne Kimai-Eintrag hat,
+- offene oder fehlgeschlagene Anträge Tage im Monat haben,
+- Kimai für den Mitarbeiter nicht erreichbar war (er bleibt in der Liste, seine
+  Zahlen bleiben leer, der Export läuft für die anderen weiter),
+- ein Eintrag noch läuft (er zählt nicht mit),
+- Einträge auf dem Abwesenheitsprojekt eine unbekannte Aktivität haben.
+
+Sind die Abwesenheits-Einstellungen unvollständig, bleibt das Blatt
+„Abwesenheiten“ leer und die Summenzeile der Übersicht nennt den Grund.
+
 ### Telegram-Benachrichtigung (optional)
 
 Bei jedem echten Live-Stempel (nicht bei No-ops) schickt die API eine Nachricht wie

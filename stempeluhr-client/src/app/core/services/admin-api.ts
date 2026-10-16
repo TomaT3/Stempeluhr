@@ -148,6 +148,15 @@ export class AdminApi {
       { carryOverDays, correctionDays, note: note || null }, { headers: this.headers(adminPassword) });
   }
 
+  /** Monatsexport für den Steuerberater (.xlsx) als Blob. */
+  downloadMonthlyExport(adminPassword: string, year: number, month: number) {
+    return this.http.get('/api/admin/export/month', {
+      headers: this.headers(adminPassword),
+      params: { year: String(year), month: String(month) },
+      responseType: 'blob',
+    });
+  }
+
   latestNfcEvent(terminalId: string, fallbackToAny = false) {
     const params: Record<string, string> = { terminalId };
     if (fallbackToAny) {

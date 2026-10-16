@@ -1,0 +1,20 @@
+<div class="form-grid">
+  <label>
+    Monat
+    <input
+      id="export-month"
+      type="month"
+      [value]="month()"
+      (input)="month.set($any($event.target).value)"
+      [disabled]="isBusy()">
+  </label>
+</div>
+<div class="actions">
+  <button type="button" class="primary" (click)="download()" [disabled]="isBusy()">{{ isBusy() ? 'Export wird erstellt…' : 'Export herunterladen' }}</button>
+</div>
+@if (isBusy()) {
+  <p class="loading-note" role="status">Die Zeiten werden aus Kimai gelesen. Das kann bei vielen Mitarbeitern etwas dauern.</p>
+}
+@if (message()) {
+  <p class="message" role="alert">{{ message() }}</p>
+}

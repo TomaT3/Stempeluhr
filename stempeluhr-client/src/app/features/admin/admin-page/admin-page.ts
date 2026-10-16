@@ -15,10 +15,11 @@ import { AdminSession } from '../../../core/services/admin-session';
 import { Avatar } from '../../../shared/components/avatar/avatar';
 import { StatusBadge } from '../../../shared/components/status-badge/status-badge';
 import { VersionBadge } from '../../../shared/components/version-badge/version-badge';
+import { MonthlyExportSection } from '../monthly-export-section/monthly-export-section';
 
 @Component({
   selector: 'app-admin-page',
-  imports: [Avatar, DatePipe, RouterLink, StatusBadge, VersionBadge],
+  imports: [Avatar, DatePipe, MonthlyExportSection, RouterLink, StatusBadge, VersionBadge],
   templateUrl: './admin-page.html',
   styleUrl: './admin-page.scss',
 })
@@ -538,6 +539,12 @@ export class AdminPage implements OnDestroy {
     } catch {
       this.adminMessage.set('Kopieren nicht erlaubt. Karten-ID kann manuell markiert werden.');
     }
+  }
+
+  /** Der Export hat das Passwort abgelehnt (die Sitzung ist beendet): Anmeldefeld wieder zeigen. */
+  onExportSessionRejected(): void {
+    this.adminPassword.set('');
+    this.adminMessage.set(AdminPage.SessionExpiredMessage);
   }
 
   logout(): void {

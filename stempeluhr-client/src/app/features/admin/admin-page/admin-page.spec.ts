@@ -632,4 +632,26 @@ describe('AdminPage', () => {
     expect(section.scrollIntoView).toHaveBeenCalled();
     page.remove();
   });
+
+  it('offers the monthly export section and returns to the login when it loses the session', async () => {
+    sessionStorage.setItem(AdminSession.StorageKey, 'test-password');
+    const { fixture, http } = await createPage();
+    flushLogin(http, 'test-password');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const page = fixture.nativeElement as HTMLElement;
+    expect(page.querySelector('#export h2')?.textContent).toBe('Monatsexport');
+    expect(page.querySelector('#export app-monthly-export-section')).not.toBeNull();
+
+    page.querySelector<HTMLButtonElement>('#export button')!.click();
+    http.expectOne(request => request.url === '/api/admin/export/month')
+      .flush(new Blob([]), { status: 401, statusText: 'Unauthorized' });
+    fixture.detectChanges();
+
+    expect(page.querySelector('input[type="password"]')).not.toBeNull();
+    expect(page.textContent).toContain('Admin-Passwort ungültig. Bitte neu anmelden.');
+    fixture.destroy();
+  });
 });
