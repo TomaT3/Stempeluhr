@@ -51,6 +51,7 @@
       <button type="button" (click)="scrollToSection('telegram')">Telegram-Freigabe</button>
       <button type="button" (click)="scrollToSection('absences')">Abwesenheiten</button>
       <button type="button" (click)="scrollToSection('employees')">Mitarbeiter</button>
+      <button type="button" (click)="scrollToSection('export')">Monatsexport</button>
     </nav>
     <div class="admin-layout">
       <fieldset class="admin-editor" [disabled]="adminBusy()" [attr.inert]="adminBusy() ? '' : null">
@@ -454,6 +455,14 @@
         }
       </section>
       </fieldset>
+      <section class="admin-section" id="export">
+        <div class="section-head"><span class="section-number">07</span><div><h2>Monatsexport</h2><p>Excel-Datei für den Steuerberater: Übersicht, Abwesenheiten und Arbeitszeiten</p></div></div>
+        @defer (on immediate) {
+          <app-monthly-export-section (sessionRejected)="onExportSessionRejected()" />
+        } @placeholder {
+          <p class="task-admin-hint">Monatsexport wird geladen…</p>
+        }
+      </section>
       <div class="admin-savebar">
         <span>{{ adminDirty() ? 'Ungespeicherte Aenderungen' : 'Gespeichert' }}</span>
         <button type="button" class="primary" (click)="saveAdminSettings()" [disabled]="adminBusy()">Speichern</button>

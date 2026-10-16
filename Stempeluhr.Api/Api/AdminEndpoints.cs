@@ -82,6 +82,10 @@ public static class AdminEndpoints
 
         MapAdminAbsenceEndpoints(app);
 
+        // Monatsexport für den Steuerberater; die Datei kommt mit dem
+        // Admin-Header, deshalb lädt die Admin-Seite sie als Blob.
+        app.MapGet("/api/admin/export/month", ExportMonthAsync);
+
         app.MapGet("/api/admin/settings", (
             HttpRequest request,
             IRuntimeSettingsStore settingsStore,
@@ -353,6 +357,30 @@ public static class AdminEndpoints
             authorization.IsAdmin(request)
                 ? CorrectionEndpoints.ToResult(await absences.UpdateVacationYearAsync(employeeId, year, body, cancellationToken))
                 : Results.Unauthorized());
+    }
+
+    public const string XlsxContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+    public static async Task<IResult> ExportMonthAsync(
+        int? year,
+        int? month,
+        HttpRequest request,
+        IAdminAuthorizationService authorization,
+        IMonthlyExportService export,
+        CancellationToken cancellationToken)
+    {
+        if (!authorization.IsAdmin(request))
+        {
+            return Results.Unauthorized();
+        }
+
+        if (year is not (>= 2000 and <= 2100) || month is not (>= 1 and <= 12))
+        {
+            return Results.BadRequest(new { message = "Ungültiger Monat." });
+        }
+
+        var file = await export.ExportAsync(year.Value, month.Value, cancellationToken);
+        return Results.File(file.Content, XlsxContentType, file.FileName);
     }
 
     private static string FirstNonEmpty(params string?[] values)
