@@ -41,8 +41,9 @@ builder.Services.AddSingleton<TelegramBotApi>();
 builder.Services.AddSingleton<TelegramTimeCorrectionNotifier>();
 builder.Services.AddSingleton<ITimeCorrectionNotifier>(services => services.GetRequiredService<TelegramTimeCorrectionNotifier>());
 builder.Services.AddSingleton<ITimeCorrectionService, TimeCorrectionService>();
-// Abwesenheiten: Telegram-Freigabe folgt (#137), bis dahin meldet der Notifier nichts.
-builder.Services.AddSingleton<IAbsenceNotifier, NullAbsenceNotifier>();
+// Abwesenheiten: Anträge und Admin-Erfassungen im Korrektur-Chat (ohne Chat-ID: nichts).
+builder.Services.AddSingleton<TelegramAbsenceNotifier>();
+builder.Services.AddSingleton<IAbsenceNotifier>(services => services.GetRequiredService<TelegramAbsenceNotifier>());
 builder.Services.AddSingleton<IAbsenceService, AbsenceService>();
 builder.Services.AddScoped<IAdminService, AdminService>();
 // Telegram-Notifier: Singleton + named HttpClient. Die Notify-Task läuft

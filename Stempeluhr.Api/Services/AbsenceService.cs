@@ -208,6 +208,9 @@ public sealed class AbsenceService(
             result = applied.Unavailable ? Fail(stored.Request, "Kimai ist nicht erreichbar.") : applied.Request;
         }
 
+        // Info im Korrektur-Chat ("Admin hat … erfasst"); im Hintergrund, die
+        // Admin-Seite wartet nicht auf Telegram. Es gibt nichts zu entscheiden.
+        NotifyInBackground(() => notifier.OnDecided(result, CancellationToken.None), "admin-created", result.Id);
         return CorrectionResult<AbsenceDto>.Ok(ToDto(result, forEmployee: false) with { Warning = stored.Warning });
     }
 
