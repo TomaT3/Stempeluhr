@@ -130,7 +130,9 @@ public sealed class TelegramAbsenceNotifier(
         using (await EnterAsync(id, cancellationToken))
         {
             var current = store.Find(id);
-            if (current is not { IsUndecided: true, TelegramChatId: { } chatId, TelegramMessageId: { } messageId })
+            // Pending statt IsUndecided: auch ein unterbrochenes Anwenden
+            // (ApplyStartedAt) braucht die Knöpfe zum Fortsetzen.
+            if (current is not { Status: AbsenceStatus.Pending, TelegramChatId: { } chatId, TelegramMessageId: { } messageId })
             {
                 await EditAsync(current, settings, cancellationToken);
                 return current;
@@ -226,6 +228,8 @@ public sealed class TelegramAbsenceNotifier(
     /// Resturlaub je betroffenem Jahr vor und nach diesem Antrag, aus dem
     /// Urlaubskonto des Service (<see cref="VacationEntitlementCalculator"/>):
     /// "vorher" ohne diesen Antrag, "nachher" mit seinen Tagen als verbraucht.
+    /// Belegt der Antrag keine Tage mehr (abgelehnt, zurückgezogen, storniert),
+    /// nur der aktuelle Rest ohne Abzug.
     /// </summary>
     private static IReadOnlyList<TelegramMessageFactory.AbsenceRest>? VacationRest(
         AbsenceRequest request, RuntimeSettings settings, AbsenceStore store)
@@ -243,7 +247,8 @@ public sealed class TelegramAbsenceNotifier(
             .Select(group =>
             {
                 var before = VacationEntitlementCalculator.Calculate(employee, group.Key, others).Remaining;
-                return new TelegramMessageFactory.AbsenceRest(group.Key, before, before - group.Count());
+                return new TelegramMessageFactory.AbsenceRest(
+                    group.Key, before, request.BlocksDays ? before - group.Count() : null);
             })
             .ToArray();
     }

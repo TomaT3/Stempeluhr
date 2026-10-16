@@ -275,6 +275,62 @@ public sealed class TelegramAbsenceTests : IDisposable
         Assert.True(edit.KeyboardIsEmpty);
     }
 
+    [Fact]
+    public async Task InterruptedApply_OffersOnlyResuming_AndTheConfirmationContinues()
+    {
+        var dto = await SubmitVacationAsync();
+        // Prozessabbruch mitten im Anwenden: Pending mit ApplyStartedAt.
+        _store.Update(_store.Find(dto.Id)! with { ApplyStartedAt = TimeCorrection.Now, DecidedBy = "Admin" });
+
+        await TapAsync(FakeTelegram.Callback(1, Data(TelegramAbsenceAction.AskReject, dto.Id)));
+
+        Assert.Equal("Genehmigung bereits begonnen – nur noch Fortsetzen möglich", AnswerText());
+        Assert.Equal(["▶️ Genehmigung fortsetzen"], Assert.Single(_telegram.CallsTo("editMessageReplyMarkup")).ButtonTexts);
+        Assert.Equal(AbsenceStatus.Pending, _store.Find(dto.Id)!.Status);
+
+        await TapAsync(FakeTelegram.Callback(2, Data(TelegramAbsenceAction.Reject, dto.Id)));
+
+        Assert.Equal(AbsenceStatus.Pending, _store.Find(dto.Id)!.Status);
+
+        await TapAsync(FakeTelegram.Callback(3, Data(TelegramAbsenceAction.AskApprove, dto.Id)));
+
+        var confirm = _telegram.CallsTo("editMessageReplyMarkup")[^1];
+        Assert.Equal(["Ja, genehmigen", "Zurück"], confirm.ButtonTexts);
+        Assert.Equal("Wirklich genehmigen?", AnswerText(2));
+
+        await TapAsync(FakeTelegram.Callback(4, Data(TelegramAbsenceAction.Back, dto.Id)));
+
+        Assert.Equal(["▶️ Genehmigung fortsetzen"], _telegram.CallsTo("editMessageReplyMarkup")[^1].ButtonTexts);
+
+        await TapAsync(FakeTelegram.Callback(5, Data(TelegramAbsenceAction.Approve, dto.Id)));
+
+        Assert.Equal(AbsenceStatus.Applied, _store.Find(dto.Id)!.Status);
+        Assert.Equal(3, _kimai.Sheets.Count);
+    }
+
+    [Fact]
+    public async Task ResultMessage_AfterCancelOrReject_ShowsTheReleasedRestWithoutDeduction()
+    {
+        var cancelled = await SubmitVacationAsync();
+        await _service.ApproveAsync(cancelled.Id, "Admin");
+        Assert.Contains("Resturlaub 2026: 30 → 27 Tage", _telegram.CallsTo("editMessageText")[^1].Text);
+
+        await _service.CancelAsync(cancelled.Id, "Admin");
+
+        var edit = _telegram.CallsTo("editMessageText")[^1];
+        Assert.Contains("🚫 Storniert von Admin", edit.Text);
+        Assert.Contains("Resturlaub 2026: 30 Tage", edit.Text);
+        Assert.DoesNotContain("→", edit.Text);
+
+        var rejected = await SubmitAsync("vacation", null, D(11, 2));
+        await _service.RejectAsync(rejected.Id, null, "Admin");
+
+        edit = _telegram.CallsTo("editMessageText")[^1];
+        Assert.Contains("❌ Abgelehnt von Admin", edit.Text);
+        Assert.Contains("Resturlaub 2026: 30 Tage", edit.Text);
+        Assert.DoesNotContain("→", edit.Text);
+    }
+
     // ------------------------------------------------------------ Berechtigung
 
     [Fact]

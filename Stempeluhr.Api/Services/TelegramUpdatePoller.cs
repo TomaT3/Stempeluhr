@@ -351,6 +351,18 @@ public sealed class TelegramUpdatePoller(
             return Truncate(TelegramMessageFactory.BuildAbsenceAlreadyDecided(current), 190);
         }
 
+        // Unterbrochenes Anwenden: nur Fortsetzen anbieten, Ablehnen ist gesperrt
+        // (der Service lehnt es ebenfalls ab).
+        var interrupted = request.ApplyStartedAt is not null;
+        if (interrupted && action is TelegramAbsenceAction.AskReject or TelegramAbsenceAction.Reject)
+        {
+            var current = await absenceMessages.ShowButtonsAsync(
+                id, TelegramMessageFactory.BuildAbsenceResumeKeyboard(id), cancellationToken) ?? request;
+            return current.Status != AbsenceStatus.Pending
+                ? Truncate(TelegramMessageFactory.BuildAbsenceAlreadyDecided(current), 190)
+                : "Genehmigung bereits begonnen – nur noch Fortsetzen möglich";
+        }
+
         switch (action)
         {
             case TelegramAbsenceAction.AskApprove:
@@ -358,7 +370,9 @@ public sealed class TelegramUpdatePoller(
             case TelegramAbsenceAction.Back:
                 var approve = action == TelegramAbsenceAction.AskApprove;
                 var keyboard = action == TelegramAbsenceAction.Back
-                    ? TelegramMessageFactory.BuildAbsenceKeyboard(id)
+                    ? interrupted
+                        ? TelegramMessageFactory.BuildAbsenceResumeKeyboard(id)
+                        : TelegramMessageFactory.BuildAbsenceKeyboard(id)
                     : TelegramMessageFactory.BuildAbsenceConfirmKeyboard(id, approve);
                 var shown = await absenceMessages.ShowButtonsAsync(id, keyboard, cancellationToken) ?? request;
                 if (shown.Status != AbsenceStatus.Pending)

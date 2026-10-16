@@ -334,8 +334,12 @@ public static class TelegramMessageFactory
 
     // ---- Abwesenheitsanträge ----
 
-    /// <summary>Resturlaub eines Jahres vor und nach diesem Antrag (Tage).</summary>
-    public sealed record AbsenceRest(int Year, decimal Before, decimal After);
+    /// <summary>
+    /// Resturlaub eines Jahres vor und nach diesem Antrag (Tage). Ohne
+    /// <see cref="After"/> belegt der Antrag keine Tage (mehr): dann ist
+    /// <see cref="Before"/> der aktuelle Rest.
+    /// </summary>
+    public sealed record AbsenceRest(int Year, decimal Before, decimal? After);
 
     /// <summary>
     /// Neuer Antrag mit Art, Tagen (kompakt, mit Anzahl), Kommentar und bei
@@ -358,7 +362,9 @@ public static class TelegramMessageFactory
         lines.Add($"{DescribeAbsenceKind(request.Kind)}: {FormatAbsenceDays(request.Days)}");
         foreach (var entry in rest ?? [])
         {
-            lines.Add($"Resturlaub {entry.Year}: {FormatDays(entry.Before)} → {FormatDays(entry.After)} Tage");
+            lines.Add(entry.After is { } after
+                ? $"Resturlaub {entry.Year}: {FormatDays(entry.Before)} → {FormatDays(after)} Tage"
+                : $"Resturlaub {entry.Year}: {FormatDays(entry.Before)} Tage");
         }
         if (!string.IsNullOrWhiteSpace(request.Comment))
         {
@@ -425,6 +431,21 @@ public static class TelegramMessageFactory
             {
                 new { text = "✅ Genehmigen", callback_data = TelegramAbsenceCallback.Format(TelegramAbsenceAction.AskApprove, id) },
                 new { text = "❌ Ablehnen", callback_data = TelegramAbsenceCallback.Format(TelegramAbsenceAction.AskReject, id) },
+            },
+        },
+    };
+
+    /// <summary>
+    /// Unterbrochenes Anwenden (Pending mit ApplyStartedAt): nur noch
+    /// Fortsetzen, Ablehnen würde Kimai-Einträge verwaisen lassen.
+    /// </summary>
+    public static object BuildAbsenceResumeKeyboard(string id) => new
+    {
+        inline_keyboard = new[]
+        {
+            new[]
+            {
+                new { text = "▶️ Genehmigung fortsetzen", callback_data = TelegramAbsenceCallback.Format(TelegramAbsenceAction.AskApprove, id) },
             },
         },
     };
