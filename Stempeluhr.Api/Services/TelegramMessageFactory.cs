@@ -332,6 +332,174 @@ public static class TelegramMessageFactory
         return text.Length <= 300 ? text : text[..300] + "…";
     }
 
+    // ---- Abwesenheitsanträge ----
+
+    /// <summary>
+    /// Resturlaub eines Jahres vor und nach diesem Antrag (Tage). Ohne
+    /// <see cref="After"/> belegt der Antrag keine Tage (mehr): dann ist
+    /// <see cref="Before"/> der aktuelle Rest.
+    /// </summary>
+    public sealed record AbsenceRest(int Year, decimal Before, decimal? After);
+
+    /// <summary>
+    /// Neuer Antrag mit Art, Tagen (kompakt, mit Anzahl), Kommentar und bei
+    /// Urlaub dem Rest vorher → nachher. Ein vom Admin erfasster Eintrag ist
+    /// nur eine Info ("Admin hat … erfasst"), ohne Entscheidung.
+    /// </summary>
+    public static string BuildAbsenceRequest(AbsenceRequest request, IReadOnlyList<AbsenceRest>? rest = null)
+    {
+        var lines = new List<string>();
+        if (request.IsAdminEntry)
+        {
+            lines.Add($"🗂 Abwesenheit erfasst · {request.EmployeeName}");
+            lines.Add($"{(string.IsNullOrWhiteSpace(request.CreatedBy) ? "Admin" : request.CreatedBy)} hat für {request.EmployeeName} erfasst:");
+        }
+        else
+        {
+            lines.Add($"🏖 Abwesenheitsantrag · {request.EmployeeName}");
+        }
+
+        lines.Add($"{DescribeAbsenceKind(request.Kind)}: {FormatAbsenceDays(request.Days)}");
+        foreach (var entry in rest ?? [])
+        {
+            lines.Add(entry.After is { } after
+                ? $"Resturlaub {entry.Year}: {FormatDays(entry.Before)} → {FormatDays(after)} Tage"
+                : $"Resturlaub {entry.Year}: {FormatDays(entry.Before)} Tage");
+        }
+        if (!string.IsNullOrWhiteSpace(request.Comment))
+        {
+            lines.Add($"Kommentar: {request.Comment}");
+        }
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// Der Antragstext mit dem Ergebnis statt der Knöpfe (für
+    /// <c>editMessageText</c>). Ein offener Antrag bleibt ohne Ergebniszeile.
+    /// </summary>
+    public static string BuildAbsenceDecision(AbsenceRequest request, TimeZoneInfo timeZone, IReadOnlyList<AbsenceRest>? rest = null)
+    {
+        var body = BuildAbsenceRequest(request, rest);
+        string When(DateTimeOffset? value) => value is { } at ? $" · {TimeZoneInfo.ConvertTime(at, timeZone):dd.MM. HH:mm}" : string.Empty;
+        var by = string.IsNullOrWhiteSpace(request.DecidedBy) ? "Admin" : request.DecidedBy;
+        var cancelledBy = string.IsNullOrWhiteSpace(request.CancelledBy) ? "Admin" : request.CancelledBy;
+        var result = request.Status switch
+        {
+            AbsenceStatus.Applied when request.IsAdminEntry => "✅ In Kimai eingetragen",
+            AbsenceStatus.Applied => $"✅ Genehmigt von {by}{When(request.DecidedAt)} – in Kimai eingetragen",
+            AbsenceStatus.Rejected => $"❌ Abgelehnt von {by}{When(request.DecidedAt)}"
+                + (string.IsNullOrWhiteSpace(request.DecisionNote) ? string.Empty : $"\nGrund: {request.DecisionNote}"),
+            AbsenceStatus.Failed => $"⚠️ Nicht vollständig in Kimai eingetragen: {ShortenCorrectionError(request.Error)} – bitte in der Admin-Seite klären"
+                + (request.IsAdminEntry ? string.Empty : $" (genehmigt von {by}{When(request.DecidedAt)})"),
+            AbsenceStatus.Withdrawn => $"↩️ Zurückgezogen{When(request.DecidedAt)}",
+            AbsenceStatus.ResolvedManually => $"☑️ Von {by}{When(request.DecidedAt)} manuell in Kimai nachgetragen",
+            AbsenceStatus.Cancelled => $"🚫 Storniert von {cancelledBy}{When(request.CancelledAt)}",
+            _ => null,
+        };
+        // Ein stornierter Antrag ist Cancelled; ein Storno mit Fehler bleibt Applied,
+        // das ist unten als Hinweis sichtbar.
+        if (request.Status == AbsenceStatus.Applied && request.CancelledAt is null && !string.IsNullOrWhiteSpace(request.Error))
+        {
+            result += $"\n⚠️ Storno unvollständig: {ShortenCorrectionError(request.Error)}";
+        }
+        return result is null ? body : $"{body}\n\n{result}";
+    }
+
+    /// <summary>Kurzfassung für <c>answerCallbackQuery</c> bei einem schon entschiedenen Antrag.</summary>
+    public static string BuildAbsenceAlreadyDecided(AbsenceRequest request)
+    {
+        var by = string.IsNullOrWhiteSpace(request.DecidedBy) ? "Admin" : request.DecidedBy;
+        var result = request.Status switch
+        {
+            AbsenceStatus.Applied => $"Genehmigt von {by}",
+            AbsenceStatus.Rejected => $"Abgelehnt von {by}",
+            AbsenceStatus.Failed => $"Genehmigt von {by}, Kimai hat nicht vollständig gebucht",
+            AbsenceStatus.Withdrawn => "Zurückgezogen",
+            AbsenceStatus.ResolvedManually => $"Manuell erledigt von {by}",
+            AbsenceStatus.Cancelled => "Storniert",
+            _ => "Offen",
+        };
+        return $"Bereits entschieden: {result}";
+    }
+
+    /// <summary>Inline-Tastatur eines offenen Antrags: Genehmigen und Ablehnen.</summary>
+    public static object BuildAbsenceKeyboard(string id) => new
+    {
+        inline_keyboard = new[]
+        {
+            new[]
+            {
+                new { text = "✅ Genehmigen", callback_data = TelegramAbsenceCallback.Format(TelegramAbsenceAction.AskApprove, id) },
+                new { text = "❌ Ablehnen", callback_data = TelegramAbsenceCallback.Format(TelegramAbsenceAction.AskReject, id) },
+            },
+        },
+    };
+
+    /// <summary>
+    /// Unterbrochenes Anwenden (Pending mit ApplyStartedAt): nur noch
+    /// Fortsetzen, Ablehnen würde Kimai-Einträge verwaisen lassen.
+    /// </summary>
+    public static object BuildAbsenceResumeKeyboard(string id) => new
+    {
+        inline_keyboard = new[]
+        {
+            new[]
+            {
+                new { text = "▶️ Genehmigung fortsetzen", callback_data = TelegramAbsenceCallback.Format(TelegramAbsenceAction.AskApprove, id) },
+            },
+        },
+    };
+
+    /// <summary>Zweiter Schritt: bestätigen oder zurück.</summary>
+    public static object BuildAbsenceConfirmKeyboard(string id, bool approve) => new
+    {
+        inline_keyboard = new[]
+        {
+            new[]
+            {
+                new
+                {
+                    text = approve ? "Ja, genehmigen" : "Ja, ablehnen",
+                    callback_data = TelegramAbsenceCallback.Format(
+                        approve ? TelegramAbsenceAction.Approve : TelegramAbsenceAction.Reject, id),
+                },
+                new { text = "Zurück", callback_data = TelegramAbsenceCallback.Format(TelegramAbsenceAction.Back, id) },
+            },
+        },
+    };
+
+    private static string DescribeAbsenceKind(AbsenceKind kind) => kind switch
+    {
+        AbsenceKind.Vacation => "Urlaub",
+        AbsenceKind.Sick => "Krank",
+        AbsenceKind.FlexDay => "Gleittag",
+        _ => kind.ToString(),
+    };
+
+    /// <summary>"Mo 12.10. – Mi 14.10., Fr 23.10. (4 Tage)": aufeinanderfolgende Tage als ein Bereich.</summary>
+    private static string FormatAbsenceDays(IReadOnlyList<DateOnly> days)
+    {
+        var ordered = days.Distinct().Order().ToArray();
+        var withYear = ordered.Select(day => day.Year).Distinct().Count() > 1;
+        string Day(DateOnly day) => $"{WeekdayNames[(int)day.DayOfWeek]} {day:dd.MM.}{(withYear ? day.Year.ToString() : string.Empty)}";
+
+        var ranges = new List<string>();
+        for (var start = 0; start < ordered.Length;)
+        {
+            var end = start;
+            while (end + 1 < ordered.Length && ordered[end + 1] == ordered[end].AddDays(1))
+            {
+                end++;
+            }
+            ranges.Add(end == start ? Day(ordered[start]) : $"{Day(ordered[start])} – {Day(ordered[end])}");
+            start = end + 1;
+        }
+        return $"{string.Join(", ", ranges)} ({ordered.Length} {(ordered.Length == 1 ? "Tag" : "Tage")})";
+    }
+
+    private static string FormatDays(decimal value)
+        => value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture).Replace('.', ',');
+
     private static string FormatDuration(int seconds) => $"{seconds / 3600}:{seconds % 3600 / 60:00}";
 
     /// <summary>

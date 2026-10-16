@@ -291,7 +291,9 @@ public sealed class AbsenceServiceTests : IDisposable
         Assert.Equal((AbsenceStatus.Applied, "Admin", "admin", "Admin"), (created.Status, created.CreatedBy, created.Source, created.DecidedBy));
         Assert.Equal("Urlaub übersteigt den Rest 2026 um 1 Tage.", created.Warning);
         Assert.Equal(2, Creates.Length);
-        Assert.Empty(_notifier.Events);
+        // Nur die Info für den Telegram-Chat (#137): nichts war zu entscheiden.
+        await _service.WhenNotificationsCompleteAsync();
+        Assert.Equal(["decided:Applied"], _notifier.Events);
     }
 
     [Fact]

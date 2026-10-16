@@ -21,7 +21,10 @@ public sealed class TelegramUpdatePoller(
     TimeCorrectionStore store,
     TelegramTimeCorrectionNotifier messages,
     ILogger<TelegramUpdatePoller> logger,
-    Func<TimeSpan, CancellationToken, Task>? delay = null) : BackgroundService
+    Func<TimeSpan, CancellationToken, Task>? delay = null,
+    IAbsenceService? absences = null,
+    AbsenceStore? absenceStore = null,
+    TelegramAbsenceNotifier? absenceMessages = null) : BackgroundService
 {
     /// <summary>Wartezeit von Telegram pro Abruf; der HttpClient-Timeout liegt darüber (siehe Program.cs).</summary>
     public const int PollTimeoutSeconds = 50;
@@ -251,6 +254,11 @@ public sealed class TelegramUpdatePoller(
         }
 
         var data = query.TryGetProperty("data", out var dataValue) && dataValue.ValueKind == JsonValueKind.String ? dataValue.GetString() : null;
+        if (TelegramAbsenceCallback.TryParse(data, out var absenceAction, out var absenceId))
+        {
+            return await ProcessAbsenceCallbackAsync(absenceAction, absenceId, chatId, messageId, DecidedBy(from), cancellationToken);
+        }
+
         if (!TelegramCorrectionCallback.TryParse(data, out var action, out var id))
         {
             return "Unbekannte Aktion";
@@ -312,6 +320,88 @@ public sealed class TelegramUpdatePoller(
             TimeCorrectionStatus.Rejected => "Abgelehnt",
             TimeCorrectionStatus.Failed => "Genehmigt, aber nicht in Kimai eingetragen – siehe Nachricht",
             _ => TelegramMessageFactory.BuildCorrectionAlreadyDecided(current),
+        };
+    }
+
+    /// <summary>
+    /// Knopf-Druck an einem Abwesenheitsantrag; Chat und Berechtigung sind
+    /// geprüft. Gleicher Ablauf wie bei Korrekturen: erst nachfragen, dann
+    /// entscheiden; die Nachricht aktualisiert der Notifier des Service.
+    /// </summary>
+    private async Task<string?> ProcessAbsenceCallbackAsync(
+        TelegramAbsenceAction action, string id, long chatId, long messageId, string decidedBy, CancellationToken cancellationToken)
+    {
+        if (absences is null || absenceStore is null || absenceMessages is null)
+        {
+            return "Unbekannte Aktion";
+        }
+
+        if (absenceStore.Find(id) is not { } found)
+        {
+            return "Antrag nicht gefunden";
+        }
+
+        var request = await absenceMessages.AdoptMessageAsync(id, chatId, messageId, cancellationToken) ?? found;
+
+        // Offen ist auch ein Antrag, dessen Anwenden abgebrochen wurde
+        // (Pending mit ApplyStartedAt): erneutes Genehmigen setzt fort.
+        if (request.Status != AbsenceStatus.Pending)
+        {
+            var current = await absenceMessages.RefreshAsync(id, cancellationToken) ?? request;
+            return Truncate(TelegramMessageFactory.BuildAbsenceAlreadyDecided(current), 190);
+        }
+
+        // Unterbrochenes Anwenden: nur Fortsetzen anbieten, Ablehnen ist gesperrt
+        // (der Service lehnt es ebenfalls ab).
+        var interrupted = request.ApplyStartedAt is not null;
+        if (interrupted && action is TelegramAbsenceAction.AskReject or TelegramAbsenceAction.Reject)
+        {
+            var current = await absenceMessages.ShowButtonsAsync(
+                id, TelegramMessageFactory.BuildAbsenceResumeKeyboard(id), cancellationToken) ?? request;
+            return current.Status != AbsenceStatus.Pending
+                ? Truncate(TelegramMessageFactory.BuildAbsenceAlreadyDecided(current), 190)
+                : "Genehmigung bereits begonnen – nur noch Fortsetzen möglich";
+        }
+
+        switch (action)
+        {
+            case TelegramAbsenceAction.AskApprove:
+            case TelegramAbsenceAction.AskReject:
+            case TelegramAbsenceAction.Back:
+                var approve = action == TelegramAbsenceAction.AskApprove;
+                var keyboard = action == TelegramAbsenceAction.Back
+                    ? interrupted
+                        ? TelegramMessageFactory.BuildAbsenceResumeKeyboard(id)
+                        : TelegramMessageFactory.BuildAbsenceKeyboard(id)
+                    : TelegramMessageFactory.BuildAbsenceConfirmKeyboard(id, approve);
+                var shown = await absenceMessages.ShowButtonsAsync(id, keyboard, cancellationToken) ?? request;
+                if (shown.Status != AbsenceStatus.Pending)
+                {
+                    return Truncate(TelegramMessageFactory.BuildAbsenceAlreadyDecided(shown), 190);
+                }
+                return action switch
+                {
+                    TelegramAbsenceAction.AskApprove => "Wirklich genehmigen?",
+                    TelegramAbsenceAction.AskReject => "Wirklich ablehnen?",
+                    _ => null,
+                };
+        }
+
+        var result = action == TelegramAbsenceAction.Approve
+            ? await absences.ApproveAsync(id, decidedBy, cancellationToken)
+            : await absences.RejectAsync(id, null, decidedBy, cancellationToken);
+        if (result.Outcome != CorrectionOutcome.Ok)
+        {
+            return result.Message is { Length: > 0 } text ? Truncate(text, 190) : "Fehler – bitte die Admin-Seite nutzen.";
+        }
+
+        var decided = absenceStore.Find(id) ?? request;
+        return decided.Status switch
+        {
+            AbsenceStatus.Applied => "Genehmigt",
+            AbsenceStatus.Rejected => "Abgelehnt",
+            AbsenceStatus.Failed => "Genehmigt, aber nicht vollständig in Kimai eingetragen – siehe Nachricht",
+            _ => TelegramMessageFactory.BuildAbsenceAlreadyDecided(decided),
         };
     }
 

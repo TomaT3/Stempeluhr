@@ -3,7 +3,7 @@ using Stempeluhr.Api.Models;
 namespace Stempeluhr.Api.Services;
 
 /// <summary>
-/// Meldet Abwesenheitsanträge nach außen (Telegram folgt in #137). Fehler
+/// Meldet Abwesenheitsanträge nach außen (Telegram: <see cref="TelegramAbsenceNotifier"/>). Fehler
 /// dürfen nie eine Entscheidung verhindern: der Service fängt jede Ausnahme.
 /// </summary>
 public interface IAbsenceNotifier
