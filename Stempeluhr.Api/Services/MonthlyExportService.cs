@@ -194,9 +194,22 @@ public sealed class MonthlyExportService(
         foreach (var entry in entries)
         {
             var day = LocalDay(entry.Begin!.Value, timeZone);
+            // Vor der Verzweigung: auch eine laufende Abwesenheit ist unvollständig.
+            if (entry.End is null)
+            {
+                running = true;
+            }
+
             var isAbsenceProject = settings.AbsenceProjectId is { } project && entry.ProjectId == project;
             if (isAbsenceProject)
             {
+                // Unvollständige Einstellungen: gar nicht auswerten statt teilweise
+                // (die Summenzeile sagt "nicht ausgewertet"); Arbeit ist es trotzdem nicht.
+                if (!settings.AbsencesConfigured)
+                {
+                    continue;
+                }
+
                 var kind = entry.ActivityId is null ? null : AbsenceKinds.KindOf(entry, settings);
                 if (kind is null)
                 {
@@ -214,15 +227,12 @@ public sealed class MonthlyExportService(
                 absences.Add(new MonthlyExportAbsence(
                     employee.PersonnelNumber, employee.DisplayName, day, AbsenceKinds.Label(kind.Value),
                     Hours(seconds),
-                    request is null ? "Eintrag in Kimai" : StatusLabel(request.Status),
+                    entry.End is null ? "läuft noch (nicht abgeschlossen)"
+                        : request is null ? "Eintrag in Kimai" : StatusLabel(request.Status),
                     request is null ? "direkt in Kimai" : request.CreatedBy));
                 continue;
             }
 
-            if (entry.End is null)
-            {
-                running = true;
-            }
             workEntries.Add(entry);
             if (!IsPause(entry, settings))
             {
@@ -235,7 +245,7 @@ public sealed class MonthlyExportService(
 
         if (running)
         {
-            notes.Add("Ein Eintrag läuft noch und ist nicht gezählt.");
+            notes.Add("Ein Eintrag läuft noch: seine Stunden sind nicht gezählt.");
         }
         if (unknownAbsence)
         {
@@ -326,7 +336,7 @@ public sealed class MonthlyExportService(
         DateOnly lastDay,
         List<string> notes)
     {
-        if (settings.AbsenceProjectId is not null)
+        if (settings.AbsencesConfigured)
         {
             var booked = entries
                 .Select(entry => (Kind: entry.ActivityId is null ? null : AbsenceKinds.KindOf(entry, settings),

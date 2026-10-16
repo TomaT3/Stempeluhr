@@ -584,11 +584,12 @@ mindert ihn nicht, solange es keinen Antrag dazu gibt.
 - offene oder fehlgeschlagene Anträge Tage im Monat haben,
 - Kimai für den Mitarbeiter nicht erreichbar war (er bleibt in der Liste, seine
   Zahlen bleiben leer, der Export läuft für die anderen weiter),
-- ein Eintrag noch läuft (er zählt nicht mit),
+- ein Eintrag noch läuft, auch eine Abwesenheit (seine Stunden zählen nicht mit),
 - Einträge auf dem Abwesenheitsprojekt eine unbekannte Aktivität haben.
 
-Sind die Abwesenheits-Einstellungen unvollständig, bleibt das Blatt
-„Abwesenheiten“ leer und die Summenzeile der Übersicht nennt den Grund.
+Sind die Abwesenheits-Einstellungen unvollständig (Projekt und alle drei Aktivitäten),
+bleibt das Blatt „Abwesenheiten“ leer, Einträge auf dem Abwesenheitsprojekt zählen
+weder als Abwesenheit noch als Arbeit, und die Summenzeile der Übersicht nennt den Grund.
 
 ### Telegram-Benachrichtigung (optional)
 

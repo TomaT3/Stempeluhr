@@ -226,8 +226,48 @@ public sealed class MonthlyExportServiceTests : IDisposable
 
         Assert.Equal(2, employee.Summary.WorkDays);
         Assert.Equal(4m, employee.Summary.WorkHours);
-        Assert.Contains("Ein Eintrag läuft noch und ist nicht gezählt.", employee.Summary.Notes);
+        Assert.Contains("Ein Eintrag läuft noch: seine Stunden sind nicht gezählt.", employee.Summary.Notes);
         Assert.Null(employee.Shifts[1].End);
+    }
+
+    [Fact]
+    public async Task Report_NotesARunningAbsenceEntryAsIncomplete()
+    {
+        _kimai.Entries["max-token"] = [Sheet(1, At(10, 7, 8), null, VacationActivity, Project)];
+
+        var employee = Assert.Single((await Service(Settings(Max())).BuildReportAsync(2026, 10)).Employees);
+
+        Assert.Contains("Ein Eintrag läuft noch: seine Stunden sind nicht gezählt.", employee.Summary.Notes);
+        Assert.Equal("läuft noch (nicht abgeschlossen)", Assert.Single(employee.Absences).Status);
+        Assert.Equal(0m, employee.Summary.VacationSickHours);
+    }
+
+    [Fact]
+    public async Task Report_WithPartialAbsenceSettings_EvaluatesNoAbsencesAndNoWork()
+    {
+        var settings = Settings(Max());
+        var partial = new RuntimeSettings
+        {
+            BaseUrl = settings.BaseUrl,
+            DefaultProjectId = settings.DefaultProjectId,
+            DefaultActivityId = settings.DefaultActivityId,
+            PauseActivityId = settings.PauseActivityId,
+            AbsenceProjectId = settings.AbsenceProjectId,
+            VacationActivityId = settings.VacationActivityId,
+            Employees = settings.Employees,
+        };
+        _store.Add(Request(AbsenceKind.Vacation, AbsenceStatus.Applied, D(10, 7)));
+        _kimai.Entries["max-token"] = [Vacation(5, 7)];
+
+        var report = await Service(partial).BuildReportAsync(2026, 10);
+
+        var employee = Assert.Single(report.Employees);
+        Assert.Empty(employee.Absences);
+        Assert.Equal(0, employee.Summary.VacationDays);
+        Assert.Equal(0, employee.Summary.WorkDays);
+        Assert.Equal(0m, employee.Summary.VacationSickHours);
+        Assert.DoesNotContain(employee.Summary.Notes, note => note.Contains("ohne Kimai-Eintrag"));
+        Assert.Contains(report.Notes, note => note.StartsWith("Abwesenheits-Einstellungen unvollständig"));
     }
 
     [Fact]
