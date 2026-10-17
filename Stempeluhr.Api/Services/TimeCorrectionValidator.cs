@@ -364,13 +364,21 @@ public static class TimeCorrectionValidator
 
     /// <summary>
     /// Überlappung, die mehr ist als die Rundungs-Minute an einem Rand von A
-    /// (siehe <see cref="EdgeTolerance"/>). Ein kurzer Eintrag mitten in A
-    /// zählt weiter.
+    /// (siehe <see cref="EdgeTolerance"/>). B darf nur an einer Seite
+    /// hineinragen: Ein kurzer Eintrag mitten in A zählt weiter, ebenso einer,
+    /// der A ganz abdeckt (gleich kurzer Zeitraum).
     /// </summary>
     private static bool OverlapsBeyondEdge(DateTimeOffset beginA, DateTimeOffset endA, DateTimeOffset beginB, DateTimeOffset endB)
-        => Overlaps(beginA, endA, beginB, endB)
-            && endB - beginA > EdgeTolerance
-            && endA - beginB > EdgeTolerance;
+    {
+        if (!Overlaps(beginA, endA, beginB, endB))
+        {
+            return false;
+        }
+
+        var onlyAtBegin = endB < endA && endB - beginA <= EdgeTolerance;
+        var onlyAtEnd = beginB > beginA && endA - beginB <= EdgeTolerance;
+        return !onlyAtBegin && !onlyAtEnd;
+    }
 
     internal static string Format(DateTimeOffset value, TimeZoneInfo timeZone)
         => TimeZoneInfo.ConvertTime(value, timeZone).ToString("dd.MM. HH:mm", CultureInfo.InvariantCulture);

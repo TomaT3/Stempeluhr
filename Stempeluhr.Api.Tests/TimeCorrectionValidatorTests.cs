@@ -301,6 +301,16 @@ public sealed class TimeCorrectionValidatorTests
     }
 
     [Fact]
+    public void AnEntryCoveringTheWholeShortRange_IsStillAnOverlap()
+    {
+        // Both edges are one minute away, but this is the same minute, not a rounded neighbour.
+        var sameMinute = Entry(11, At(10), At(10, 1), activity: 6);
+        Assert.Contains("überschneidet", Validate(AddShift(At(10), At(10, 1)), [sameMinute]));
+        Assert.Contains("überschneidet", Validate(AddShift(At(10), At(10, 1)), [sameMinute], applying: true));
+        Assert.Contains("überschneidet", Validate(AddShift(At(10), At(10, 1)), [Entry(12, At(9, 59), At(10, 2))]));
+    }
+
+    [Fact]
     public void LongComment_IsRejected()
     {
         var request = Request(TimeCorrectionKind.SetEnd, Work(10, At(6), At(11)),
