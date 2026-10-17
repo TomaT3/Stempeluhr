@@ -241,7 +241,9 @@ offenen (`pending`, `failed`) bleiben, von den abgeschlossenen die letzten 1000.
 letzten 31 Tage (beim Genehmigen gezählt ab dem Absenden, eine späte
 Entscheidung lässt den Antrag nicht verfallen); keine Zeit in der Zukunft
 (2 Minuten Toleranz); Ende nach Beginn, höchstens 16 h pro Schicht und 4 h pro
-Pause; keine Überlappung mit anderen Timesheets (angrenzend ist erlaubt); pro
+Pause; keine Überlappung mit anderen Timesheets (angrenzend ist erlaubt, am
+Rand auch bis zu 1 Minute: Kimai rundet beim Stoppen Beginn ab und Ende auf,
+benachbarte Stempel überlappen deshalb um diese Minute); pro
 Timesheet höchstens ein offener Antrag. Der Kiosk sendet Zeiten auf die Minute:
 liegt ein Pausenende oder neues Ende in der Minute des bisherigen Endes, gilt
 das bisherige Ende samt Sekunden (keine Rest-Arbeit, kein Kürzen um Sekunden).

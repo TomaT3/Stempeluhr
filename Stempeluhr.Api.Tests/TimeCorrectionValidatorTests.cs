@@ -267,6 +267,39 @@ public sealed class TimeCorrectionValidatorTests
         Assert.Null(Validate(AddPause(At(8), At(8, 30)), [Entry(12, At(4), At(5, 59))]));
     }
 
+    // Kimai rounds a stopped sheet's begin down and its end up to the minute:
+    // pausing at 11:00:12 and working on right away leaves work until 11:01,
+    // a pause 11:00-11:01 and work from 11:00.
+
+    [Fact]
+    public void AddPause_NextToARoundedStampTransition_IsValid()
+    {
+        var sheet = Work(10, At(6), At(11, 1));
+        var stampedPause = Entry(11, At(11), At(11, 1), PauseActivity);
+        var workAfter = Entry(12, At(11), null);
+
+        Assert.Null(Validate(AddPause(At(8), At(8, 30), sheet), [stampedPause, workAfter]));
+        Assert.Null(Validate(AddPause(At(8), At(8, 30), sheet), [stampedPause, workAfter], applying: true));
+    }
+
+    [Fact]
+    public void ChangeTimes_OnlyTheEnd_AfterARoundedPauseStamp_IsValid()
+    {
+        var workBefore = Entry(10, At(6), At(9, 1));
+        var stampedPause = Entry(11, At(9), At(9, 1), PauseActivity);
+        var request = Request(TimeCorrectionKind.ChangeTimes, Work(12, At(9), At(10, 30)), r => r with { End = At(11) });
+
+        Assert.Null(Validate(request, [workBefore, stampedPause]));
+    }
+
+    [Fact]
+    public void OverlapAtTheEdge_IsAllowedForOneMinuteOnly()
+    {
+        Assert.Null(Validate(AddShift(At(10), At(11)), [Entry(11, At(6), At(10, 1))]));
+        Assert.Contains("überschneidet", Validate(AddShift(At(10), At(11)), [Entry(11, At(6), At(10, 2))]));
+        Assert.Contains("überschneidet", Validate(AddShift(At(10), At(11)), [Entry(11, At(10, 58), At(12))]));
+    }
+
     [Fact]
     public void LongComment_IsRejected()
     {

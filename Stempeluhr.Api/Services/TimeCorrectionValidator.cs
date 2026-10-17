@@ -16,6 +16,14 @@ public static class TimeCorrectionValidator
     public static readonly TimeSpan MaxShift = TimeSpan.FromHours(16);
     public static readonly TimeSpan MaxPause = TimeSpan.FromHours(4);
 
+    /// <summary>
+    /// Wie weit ein Eintrag am Rand in den beanspruchten Zeitraum ragen darf:
+    /// Kimai rundet beim Stoppen den Beginn ab und das Ende auf die Minute auf,
+    /// der Kiosk sendet Minuten. Benachbarte Stempel (Pause und gleich wieder
+    /// Arbeit) überlappen deshalb bis zu einer Minute.
+    /// </summary>
+    public static readonly TimeSpan EdgeTolerance = TimeSpan.FromMinutes(1);
+
     /// <summary>Wie viele Zeichen ein Kommentar höchstens hat.</summary>
     public const int MaxCommentLength = 300;
 
@@ -325,7 +333,7 @@ public static class TimeCorrectionValidator
                 continue;
             }
 
-            if (Overlaps(claimed.Begin, claimed.End, entryBegin, entryEnd))
+            if (OverlapsBeyondEdge(claimed.Begin, claimed.End, entryBegin, entryEnd))
             {
                 return $"Der Zeitraum überschneidet sich mit einem anderen Eintrag ({Format(entryBegin, timeZone)}–{(entry.End is { } end ? Format(end, timeZone) : "läuft noch")}).";
             }
@@ -353,6 +361,16 @@ public static class TimeCorrectionValidator
     /// <summary>Direkt angrenzende Zeiträume überlappen nicht.</summary>
     private static bool Overlaps(DateTimeOffset beginA, DateTimeOffset endA, DateTimeOffset beginB, DateTimeOffset endB)
         => beginA < endB && beginB < endA;
+
+    /// <summary>
+    /// Überlappung, die mehr ist als die Rundungs-Minute an einem Rand von A
+    /// (siehe <see cref="EdgeTolerance"/>). Ein kurzer Eintrag mitten in A
+    /// zählt weiter.
+    /// </summary>
+    private static bool OverlapsBeyondEdge(DateTimeOffset beginA, DateTimeOffset endA, DateTimeOffset beginB, DateTimeOffset endB)
+        => Overlaps(beginA, endA, beginB, endB)
+            && endB - beginA > EdgeTolerance
+            && endA - beginB > EdgeTolerance;
 
     internal static string Format(DateTimeOffset value, TimeZoneInfo timeZone)
         => TimeZoneInfo.ConvertTime(value, timeZone).ToString("dd.MM. HH:mm", CultureInfo.InvariantCulture);
