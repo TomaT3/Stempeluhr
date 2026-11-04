@@ -106,6 +106,20 @@ public sealed class ClockService(
         var eventId = EventIdOf(request);
         using var live = eventId is null ? null : kioskEvents?.BeginLive(eventId);
 
+        using var activity = StempeluhrTelemetry.StartStamp("kiosk.clock", eventId, request.Action, context.Employee.Id);
+        StempeluhrTelemetry.TagOrigin(activity, context.Origin);
+        var response = await DispatchClockActionAsync(request, context, eventId, cancellationToken);
+        // "booked" setzt NotifyTransition, sobald Kimai wirklich geändert wurde.
+        if (activity?.GetTagItem("stempeluhr.outcome") is null)
+        {
+            StempeluhrTelemetry.TagOutcome(activity, response.Result == ClockActionResult.Success ? "noop" : "bad_request");
+        }
+        return response;
+    }
+
+    private async Task<ClockActionResponse> DispatchClockActionAsync(
+        KioskClockRequest request, EmployeeContext context, string? eventId, CancellationToken cancellationToken)
+    {
         if (string.Equals(request.Action, "start", StringComparison.OrdinalIgnoreCase))
         {
             return await StartClockAsync(context.Settings, context.Employee, request.TaskId, context.Origin, cancellationToken);
@@ -604,6 +618,10 @@ public sealed class ClockService(
         // Karten-ID - die Quelle nennt nur die Art.
         logger?.LogInformation(
             "Stamp {Action} for employee {EmployeeId} via {Origin}", action, employee.Id, origin?.ToString() ?? "unbekannt");
+        if (System.Diagnostics.Activity.Current is { } current && current.Source == StempeluhrTelemetry.Source)
+        {
+            StempeluhrTelemetry.TagOutcome(current, "booked");
+        }
 
         if (notifier is null || !settings.TelegramEnabled)
         {

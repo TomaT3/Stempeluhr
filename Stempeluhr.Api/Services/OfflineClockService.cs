@@ -107,6 +107,8 @@ public sealed class OfflineClockService(
             .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.EmployeeId))
             .OrderBy(e => e.PerformedAt)
             .ToList();
+        using var activity = StempeluhrTelemetry.Source.StartActivity("offline.sync");
+        activity?.SetTag("stempeluhr.batch_size", events.Count);
 
         // Serialize the whole operation against parallel syncs and the
         // background flush (List<T> is not thread-safe, and the ordering
@@ -393,7 +395,6 @@ public sealed class OfflineClockService(
         }
 
         var action = NormalizeKioskAction(entry.Action);
-        var outcome = await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
         // Source of the original action (issue #146). An authenticated
         // terminal names itself and reports how the session was opened (its
         // events carry no credentials any more); otherwise the credential
@@ -402,6 +403,11 @@ public sealed class OfflineClockService(
             ? StampOrigin.Create(null, entry.AuthenticatedTerminalId, entry.Source)
             : StampOrigin.Create(
                 ClockService.MethodOf(employees, settings, employee, entry.Pin, entry.NfcCardId), null, entry.Source);
+        using var activity = StempeluhrTelemetry.StartStamp("offline.apply", entry.EventId, action, employee.Id);
+        StempeluhrTelemetry.TagOrigin(activity, origin);
+        activity?.SetTag("stempeluhr.performed_at", entry.PerformedAt.ToString("O"));
+        var outcome = await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
+        StempeluhrTelemetry.TagOutcome(activity, outcome.Mutated ? "booked" : outcome.State);
         if (outcome.Mutated)
         {
             logger.LogInformation(
@@ -1093,6 +1099,9 @@ public sealed class OfflineClockService(
     {
         var interrupted = false;
         var drained = 0;
+        // Nur mit Arbeit: der Dienst ruft alle 15 s auf.
+        using var activity = _kioskOutbox.Count > 0 ? StempeluhrTelemetry.Source.StartActivity("outbox.flush") : null;
+        activity?.SetTag("stempeluhr.outbox_size", _kioskOutbox.Count);
         SortChronologically(_kioskOutbox, entry => entry.PerformedAt);
 
         // Events of an employee whose PIN is locked (issue #8) stay in place,

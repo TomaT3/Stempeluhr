@@ -12,7 +12,7 @@ namespace Stempeluhr.Api.Tests;
 /// spam the customer's chat. Offline replays announce themselves through
 /// OfflineStampNotifier instead (OfflineClockServiceTests, issue #117).
 /// </summary>
-public sealed class ClockServiceNotificationTests
+public sealed partial class ClockServiceNotificationTests
 {
     private static readonly ClockStatusDto Working = new(true, 5, "2026-09-05T06:00:00Z", 600, "working", "Eingestempelt");
     private static readonly ClockStatusDto Paused = new(true, 5, "2026-09-05T06:00:00Z", 600, "paused", "In Pause");
