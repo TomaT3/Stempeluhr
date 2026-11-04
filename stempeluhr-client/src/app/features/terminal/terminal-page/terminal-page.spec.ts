@@ -1286,15 +1286,19 @@ describe('TerminalPage', () => {
         expect(fixture.nativeElement.querySelector('.login-panel')).not.toBeNull();
       });
 
-      it('a new card scan during the flow does not switch the employee, the flow stays', () => {
+      it('a colleague\'s card during a forgotten flow closes it and switches the employee (issue #146)', () => {
+        const anna = { ...session.employee, id: 'anna', displayName: 'Anna Beispiel' };
+        window.localStorage.setItem('stempeluhr.employee-card-cache.v1', JSON.stringify({ '04FFFF': anna }));
         const fixture = login();
         openFlow(fixture);
         localScanValue = { cardId: '04ffff', scannedAt: new Date().toISOString(), consumed: false };
         vi.advanceTimersByTime(1_000);
+        localScanValue = null;
         fixture.detectChanges();
 
-        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
-        expect(fixture.componentInstance.correctionOpen()).toBe(true);
+        expect(fixture.componentInstance.selectedEmployee()?.id).toBe('anna');
+        expect(fixture.componentInstance.correctionOpen()).toBe(false);
+        expect(fixture.componentInstance.correctionAuth()).toBeNull();
       });
 
       it('goes back to the idle screen after 2 minutes without a tap in the flow', () => {
@@ -1864,17 +1868,20 @@ describe('TerminalPage', () => {
       expect(fixture.nativeElement.querySelector('.action-panel')).not.toBeNull();
     });
 
-    it('a card scan during the flow books nothing and the flow stays', async () => {
+    it('a colleague\'s card during the flow books nothing, closes it and switches the employee (issue #146)', async () => {
+      const anna = { ...session.employee, id: 'anna', displayName: 'Anna Beispiel' };
+      window.localStorage.setItem('stempeluhr.employee-card-cache.v1', JSON.stringify({ '04ABCD': anna }));
       const fixture = login();
       await openAbsence(fixture);
       localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
       vi.advanceTimersByTime(1_000);
+      localScanValue = null;
       fixture.detectChanges();
 
       expect(clockImpl).not.toHaveBeenCalled();
       expect(enqueueKiosk).not.toHaveBeenCalled();
-      expect(fixture.componentInstance.absenceOpen()).toBe(true);
-      expect(fixture.componentInstance.selectedEmployee()?.id).toBe('max');
+      expect(fixture.componentInstance.absenceOpen()).toBe(false);
+      expect(fixture.componentInstance.selectedEmployee()?.id).toBe('anna');
     });
 
     it('discards a late account after the identity changed - nothing of Max under Anna', async () => {

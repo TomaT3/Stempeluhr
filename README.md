@@ -47,9 +47,10 @@ Browser erhält nur, was er zur Bedienung braucht.
    - **Andere Karte in offener Sitzung:** Die Sitzung endet, und die Karte
      wird wie im Ruhezustand ausgewertet. Sie öffnet also die Sitzung ihres
      Mitarbeiters, eine unbekannte Karte lässt den Kiosk im Ruhezustand. Das
-     gilt auch für eine PIN-Sitzung. Die Karte der Sitzung selbst ändert
-     nichts und startet nur die 60 s neu. Während eine Aktion läuft oder ein
-     Korrektur- bzw. Abwesenheitsantrag offen ist, wird der Scan nur quittiert.
+     gilt auch für eine PIN-Sitzung und für einen offenen Korrektur- oder
+     Abwesenheitsantrag, den der Vorgänger stehen ließ; der Antrag wird
+     verworfen. Die Karte der Sitzung selbst ändert nichts und startet nur die
+     60 s neu. Nur während eine Aktion läuft, wird der Scan bloß quittiert.
 2. **Stempeln:** Der gewählte Knopf ruft `/api/kiosk/clock` auf; die API
    bucht in Kimai (Pause = Wechsel auf die Pause-Aktivität, Tätigkeitswechsel
    = Wechsel auf Projekt/Aktivität einer weiteren Tätigkeit, siehe unten).

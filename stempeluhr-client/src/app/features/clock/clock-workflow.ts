@@ -1157,20 +1157,18 @@ export abstract class ClockWorkflow implements OnDestroy {
           this.touchSession();
           return;
         }
-        // Kein Wechsel, solange eine Aktion läuft (ihre Antwort gehört noch
-        // zu dieser Sitzung) oder ein Antrag halb ausgefüllt ist - beide
-        // enden von selbst, der Antrag nach seinem eigenen Timeout.
-        if (this.isBusy() || this.correctionOpen() || this.absenceOpen()) {
+        // Kein Wechsel, solange eine Aktion läuft: ihre Antwort gehört noch
+        // zu dieser Sitzung.
+        if (this.isBusy()) {
           this.localNfcScan.ack().subscribe();
-          this.message.set(this.isBusy()
-            ? 'Karte erkannt - bitte kurz warten.'
-            : 'Karte erkannt - bitte zuerst den Antrag abschließen.');
+          this.message.set('Karte erkannt - bitte kurz warten.');
           return;
         }
-        // Eine andere Karte (auch in einer PIN-Sitzung): Jemand anderes
-        // steht am Terminal (Issue #146). Die Sitzung endet, bevor die Karte
-        // wie im Ruhezustand ausgewertet wird - auch eine unbekannte Karte
-        // lässt die fremde Sitzung nicht offen.
+        // Eine andere Karte (auch in einer PIN-Sitzung oder einem offenen
+        // Antrag, den der Vorgänger stehen ließ): Jemand anderes steht am
+        // Terminal (Issue #146). Die Sitzung endet, bevor die Karte wie im
+        // Ruhezustand ausgewertet wird - auch eine unbekannte Karte lässt die
+        // fremde Sitzung nicht offen.
         this.back();
         this.handleLocalScan(scan.cardId);
       });
