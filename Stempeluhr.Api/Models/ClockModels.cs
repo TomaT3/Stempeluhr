@@ -9,6 +9,9 @@ public sealed record KioskPinLoginRequest(string? Pin);
 /// "switch": the task to clock in on resp. switch to (null/empty = the
 /// default task). <paramref name="EventId"/> is the ID under which the kiosk
 /// queues this very action if the request fails (older kiosks send none).
+/// <paramref name="Source"/> is the client's hint for the stamp message:
+/// only "web" (the /clock page) counts here - card or PIN the server tells
+/// from the credential that matched (issue #146).
 /// </summary>
 public sealed record KioskClockRequest(
     string EmployeeId,
@@ -16,7 +19,13 @@ public sealed record KioskClockRequest(
     string Action,
     string? NfcCardId,
     string? TaskId = null,
-    string? EventId = null);
+    string? EventId = null,
+    string? Source = null)
+{
+    // Assigned only after HTTP terminal authentication, never from client JSON.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? AuthenticatedTerminalId { get; init; }
+}
 
 /// <summary>
 /// Card identification request from the kiosk browser: resolves a scanned
@@ -38,7 +47,9 @@ public sealed record NfcClockRequest(string? CardId, string? Action, string? Ter
 /// session replay without a PIN - the card must map to the same employee).
 /// <paramref name="TaskId"/> is the task of a "start" or the target of a
 /// "switch" (null/empty = default task); queues from older clients simply
-/// lack it.
+/// lack it. <paramref name="Source"/> says how the session of the original
+/// action was opened ("card", "pin") or that it came from the /clock page
+/// ("web") - only for the stamp message, never for authentication.
 /// </summary>
 public sealed record OfflineKioskClockEventDto(
     string EventId,
@@ -47,7 +58,8 @@ public sealed record OfflineKioskClockEventDto(
     string Action,
     DateTimeOffset PerformedAt,
     string? NfcCardId = null,
-    string? TaskId = null)
+    string? TaskId = null,
+    string? Source = null)
 {
     // Assigned only after HTTP terminal authentication, never from client JSON.
     [System.Text.Json.Serialization.JsonIgnore]

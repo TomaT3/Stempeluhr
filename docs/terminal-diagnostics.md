@@ -53,6 +53,10 @@ Bestehende `config.json`-Dateien bleiben gültig.
   App-Version, Ruhe-/Mitarbeiterbildschirm, Busy-Zustand, Sperrgrund
   (`request`, `backlog`, `status`, `none`), Offline-Zustand, Queue-Zähler,
   Zeit seit der letzten Eingabe, Sichtbarkeit und Verzögerung des Timers.
+  Eine offene Sitzung (`screen: session`) endet nach 60 s ohne Eingabe. Bleibt
+  sie bei `lastInputAgeMs` deutlich darüber stehen, ist eine Aktion
+  hängengeblieben (`busy`), ein Korrektur- oder Abwesenheitsantrag noch offen
+  (eigenes, längeres Timeout), oder die Seite reagiert nicht mehr.
   Außerdem werden begrenzt Anfragezeiten/-status und generische
   JavaScript-/Promise-/Speicherfehler erfasst. Fehlermeldungen und Stacks
   werden bewusst nicht übernommen, da sie Eingabewerte enthalten können.

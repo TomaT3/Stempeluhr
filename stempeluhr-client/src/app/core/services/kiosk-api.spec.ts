@@ -56,6 +56,68 @@ describe('KioskApi', () => {
     request.flush({});
   });
 
+  describe('source of a live stamp (issue #146)', () => {
+    const agentClock = 'http://127.0.0.1:8737/terminal/clock';
+
+    it('posts through the agent, which adds the terminal token, with the credentials unchanged', () => {
+      let result: unknown;
+      api.clock('max', '', 'start', '04ABCD', null, 'ev1', { viaAgent: true }).subscribe(status => (result = status));
+
+      const request = http.expectOne(agentClock);
+      expect(request.request.body).toEqual({
+        employeeId: 'max', pin: '', action: 'start', nfcCardId: '04ABCD', taskId: null, eventId: 'ev1',
+      });
+      request.flush({ stateText: 'Eingestempelt' });
+      http.expectNone('/api/kiosk/clock');
+      expect(result).toEqual({ stateText: 'Eingestempelt' });
+    });
+
+    it.each([404, 503])('stamps directly when the agent answers %i (older agent, no token)', status => {
+      let result: unknown;
+      api.clock('max', '1234', 'stop', null, null, 'ev1', { viaAgent: true }).subscribe(answer => (result = answer));
+
+      http.expectOne(agentClock).flush({}, { status, statusText: 'agent' });
+      http.expectOne('/api/kiosk/clock').flush({ stateText: 'Ausgestempelt' });
+      expect(result).toEqual({ stateText: 'Ausgestempelt' });
+    });
+
+    it('stamps directly when the agent is unreachable (stopped for an update)', () => {
+      let result: unknown;
+      api.clock('max', '1234', 'stop', null, null, 'ev1', { viaAgent: true }).subscribe(answer => (result = answer));
+
+      http.expectOne(agentClock).error(new ProgressEvent('error'));
+      http.expectOne('/api/kiosk/clock').flush({ stateText: 'Ausgestempelt' });
+      expect(result).toEqual({ stateText: 'Ausgestempelt' });
+    });
+
+    it.each([401, 502])('passes status %i on without a second request', status => {
+      let failure: { status?: number } | undefined;
+      api.clock('max', '1234', 'stop', null, null, 'ev1', { viaAgent: true }).subscribe({ error: error => (failure = error) });
+
+      http.expectOne(agentClock).flush({}, { status, statusText: 'x' });
+      http.expectNone('/api/kiosk/clock');
+      expect(failure?.status).toBe(status);
+    });
+
+    it('does not stamp a second time after a timeout - the agent may have forwarded it', () => {
+      let failure: unknown;
+      api.clock('max', '1234', 'stop', null, null, 'ev1', { viaAgent: true }).subscribe({ error: error => (failure = error) });
+
+      http.expectOne(agentClock);
+      vi.advanceTimersByTime(REQUEST_TIMEOUT_MS);
+      http.expectNone('/api/kiosk/clock');
+      expect(failure).toBeInstanceOf(TimeoutError);
+    });
+
+    it('names the browser only for the /clock page', () => {
+      api.clock('max', '1234', 'start', null, null, 'ev1', { source: 'web' }).subscribe();
+      expect(http.expectOne('/api/kiosk/clock').request.body).toMatchObject({ source: 'web' });
+
+      api.clock('max', '1234', 'start').subscribe();
+      expect(http.expectOne('/api/kiosk/clock').request.body).not.toHaveProperty('source');
+    });
+  });
+
   it('authenticates the correction calls with employee ID and card (no PIN) like the clock call', () => {
     api.correctionTimesheets(auth).subscribe();
     const request = http.expectOne('/api/kiosk/corrections/timesheets');

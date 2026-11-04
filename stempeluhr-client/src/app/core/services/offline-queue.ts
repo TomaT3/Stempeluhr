@@ -107,6 +107,12 @@ export class OfflineQueueService {
     }
   }
 
+  /** Live stamps of this terminal go through the agent, which adds its token (issue #146). */
+  isTerminalAuthenticated(terminalId: string | null): boolean {
+    const id = terminalId?.trim();
+    return !!id && this.authenticatedTerminals.has(id);
+  }
+
   /** Called only after a successful authenticated catalog request. */
   enableTerminalAuth(terminalId: string): void {
     const id = terminalId.trim();

@@ -254,7 +254,7 @@ describe('ClockPage', () => {
     options[1].click();
 
     const kioskApi = TestBed.inject(KioskApi) as unknown as { clock: ReturnType<typeof vi.fn> };
-    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx', expect.any(String));
+    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx', expect.any(String), { viaAgent: false, source: 'web' });
   });
 
   it('ignores a second tap right after opening the switch picker (issue #59)', () => {
@@ -281,7 +281,7 @@ describe('ClockPage', () => {
     vi.advanceTimersByTime(400);
     kundeX.click();
 
-    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx', expect.any(String));
+    expect(kioskApi.clock).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx', expect.any(String), { viaAgent: false, source: 'web' });
     fixture.destroy();
   });
 
@@ -1015,7 +1015,7 @@ describe('ClockPage', () => {
 
         hint(fixture)!.click();
         const kioskApi = TestBed.inject(KioskApi) as unknown as { clock: ReturnType<typeof vi.fn> };
-        expect(kioskApi.clock).toHaveBeenCalledExactlyOnceWith('max', '1234', 'stop', null, null, expect.any(String));
+        expect(kioskApi.clock).toHaveBeenCalledExactlyOnceWith('max', '1234', 'stop', null, null, expect.any(String), { viaAgent: false, source: 'web' });
         expect(fixture.componentInstance.correctionOpen()).toBe(false);
 
         clockResult.next({ ...status, stateText: 'Ausgestempelt' });

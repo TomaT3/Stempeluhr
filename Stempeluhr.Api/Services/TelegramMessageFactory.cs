@@ -77,7 +77,7 @@ public static class TelegramMessageFactory
             value is null || value.Length <= OfflineStampNameLimit ? value : value[..(OfflineStampNameLimit - 1)] + "…";
         employeeName = Clip(employeeName)!;
         var today = TimeZoneInfo.ConvertTime(now, timeZone).Date;
-        (string Emoji, string Text) Describe(AppliedOfflineStamp stamp)
+        (string Emoji, string Text, string? Origin) Describe(AppliedOfflineStamp stamp)
         {
             // Der Nachtrag normalisiert die Aktion vorher; ein unbekannter
             // Wert darf die Meldung trotzdem nicht verhindern.
@@ -86,17 +86,19 @@ public static class TelegramMessageFactory
                 : ("🕒", "gestempelt");
             var local = TimeZoneInfo.ConvertTime(stamp.PerformedAt, timeZone);
             var when = local.Date == today ? $"um {local:HH:mm}" : $"am {local:dd.MM.} um {local:HH:mm}";
-            return (emoji, $"{label} {when}");
+            return (emoji, $"{label} {when}", stamp.Origin?.Describe());
         }
 
         if (stamps.Count == 1)
         {
-            var (emoji, text) = Describe(stamps[0]);
-            return $"{emoji} {employeeName} · {text} (nachgetragen)";
+            var (emoji, text, origin) = Describe(stamps[0]);
+            return origin is null
+                ? $"{emoji} {employeeName} · {text} (nachgetragen)"
+                : $"{emoji} {employeeName} · {text} (nachgetragen · {origin})";
         }
 
         var lines = stamps.Take(OfflineStampNoticeLineLimit).Select(Describe)
-            .Select(line => $"{line.Emoji} {line.Text}")
+            .Select(line => line.Origin is null ? $"{line.Emoji} {line.Text}" : $"{line.Emoji} {line.Text} · {line.Origin}")
             .Prepend($"📥 {employeeName} · {stamps.Count} Stempel nachgetragen");
         if (stamps.Count > OfflineStampNoticeLineLimit)
         {
@@ -506,13 +508,16 @@ public static class TelegramMessageFactory
     /// Aktionen entsprechen den Clock-Aktionen aus <c>KioskClockRequest.Action</c>.
     /// <paramref name="taskLabel"/> gilt für "start" (Tätigkeit, null = ohne
     /// Angabe) und "switch" (Ziel, null = zurück zur Standard-Tätigkeit).
+    /// <paramref name="origin"/> nennt, wie gestempelt wurde (issue #146);
+    /// ohne bekannte Quelle bleibt der Text wie bisher.
     /// </summary>
     public static string Build(
         string employeeName,
         string action,
         DateTimeOffset stampUtc,
         TimeZoneInfo timeZone,
-        string? taskLabel = null)
+        string? taskLabel = null,
+        StampOrigin? origin = null)
     {
         if (!Actions.TryGetValue(action, out var known))
         {
@@ -520,7 +525,8 @@ public static class TelegramMessageFactory
         }
 
         var localTime = TimeZoneInfo.ConvertTime(stampUtc, timeZone).ToString("HH:mm");
-        return $"{known.Emoji} {employeeName} · {known.Label(taskLabel)} um {localTime}";
+        var text = $"{known.Emoji} {employeeName} · {known.Label(taskLabel)} um {localTime}";
+        return origin?.Describe() is { } source ? $"{text} · {source}" : text;
     }
 
     /// <summary>One message per terminal and check: new alarms and all-clears.</summary>

@@ -14,6 +14,7 @@ und in der API, nicht im Agenten.
 | `POST` | `/scan/ack` | Kiosk bestätigt den Scan |
 | `GET` | `/terminal/catalog` | authentifizierter Mitarbeiter-Katalog vom Server |
 | `POST` | `/terminal/sync` | PIN-freier Queue-Nachtrag mit Agent-Token |
+| `POST` | `/terminal/clock` | Live-Stempel mit Agent-Token; PIN bzw. Karte bleiben im Body, das Token nennt der API nur das Terminal für die Stempel-Meldung |
 | `GET` | `/health` | `{"ok": true, "version": "x.y.z"}` |
 | `POST` | `/diagnostics/heartbeat` | technisches Browser-Lebenszeichen; ausschließlich konfigurierte Origin |
 | `GET` | `/diagnostics` | letzte Pi-/Browser-Diagnose für lokale Wartung |

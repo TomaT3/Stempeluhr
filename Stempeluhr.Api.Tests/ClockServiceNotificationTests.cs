@@ -224,6 +224,111 @@ public sealed class ClockServiceNotificationTests
         Assert.IsType<HttpRequestException>(Assert.Single(logger.Exceptions));
     }
 
+    // --- Source of the stamp (issue #146) ---------------------------------
+
+    private static RuntimeSettings SettingsWithCard(string? pin = "1234")
+    {
+        var settings = Settings();
+        settings.Employees[0] = new EmployeeSettings
+        {
+            Id = "max", Pin = pin, NfcCardId = "04:AB", ApiToken = "t", DisplayName = "Max Mustermann"
+        };
+        return settings;
+    }
+
+    [Fact]
+    public async Task ClockAsync_CardAtAuthenticatedTerminal_NamesCardAndTerminal()
+    {
+        var (service, kimai, notifier) = Create(SettingsWithCard());
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(Working);
+
+        await service.ClockAsync(new KioskClockRequest("max", "", "start", "04AB") { AuthenticatedTerminalId = "pi-1" });
+
+        var origin = Assert.Single(notifier.Origins);
+        Assert.Equal(new StampOrigin(StampMethod.Card, "pi-1"), origin);
+        Assert.Equal("Karte am Terminal pi-1", origin!.Describe());
+    }
+
+    [Fact]
+    public async Task ClockAsync_PinAtAuthenticatedTerminal_NamesPinAndTerminal()
+    {
+        var (service, kimai, notifier) = Create(SettingsWithCard());
+        kimai.EnqueueStatus(Working);
+        kimai.EnqueueStatus(ClockedOut);
+
+        await service.ClockAsync(Request("stop") with { AuthenticatedTerminalId = "pi-1" });
+
+        Assert.Equal("PIN am Terminal pi-1", Assert.Single(notifier.Origins)!.Describe());
+    }
+
+    [Fact]
+    public async Task ClockAsync_FromTheClockPage_NamesTheBrowser()
+    {
+        var (service, kimai, notifier) = Create();
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(Working);
+
+        await service.ClockAsync(Request("start") with { Source = "web" });
+
+        Assert.Equal("Webbrowser", Assert.Single(notifier.Origins)!.Describe());
+    }
+
+    [Fact]
+    public async Task ClockAsync_PinFromAnOlderKiosk_KeepsTheMessageAsBefore()
+    {
+        var (service, kimai, notifier) = Create();
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(Working);
+
+        await service.ClockAsync(Request("start"));
+
+        Assert.Null(Assert.Single(notifier.Origins)!.Describe());
+    }
+
+    [Fact]
+    public async Task ClockAsync_EmployeeWithoutPin_CountsTheCardNotThePin()
+    {
+        // An employee without a PIN also passes the PIN check with an empty
+        // PIN - the card that opened the session must still be named.
+        var (service, kimai, notifier) = Create(SettingsWithCard(pin: null));
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(Working);
+
+        await service.ClockAsync(new KioskClockRequest("max", "", "start", "04AB"));
+
+        Assert.Equal("Karte am Terminal", Assert.Single(notifier.Origins)!.Describe());
+    }
+
+    [Fact]
+    public async Task ClockAsync_LogsTheSource_WithoutPinOrCard()
+    {
+        var kimai = new ScriptedKimaiClient();
+        kimai.EnqueueStatus(ClockedOut);
+        kimai.EnqueueStatus(Working);
+        var logger = new RecordingLogger();
+        var service = new ClockService(
+            new StubSettingsStore(SettingsWithCard()), new EmployeeService(), kimai, new RecordingNotifier(), logger);
+
+        await service.ClockAsync(new KioskClockRequest("max", "1234", "start", "04AB") { AuthenticatedTerminalId = "pi-1" });
+
+        var info = Assert.Single(logger.Infos);
+        Assert.Contains("Karte am Terminal pi-1", info);
+        Assert.Contains("max", info);
+        Assert.DoesNotContain("1234", info);
+        Assert.DoesNotContain("04AB", info);
+        Assert.DoesNotContain("04:AB", info);
+    }
+
+    [Fact]
+    public void ClientCannotForgeTheTerminalOfALiveStamp()
+    {
+        var request = System.Text.Json.JsonSerializer.Deserialize<KioskClockRequest>(
+            """{"employeeId":"max","pin":"1234","action":"start","authenticatedTerminalId":"pi-1"}""",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        Assert.Null(request!.AuthenticatedTerminalId);
+    }
+
     // --- Task switch (live path) ---------------------------------------
 
     private static readonly ClockStatusDto WorkingOnTask =
@@ -597,12 +702,15 @@ public sealed class ClockServiceNotificationTests
     {
         public List<(string DisplayName, string Action)> Calls { get; } = [];
         public List<string?> TaskLabels { get; } = [];
+        public List<StampOrigin?> Origins { get; } = [];
 
         public Task SendStampNotificationAsync(
-            string employeeName, string action, DateTimeOffset stampUtc, TimeZoneInfo timeZone, string? taskLabel = null)
+            string employeeName, string action, DateTimeOffset stampUtc, TimeZoneInfo timeZone, string? taskLabel = null,
+            StampOrigin? origin = null)
         {
             Calls.Add((employeeName, action));
             TaskLabels.Add(taskLabel);
+            Origins.Add(origin);
             return Task.CompletedTask;
         }
 
@@ -613,7 +721,9 @@ public sealed class ClockServiceNotificationTests
 
     private sealed class RecordingLogger : ILogger<ClockService>
     {
+        /// <summary>Warnings and errors; information goes to <see cref="Infos"/>.</summary>
         public List<string> Messages { get; } = [];
+        public List<string> Infos { get; } = [];
         public List<Exception> Exceptions { get; } = [];
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -627,7 +737,7 @@ public sealed class ClockServiceNotificationTests
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            Messages.Add(formatter(state, exception));
+            (logLevel >= LogLevel.Warning ? Messages : Infos).Add(formatter(state, exception));
             if (exception is not null)
             {
                 Exceptions.Add(exception);

@@ -394,8 +394,22 @@ public sealed class OfflineClockService(
 
         var action = NormalizeKioskAction(entry.Action);
         var outcome = await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
+        // Source of the original action (issue #146). An authenticated
+        // terminal names itself and reports how the session was opened (its
+        // events carry no credentials any more); otherwise the credential
+        // that matched tells card from PIN.
+        var origin = entry.AuthenticatedTerminalId is not null
+            ? StampOrigin.Create(null, entry.AuthenticatedTerminalId, entry.Source)
+            : StampOrigin.Create(
+                ClockService.MethodOf(employees, settings, employee, entry.Pin, entry.NfcCardId), null, entry.Source);
+        if (outcome.Mutated)
+        {
+            logger.LogInformation(
+                "Offline kiosk event {EventId}: {Action} for employee {EmployeeId} via {Origin}",
+                entry.EventId, action, employee.Id, origin.ToString());
+        }
         var stamp = outcome.Mutated && settings.TelegramEnabled
-            ? new AppliedOfflineStamp(employee.Id, employee.DisplayName, action, entry.PerformedAt, outcome.TaskLabel)
+            ? new AppliedOfflineStamp(employee.Id, employee.DisplayName, action, entry.PerformedAt, outcome.TaskLabel, origin)
             : null;
         return (outcome.Message, outcome.State, stamp);
     }

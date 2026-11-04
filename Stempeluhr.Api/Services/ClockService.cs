@@ -81,7 +81,7 @@ public sealed class ClockService(
         var context = FindEmployee(request);
         return context is null
             ? null
-            : (await StartClockAsync(context.Settings, context.Employee, null, cancellationToken)).Status;
+            : (await StartClockAsync(context.Settings, context.Employee, null, null, cancellationToken)).Status;
     }
 
     public async Task<ClockStatusDto?> StopAsync(ClockRequest request, CancellationToken cancellationToken = default)
@@ -89,7 +89,7 @@ public sealed class ClockService(
         var context = FindEmployee(request);
         return context is null
             ? null
-            : await StopClockAsync(context.Settings, context.Employee, cancellationToken);
+            : await StopClockAsync(context.Settings, context.Employee, null, cancellationToken);
     }
 
     public async Task<ClockActionResponse> ClockAsync(KioskClockRequest request, CancellationToken cancellationToken = default)
@@ -108,28 +108,28 @@ public sealed class ClockService(
 
         if (string.Equals(request.Action, "start", StringComparison.OrdinalIgnoreCase))
         {
-            return await StartClockAsync(context.Settings, context.Employee, request.TaskId, cancellationToken);
+            return await StartClockAsync(context.Settings, context.Employee, request.TaskId, context.Origin, cancellationToken);
         }
 
         if (string.Equals(request.Action, "stop", StringComparison.OrdinalIgnoreCase))
         {
             return new ClockActionResponse(
                 ClockActionResult.Success,
-                await StopClockAsync(context.Settings, context.Employee, cancellationToken));
+                await StopClockAsync(context.Settings, context.Employee, context.Origin, cancellationToken));
         }
 
         if (string.Equals(request.Action, "pauseStart", StringComparison.OrdinalIgnoreCase))
         {
             return new ClockActionResponse(
                 ClockActionResult.Success,
-                await StartPauseAsync(context.Settings, context.Employee, cancellationToken));
+                await StartPauseAsync(context.Settings, context.Employee, context.Origin, cancellationToken));
         }
 
         if (string.Equals(request.Action, "pauseEnd", StringComparison.OrdinalIgnoreCase))
         {
             return new ClockActionResponse(
                 ClockActionResult.Success,
-                await EndPauseAsync(context.Settings, context.Employee, eventId, cancellationToken));
+                await EndPauseAsync(context.Settings, context.Employee, eventId, context.Origin, cancellationToken));
         }
 
         if (string.Equals(request.Action, "switch", StringComparison.OrdinalIgnoreCase))
@@ -141,7 +141,7 @@ public sealed class ClockService(
                 ? new ClockActionResponse(ClockActionResult.BadRequest, null)
                 : new ClockActionResponse(
                     ClockActionResult.Success,
-                    await SwitchTaskAsync(context.Settings, context.Employee, target, eventId, cancellationToken));
+                    await SwitchTaskAsync(context.Settings, context.Employee, target, eventId, context.Origin, cancellationToken));
         }
 
         return new ClockActionResponse(ClockActionResult.BadRequest, null);
@@ -200,7 +200,16 @@ public sealed class ClockService(
         var settings = settingsStore.Load();
         var employee = FindEmployeeForClockAction(
             employees, pinAttempts, settings, request.EmployeeId, request.Pin, request.NfcCardId);
-        return employee is null ? null : new EmployeeContext(settings, employee);
+        if (employee is null)
+        {
+            return null;
+        }
+
+        var origin = StampOrigin.Create(
+            MethodOf(employees, settings, employee, request.Pin, request.NfcCardId),
+            request.AuthenticatedTerminalId,
+            request.Source);
+        return new EmployeeContext(settings, employee, origin);
     }
 
     /// <summary>
@@ -236,6 +245,28 @@ public sealed class ClockService(
         return pinAttempts is null ? Verify() : pinAttempts.Authenticate(settings, employeeId, Verify);
     }
 
+    /// <summary>
+    /// Which credential opened the session of an authenticated action, for
+    /// the stamp message only (issue #146). The card wins: an employee
+    /// without a PIN also passes the PIN check with an empty PIN. Null when
+    /// neither was sent (employee without PIN, older client).
+    /// </summary>
+    public static StampMethod? MethodOf(
+        IEmployeeService employees,
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        string? pin,
+        string? nfcCardId)
+    {
+        if (!string.IsNullOrWhiteSpace(nfcCardId)
+            && string.Equals(employees.FindEmployeeByNfcCardId(settings, nfcCardId)?.Id, employee.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return StampMethod.Card;
+        }
+
+        return string.IsNullOrWhiteSpace(pin) ? null : StampMethod.Pin;
+    }
+
     /// <exception cref="PinLockedException">The employee is locked (issue #8).</exception>
     private EmployeeSettings? Authenticate(RuntimeSettings settings, string? employeeId, Func<EmployeeSettings?> verify)
     {
@@ -259,6 +290,7 @@ public sealed class ClockService(
         RuntimeSettings settings,
         EmployeeSettings employee,
         string? taskId,
+        StampOrigin? origin,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
@@ -285,7 +317,8 @@ public sealed class ClockService(
             settings,
             employee,
             "start",
-            employee.Tasks is { Length: > 0 } ? target.Label ?? TelegramMessageFactory.DefaultTaskName : null);
+            employee.Tasks is { Length: > 0 } ? target.Label ?? TelegramMessageFactory.DefaultTaskName : null,
+            origin);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return new ClockActionResponse(ClockActionResult.Success, status with { StateText = "Eingestempelt" });
     }
@@ -293,6 +326,7 @@ public sealed class ClockService(
     private async Task<ClockStatusDto> StopClockAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
+        StampOrigin? origin,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
@@ -302,7 +336,7 @@ public sealed class ClockService(
         }
 
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
-        NotifyTransition(settings, employee, "stop");
+        NotifyTransition(settings, employee, "stop", origin: origin);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Ausgestempelt" };
     }
@@ -310,6 +344,7 @@ public sealed class ClockService(
     private async Task<ClockStatusDto> StartPauseAsync(
         RuntimeSettings settings,
         EmployeeSettings employee,
+        StampOrigin? origin,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
@@ -331,7 +366,7 @@ public sealed class ClockService(
 
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
         await kimai.StartAsync(settings, employee, pause, cancellationToken);
-        NotifyTransition(settings, employee, "pauseStart");
+        NotifyTransition(settings, employee, "pauseStart", origin: origin);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "In Pause" };
     }
@@ -340,6 +375,7 @@ public sealed class ClockService(
         RuntimeSettings settings,
         EmployeeSettings employee,
         string? eventId,
+        StampOrigin? origin,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
@@ -366,7 +402,7 @@ public sealed class ClockService(
 
         await kimai.StopAsync(settings, employee, running.ActiveTimesheetId.Value, cancellationToken);
         await StartAfterStopAsync(settings, employee, resume, eventId, running.ActiveTimesheetId.Value, cancellationToken);
-        NotifyTransition(settings, employee, "pauseEnd");
+        NotifyTransition(settings, employee, "pauseEnd", origin: origin);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = "Eingestempelt" };
     }
@@ -411,6 +447,7 @@ public sealed class ClockService(
         EmployeeSettings employee,
         KimaiTimesheetTarget target,
         string? eventId,
+        StampOrigin? origin,
         CancellationToken cancellationToken)
     {
         var running = await kimai.GetStatusAsync(settings, employee, cancellationToken);
@@ -444,7 +481,7 @@ public sealed class ClockService(
             throw;
         }
 
-        NotifyTransition(settings, employee, "switch", target.Label);
+        NotifyTransition(settings, employee, "switch", target.Label, origin);
         var status = await kimai.GetStatusAsync(settings, employee, cancellationToken);
         return status with { StateText = target.Label is null ? "Zurueck zur Standard-Taetigkeit" : $"Wechsel zu {target.Label}" };
     }
@@ -556,8 +593,18 @@ public sealed class ClockService(
     /// noch scheitern lassen. Bewusst KEIN Request-CancellationToken - der
     /// Request ist nach der Response oft schon beendet.
     /// </summary>
-    private void NotifyTransition(RuntimeSettings settings, EmployeeSettings employee, string action, string? taskLabel = null)
+    private void NotifyTransition(
+        RuntimeSettings settings,
+        EmployeeSettings employee,
+        string action,
+        string? taskLabel = null,
+        StampOrigin? origin = null)
     {
+        // Wie gestempelt wurde, auch ohne Telegram (issue #146). Nie PIN oder
+        // Karten-ID - die Quelle nennt nur die Art.
+        logger?.LogInformation(
+            "Stamp {Action} for employee {EmployeeId} via {Origin}", action, employee.Id, origin?.ToString() ?? "unbekannt");
+
         if (notifier is null || !settings.TelegramEnabled)
         {
             return;
@@ -566,7 +613,7 @@ public sealed class ClockService(
         // Synchron direkt am Übergang erfasst (vor jedem await): Das ist die
         // Stempelzeit - nicht erst nach TZ-Lookup/Telegram-POST.
         var stampUtc = DateTimeOffset.UtcNow;
-        _ = SendNotificationAsync(settings, employee, action, taskLabel, stampUtc);
+        _ = SendNotificationAsync(settings, employee, action, taskLabel, origin, stampUtc);
     }
 
     private async Task SendNotificationAsync(
@@ -574,6 +621,7 @@ public sealed class ClockService(
         EmployeeSettings employee,
         string action,
         string? taskLabel,
+        StampOrigin? origin,
         DateTimeOffset stampUtc)
     {
         try
@@ -586,7 +634,7 @@ public sealed class ClockService(
             // stattdessen und landen im catch darunter.
             var timeZone = ResolveTimezone(
                 await kimai.GetCurrentUserTimezoneAsync(settings, employee, CancellationToken.None));
-            await notifier!.SendStampNotificationAsync(employee.DisplayName, action, stampUtc, timeZone, taskLabel);
+            await notifier!.SendStampNotificationAsync(employee.DisplayName, action, stampUtc, timeZone, taskLabel, origin);
         }
         catch (Exception ex)
         {
@@ -624,5 +672,5 @@ public sealed class ClockService(
         return string.IsNullOrWhiteSpace(terminalId) ? "default" : terminalId.Trim();
     }
 
-    private sealed record EmployeeContext(RuntimeSettings Settings, EmployeeSettings Employee);
+    private sealed record EmployeeContext(RuntimeSettings Settings, EmployeeSettings Employee, StampOrigin? Origin = null);
 }
