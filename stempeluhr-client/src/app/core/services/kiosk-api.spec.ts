@@ -81,14 +81,32 @@ describe('KioskApi', () => {
       expect(result).toEqual({ stateText: 'Ausgestempelt' });
     });
 
-    it.each([0, 401, 502])('passes status %i on without a second request', status => {
+    it('stamps directly when the agent is unreachable (stopped for an update)', () => {
+      let result: unknown;
+      api.clock('max', '1234', 'stop', null, null, 'ev1', { viaAgent: true }).subscribe(answer => (result = answer));
+
+      http.expectOne(agentClock).error(new ProgressEvent('error'));
+      http.expectOne('/api/kiosk/clock').flush({ stateText: 'Ausgestempelt' });
+      expect(result).toEqual({ stateText: 'Ausgestempelt' });
+    });
+
+    it.each([401, 502])('passes status %i on without a second request', status => {
       let failure: { status?: number } | undefined;
       api.clock('max', '1234', 'stop', null, null, 'ev1', { viaAgent: true }).subscribe({ error: error => (failure = error) });
 
-      if (status === 0) http.expectOne(agentClock).error(new ProgressEvent('error'));
-      else http.expectOne(agentClock).flush({}, { status, statusText: 'x' });
+      http.expectOne(agentClock).flush({}, { status, statusText: 'x' });
       http.expectNone('/api/kiosk/clock');
       expect(failure?.status).toBe(status);
+    });
+
+    it('does not stamp a second time after a timeout - the agent may have forwarded it', () => {
+      let failure: unknown;
+      api.clock('max', '1234', 'stop', null, null, 'ev1', { viaAgent: true }).subscribe({ error: error => (failure = error) });
+
+      http.expectOne(agentClock);
+      vi.advanceTimersByTime(REQUEST_TIMEOUT_MS);
+      http.expectNone('/api/kiosk/clock');
+      expect(failure).toBeInstanceOf(TimeoutError);
     });
 
     it('names the browser only for the /clock page', () => {

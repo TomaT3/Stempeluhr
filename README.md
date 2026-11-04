@@ -58,8 +58,10 @@ Browser erhält nur, was er zur Bedienung braucht.
    (`POST /terminal/clock`), der das Terminal-Token ergänzt. So kennt die API
    das Terminal für die Telegram-Meldung. PIN oder Karte authentifizieren die
    Aktion weiterhin; ein ungültiges Token bucht ohne Terminal-Angabe. Kennt
-   ein älterer Agent die Route nicht, ruft der Kiosk `/api/kiosk/clock`
-   direkt auf.
+   ein älterer Agent die Route nicht (404), fehlt ihm das Token (503) oder
+   ist er nicht erreichbar (z. B. während eines Updates), ruft der Kiosk
+   `/api/kiosk/clock` direkt auf. Nach einem Timeout nicht: Der Agent könnte
+   den Stempel schon weitergegeben haben, er geht in die Queue.
 3. **Offline:** Scheitert der Aufruf (kein Netz, Timeout nach 8 s, Server-
    oder Kimai-Fehler) oder ist der Ausfall schon bekannt, landet die Aktion mit
    echtem Zeitstempel in der Offline-Queue des Browsers.

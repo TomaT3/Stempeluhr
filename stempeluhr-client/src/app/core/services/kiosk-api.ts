@@ -1,4 +1,4 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { catchError, throwError, timeout } from 'rxjs';
 
@@ -87,12 +87,18 @@ export class KioskApi {
     }
     // Über den Agenten erfährt der Server das Terminal (Issue #146). Ein
     // älterer Agent kennt die Route nicht (404), einer ohne Token antwortet
-    // 503 - beides kam nie beim Server an: dann direkt, wie bisher.
+    // 503, ein gestoppter Agent (Update, Absturz) ist nicht erreichbar (0) -
+    // in allen drei Fällen kam nichts beim Server an: dann direkt, wie
+    // bisher. Sonst bliebe ein PIN-Stempel in der Queue, deren Nachtrag
+    // ebenfalls nur über den Agenten läuft. Ein Timeout (kein HTTP-Status)
+    // fällt nicht zurück: der Agent könnte die Anfrage schon weitergegeben haben.
     return this.http
       .post<ClockStatus>(`http://127.0.0.1:${this.agentPort}/terminal/clock`, body)
       .pipe(
         timeout(REQUEST_TIMEOUT_MS),
-        catchError(error => error?.status === 404 || error?.status === 503 ? direct : throwError(() => error)),
+        catchError(error =>
+          error instanceof HttpErrorResponse && [0, 404, 503].includes(error.status) ? direct : throwError(() => error),
+        ),
       );
   }
 
