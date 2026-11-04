@@ -260,6 +260,82 @@ def test_terminal_proxy() -> None:
         upstream.server_close()
 
 
+def test_terminal_clock_proxy() -> None:
+    """Live stamps via the agent name the terminal (issue #146)."""
+    import http.server
+    seen = []
+    answer = {"status": 200, "body": b'{"state":"working"}'}
+    class Upstream(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append((self.path, dict(self.headers), payload))
+            self.send_response(answer["status"])
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(answer["body"])
+        def log_message(self, *args):
+            pass
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=upstream.serve_forever, daemon=True).start()
+    config = AgentConfig(api_base_url=f"http://127.0.0.1:{upstream.server_port}",
+                         terminal_id="pi-1", terminal_token="private-terminal-token",
+                         debounce_seconds=3, reader_name_contains=None)
+    agent = LocalScanServer(port=0, allowed_origin=KIOSK, config=config)
+    agent.start_background()
+
+    def clock(payload, origin=KIOSK, base=None):
+        req = urllib.request.Request((base or agent.url) + "/terminal/clock", data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+        if origin:
+            req.add_header("Origin", origin)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    try:
+        body = {"employeeId": "max", "pin": "", "action": "start", "nfcCardId": "04AB", "eventId": "e1"}
+        status, result = clock(body)
+        assert (status, result) == (200, {"state": "working"}), (status, result)
+        path, headers, forwarded = seen[-1]
+        assert path == "/api/kiosk/clock"
+        assert headers["Authorization"] == "Bearer private-terminal-token"
+        assert headers["X-Terminal-Id"] == "pi-1"
+        # Unlike the sync proxy the credentials stay: they authenticate the stamp.
+        assert forwarded == body, forwarded
+
+        # The kiosk shows 4xx answers (message only) and queues 5xx.
+        answer.update(status=429, body=b'{"message":"Gesperrt","detail":"secret"}')
+        assert clock(body) == (429, {"message": "Gesperrt"})
+        answer.update(status=401, body=b'')
+        assert clock(body) == (401, {"error": "terminal request rejected"})
+        answer.update(status=500, body=b'{"message":"stack"}')
+        assert clock(body) == (502, {"error": "server unavailable"})
+        # 404 means "agent without this route" to the kiosk - never forwarded.
+        answer.update(status=404, body=b'{}')
+        assert clock(body) == (502, {"error": "server unavailable"})
+
+        count = len(seen)
+        assert clock(body, origin=None)[0] == 403
+        assert clock(body, origin=FOREIGN)[0] == 403
+        assert clock([1, 2])[0] == 400
+        assert len(seen) == count
+
+        unconfigured = LocalScanServer(port=0, allowed_origin=KIOSK)
+        unconfigured.start_background()
+        try:
+            assert clock(body, base=unconfigured.url)[0] == 503
+        finally:
+            unconfigured.shutdown()
+            unconfigured.server_close()
+    finally:
+        agent.shutdown()
+        agent.server_close()
+        upstream.shutdown()
+        upstream.server_close()
+
+
 def main() -> int:
     test_origin_of()
     test_config_origin()
@@ -362,6 +438,7 @@ def main() -> int:
         server2.server_close()
 
     test_terminal_proxy()
+    test_terminal_clock_proxy()
     print("LocalScanServer: all tests passed")
     return 0
 

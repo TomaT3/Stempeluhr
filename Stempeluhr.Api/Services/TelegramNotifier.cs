@@ -24,11 +24,12 @@ public sealed class TelegramNotifier(
         string action,
         DateTimeOffset stampUtc,
         TimeZoneInfo timeZone,
-        string? taskLabel = null)
+        string? taskLabel = null,
+        StampOrigin? origin = null)
     {
         try
         {
-            var text = TelegramMessageFactory.Build(employeeName, action, stampUtc, timeZone, taskLabel);
+            var text = TelegramMessageFactory.Build(employeeName, action, stampUtc, timeZone, taskLabel, origin);
             await SendMessageAsync(text);
         }
         catch (Exception ex)

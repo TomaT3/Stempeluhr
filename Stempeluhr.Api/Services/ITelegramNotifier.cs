@@ -10,13 +10,15 @@ public interface ITelegramNotifier
     /// <paramref name="taskLabel"/> nennt beim Einstempeln die Tätigkeit
     /// (null = ohne Angabe) und beim Tätigkeitswechsel das Ziel (null =
     /// zurück zur Standard-Tätigkeit).
+    /// <paramref name="origin"/>: wie gestempelt wurde, null = unbekannt.
     /// </summary>
     Task SendStampNotificationAsync(
         string employeeName,
         string action,
         DateTimeOffset stampUtc,
         TimeZoneInfo timeZone,
-        string? taskLabel = null);
+        string? taskLabel = null,
+        StampOrigin? origin = null);
 
     /// <summary>Returns true only when Telegram accepted the message.</summary>
     Task<bool> SendMessageAsync(string text);

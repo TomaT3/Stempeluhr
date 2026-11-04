@@ -258,7 +258,8 @@ public sealed class WorkTimeAlertServiceTests : IDisposable
         public List<string> Messages { get; } = [];
 
         public Task SendStampNotificationAsync(
-            string employeeName, string action, DateTimeOffset stampUtc, TimeZoneInfo timeZone, string? taskLabel = null) =>
+            string employeeName, string action, DateTimeOffset stampUtc, TimeZoneInfo timeZone, string? taskLabel = null,
+            StampOrigin? origin = null) =>
             Task.CompletedTask;
 
         public Task<bool> SendMessageAsync(string text)

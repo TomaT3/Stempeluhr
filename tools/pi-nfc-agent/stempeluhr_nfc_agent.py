@@ -206,6 +206,9 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         if self.path == "/terminal/sync":
             self._terminal_proxy("/api/kiosk/clock/sync", post=True)
             return
+        if self.path == "/terminal/clock":
+            self._terminal_clock()
+            return
         # Read the (ignored) body first: closing the socket with unread data
         # can reset the connection before the client sees the answer.
         length = int(self.headers.get("Content-Length") or 0)
@@ -277,6 +280,59 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             error.close()
             self._send_json(error.code if error.code in (400, 401, 403, 429) else 502,
                             {"error": "terminal request rejected"})
+        except (OSError, ValueError):
+            self._send_json(502, {"error": "server unavailable"})
+
+    def _terminal_clock(self) -> None:
+        """Live stamp via the agent, so the server learns the terminal (issue #146).
+
+        Unlike the sync proxy the body passes unchanged: PIN or card still
+        authenticate the action, the token only names the terminal. The kiosk
+        shows 4xx answers and queues 5xx and timeouts, so the status passes
+        through; of an error body only its message.
+        """
+        server: LocalScanServer = self.server.scan_server
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 8192:
+                raise ValueError()
+            payload = json.loads(self.rfile.read(length))
+            if not isinstance(payload, dict):
+                raise ValueError()
+        except (OSError, ValueError):
+            self.close_connection = True
+            self._send_json(400, {"error": "invalid clock request"})
+            return
+        origin = self.headers.get("Origin")
+        if not origin or not server.allowed_origin or not server.allows_origin(origin):
+            self._send_json(403, {"error": "origin not allowed"}, allow_origin=False)
+            return
+        config = server.config
+        if config is None or not config.terminal_token:
+            # The kiosk then stamps directly, without the terminal.
+            self._send_json(503, {"error": "terminal token not configured"})
+            return
+        body = json.dumps(payload).encode("utf-8")
+        try:
+            with upstream_request(config, "/api/kiosk/clock", body, timeout=10) as response:
+                result = json.load(response)
+            self._send_json(200, result)
+        except urllib.error.HTTPError as error:
+            # 404 stays the answer of an agent without this route (kiosk falls
+            # back to stamping directly) - never of the server.
+            if not 400 <= error.code < 500 or error.code == 404:
+                error.close()
+                self._send_json(502, {"error": "server unavailable"})
+                return
+            message = None
+            try:
+                answer = json.loads(error.read(4096))
+                if isinstance(answer, dict) and isinstance(answer.get("message"), str):
+                    message = answer["message"][:300]
+            except (OSError, ValueError):
+                pass
+            error.close()
+            self._send_json(error.code, {"message": message} if message else {"error": "terminal request rejected"})
         except (OSError, ValueError):
             self._send_json(502, {"error": "server unavailable"})
 

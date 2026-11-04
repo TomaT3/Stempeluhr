@@ -233,6 +233,25 @@ public sealed class OfflineClockServiceTests
     }
 
     [Fact]
+    public async Task ReplayedStamps_NameTheSourceOfTheOriginalAction()
+    {
+        // Issue #146: the card that matched, the PIN, the terminal that
+        // authenticated the batch and the /clock hint of the client.
+        var (service, stamps, _) = CreateServiceWithStamps();
+
+        await service.SyncKioskAsync([
+            new OfflineKioskClockEventDto("o1", "max", null, "start", T08, NfcCardId: "04AB"),
+            Kiosk("o2", "pauseStart", T10),
+            Kiosk("o3", "pauseEnd", T12, "") with { Source = "card", AuthenticatedTerminalId = "pi-1" },
+            Kiosk("o4", "stop", T1230) with { Source = "web" },
+        ]);
+
+        Assert.Equal(
+            ["Karte am Terminal", null, "Karte am Terminal pi-1", "Webbrowser"],
+            Assert.Single(stamps.Rounds).Select(stamp => stamp.Origin?.Describe()));
+    }
+
+    [Fact]
     public async Task DisabledTelegram_CollectsNoStamps()
     {
         var (service, stamps, kimai) = CreateServiceWithStamps(enabled: false);
@@ -2259,7 +2278,8 @@ public sealed class OfflineClockServiceTests
         }
         public Task<bool> SendAlertAsync(string text) => throw new NotSupportedException();
         public Task SendStampNotificationAsync(string employeeName, string action, DateTimeOffset stampUtc,
-            TimeZoneInfo timeZone, string? taskLabel = null) => Task.CompletedTask;
+            TimeZoneInfo timeZone, string? taskLabel = null,
+            StampOrigin? origin = null) => Task.CompletedTask;
     }
 
     private sealed class ManualClock(DateTimeOffset now) : TimeProvider

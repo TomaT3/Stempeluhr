@@ -13,7 +13,8 @@ public sealed record AppliedOfflineStamp(
     string EmployeeName,
     string Action,
     DateTimeOffset PerformedAt,
-    string? TaskLabel = null);
+    string? TaskLabel = null,
+    StampOrigin? Origin = null);
 
 public interface IOfflineStampNotifier
 {

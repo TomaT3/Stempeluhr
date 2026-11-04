@@ -61,11 +61,15 @@ public static class KioskEndpoints
         }).AddEndpointFilter(PinLockedException.Filter);
 
         app.MapPost("/api/kiosk/clock", async (
+            HttpRequest httpRequest,
             KioskClockRequest request,
             IClockService clockService,
+            IRuntimeSettingsStore settingsStore,
+            ILogger<Program> logger,
             CancellationToken cancellationToken) =>
         {
-            var status = await clockService.ClockAsync(request, cancellationToken);
+            var status = await clockService.ClockAsync(
+                WithVerifiedTerminal(httpRequest, request, settingsStore.Load(), logger), cancellationToken);
 
             return status.Result switch
             {
@@ -172,5 +176,28 @@ public static class KioskEndpoints
         });
 
         return app;
+    }
+
+    /// <summary>
+    /// The terminal of a live stamp (issue #146) comes from the agent proxy's
+    /// token, never from the body; it only names the source of the stamp.
+    /// PIN or card authenticate the action as before. A stale token (rotated
+    /// in the admin) must therefore not cost the stamp - the kiosk would drop
+    /// it as a permanent error. It books without a terminal name instead.
+    /// </summary>
+    public static KioskClockRequest WithVerifiedTerminal(
+        HttpRequest httpRequest, KioskClockRequest request, RuntimeSettings settings, ILogger logger)
+    {
+        if (!TerminalAuthentication.IsTerminalRequest(httpRequest))
+        {
+            return request with { AuthenticatedTerminalId = null };
+        }
+
+        var terminalId = TerminalAuthentication.Authenticate(httpRequest, settings);
+        if (terminalId is null)
+        {
+            logger.LogWarning("Kiosk clock with an invalid terminal token - booking without a terminal");
+        }
+        return request with { AuthenticatedTerminalId = terminalId };
     }
 }

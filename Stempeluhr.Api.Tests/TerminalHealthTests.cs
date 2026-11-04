@@ -305,7 +305,8 @@ public sealed class TerminalHealthTests
         public List<string> Alerts { get; } = [];
 
         public Task SendStampNotificationAsync(
-            string employeeName, string action, DateTimeOffset stampUtc, TimeZoneInfo timeZone, string? taskLabel = null) =>
+            string employeeName, string action, DateTimeOffset stampUtc, TimeZoneInfo timeZone, string? taskLabel = null,
+            StampOrigin? origin = null) =>
             throw new NotSupportedException();
 
         public Task<bool> SendMessageAsync(string text) => throw new NotSupportedException();

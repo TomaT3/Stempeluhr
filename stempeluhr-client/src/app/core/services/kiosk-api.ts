@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
-import { timeout } from 'rxjs';
+import { catchError, throwError, timeout } from 'rxjs';
 
 import { Absence, KioskAbsenceOverview, SubmitAbsence } from '../models/absence.models';
 import {
@@ -16,6 +16,7 @@ import {
   SubmitCorrection,
   WorkTimeHints,
 } from '../models/kiosk.models';
+import { LOCAL_NFC_SCAN_PORT } from './local-nfc-scan.service';
 
 /** Timeout für den read-only identify-Call (Kiosk bleibt sonst stumm bei hängendem Backend). */
 export const IDENTIFY_TIMEOUT_MS = 10_000;
@@ -45,11 +46,20 @@ function authBody(auth: CorrectionAuth): CorrectionAuth {
   return { employeeId: auth.employeeId, pin: auth.pin, nfcCardId: auth.nfcCardId };
 }
 
+/** Woher ein Stempel kommt (Issue #146). */
+export interface ClockOptions {
+  /** Über den Agenten des authentifizierten Terminals senden. */
+  viaAgent?: boolean;
+  /** Nur die Seite /clock sagt das: 'web'. Karte oder PIN erkennt der Server selbst. */
+  source?: 'web' | null;
+}
+
 @Injectable({
   providedIn: 'root',
 })
 export class KioskApi {
   private readonly http = inject(HttpClient);
+  private readonly agentPort = inject(LOCAL_NFC_SCAN_PORT);
 
   pinLogin(pin: string) {
     return this.http.post<KioskEmployeeSession>('/api/kiosk/pin-login', { pin }).pipe(timeout(REQUEST_TIMEOUT_MS));
@@ -68,10 +78,22 @@ export class KioskApi {
     nfcCardId: string | null = null,
     taskId: string | null = null,
     eventId: string | null = null,
+    options: ClockOptions = {},
   ) {
+    const body = { employeeId, pin, action, nfcCardId, taskId, eventId, ...(options.source ? { source: options.source } : {}) };
+    const direct = this.http.post<ClockStatus>('/api/kiosk/clock', body).pipe(timeout(REQUEST_TIMEOUT_MS));
+    if (!options.viaAgent) {
+      return direct;
+    }
+    // Über den Agenten erfährt der Server das Terminal (Issue #146). Ein
+    // älterer Agent kennt die Route nicht (404), einer ohne Token antwortet
+    // 503 - beides kam nie beim Server an: dann direkt, wie bisher.
     return this.http
-      .post<ClockStatus>('/api/kiosk/clock', { employeeId, pin, action, nfcCardId, taskId, eventId })
-      .pipe(timeout(REQUEST_TIMEOUT_MS));
+      .post<ClockStatus>(`http://127.0.0.1:${this.agentPort}/terminal/clock`, body)
+      .pipe(
+        timeout(REQUEST_TIMEOUT_MS),
+        catchError(error => error?.status === 404 || error?.status === 503 ? direct : throwError(() => error)),
+      );
   }
 
   /**

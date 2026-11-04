@@ -41,9 +41,24 @@ Browser erhält nur, was er zur Bedienung braucht.
    die Kiosk-App bestätigt den Scan (`POST /scan/ack`) und löst die Karte über
    ihren lokalen Cache bzw. online über `/api/kiosk/identify` auf.
    **Ein Scan bucht nie.**
+   - **Kiosk-Sitzung:** Eine per Karte oder PIN geöffnete Sitzung kehrt nach
+     60 s ohne Berührung oder Taste in den Ruhezustand zurück, auch offline
+     und auch ohne Aktion. Ein Kartenscan zählt nicht als Eingabe.
+   - **Andere Karte in offener Sitzung:** Die Sitzung endet, und die Karte
+     wird wie im Ruhezustand ausgewertet. Sie öffnet also die Sitzung ihres
+     Mitarbeiters, eine unbekannte Karte lässt den Kiosk im Ruhezustand. Das
+     gilt auch für eine PIN-Sitzung. Die Karte der Sitzung selbst ändert
+     nichts und startet nur die 60 s neu. Während eine Aktion läuft oder ein
+     Korrektur- bzw. Abwesenheitsantrag offen ist, wird der Scan nur quittiert.
 2. **Stempeln:** Der gewählte Knopf ruft `/api/kiosk/clock` auf; die API
    bucht in Kimai (Pause = Wechsel auf die Pause-Aktivität, Tätigkeitswechsel
    = Wechsel auf Projekt/Aktivität einer weiteren Tätigkeit, siehe unten).
+   Ein Terminal mit Token schickt den Aufruf über seinen Agenten
+   (`POST /terminal/clock`), der das Terminal-Token ergänzt. So kennt die API
+   das Terminal für die Telegram-Meldung. PIN oder Karte authentifizieren die
+   Aktion weiterhin; ein ungültiges Token bucht ohne Terminal-Angabe. Kennt
+   ein älterer Agent die Route nicht, ruft der Kiosk `/api/kiosk/clock`
+   direkt auf.
 3. **Offline:** Scheitert der Aufruf (kein Netz, Timeout nach 8 s, Server-
    oder Kimai-Fehler) oder ist der Ausfall schon bekannt, landet die Aktion mit
    echtem Zeitstempel in der Offline-Queue des Browsers.
@@ -600,9 +615,28 @@ Bei jedem echten Live-Stempel (nicht bei No-ops) schickt die API eine Nachricht 
 (Tätigkeitswechsel: `🔄 Anna Mustermann · wechselt zu Kunde X um 10:15`;
 mit weiteren Tätigkeiten nennt auch das Einstempeln die Tätigkeit:
 `🟢 Anna Mustermann · eingestempelt auf Kunde X um 08:12`).
+Jede Meldung nennt außerdem, wie gestempelt wurde:
+
+| Quelle | Zusatz |
+| --- | --- |
+| Karte am Terminal mit Token | `· Karte am Terminal stempeluhr-pi-01` |
+| PIN am Terminal mit Token | `· PIN am Terminal stempeluhr-pi-01` |
+| Seite `/clock` im Webbrowser | `· Webbrowser` |
+| Karte, Terminal ohne Token oder älterer Agent | `· Karte am Terminal` |
+| PIN eines älteren Kiosks oder Terminals ohne Token | kein Zusatz, wie bisher |
+
+Das Terminal ist die Terminal-ID aus `terminalTokens`. Sie stammt nur aus
+dem von der API geprüften Token, nie aus dem Request-Body. Karte oder PIN
+erkennt die API an der Anmeldung, die gegriffen hat. Dieselbe Quelle steht im
+API-Log (Info, `Stamp … via …`), ohne PIN und Karten-ID.
 Offline-Nachträge, die Kimai tatsächlich ändern, melden sich ebenso, mit der
 Zeit des Stempels am Terminal und dem Zusatz „nachgetragen“, z. B.
-`🟡 Anna Mustermann · Pause um 12:03 (nachgetragen)`. Mehrere Nachträge eines
+`🟡 Anna Mustermann · Pause um 12:03 (nachgetragen)`. Ist die Quelle der
+ursprünglichen Aktion bekannt, steht sie dabei:
+`🟡 Anna Mustermann · Pause um 12:03 (nachgetragen · Karte am Terminal stempeluhr-pi-01)`.
+Bei einem authentifizierten Terminal kommt die Art (Karte oder PIN) aus der
+Queue des Kiosks (`source`), weil der Agent PIN und Karte vor dem Nachtrag
+entfernt. Mehrere Nachträge eines
 Mitarbeiters aus einer Verarbeitungsrunde (Sync-Anfrage oder Outbox-Flush nach
 einem Kimai-Ausfall) kommen als ein Block `📥 Anna Mustermann · 2 Stempel
 nachgetragen` mit einer Zeile je Stempel, höchstens 15 Zeilen; lange Namen und

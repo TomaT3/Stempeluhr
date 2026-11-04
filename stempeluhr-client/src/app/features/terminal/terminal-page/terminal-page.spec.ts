@@ -21,6 +21,7 @@ import { ABSENCE_NOW, ABSENCE_OVERVIEW, absence } from '../../clock/absence-flow
 import { ABSENCE_IDLE_MS, ABSENCE_TAP_GUARD_MS } from '../../clock/absence-flow/absence-flow';
 import { CORRECTION_IDLE_MS } from '../../clock/correction-flow/correction-flow';
 import { CORRECTION_NOW, CORRECTION_TIMESHEETS, correction } from '../../clock/correction-flow/correction-fixtures';
+import { SESSION_IDLE_MS } from '../../clock/clock-workflow';
 import { TerminalPage } from './terminal-page';
 
 describe('TerminalPage', () => {
@@ -137,6 +138,7 @@ describe('TerminalPage', () => {
           provide: OfflineQueueService,
           useValue: {
             authorizeEmployee: vi.fn(),
+            isTerminalAuthenticated: vi.fn(() => false),
             authorizeEmployeeCard: vi.fn(),
             needsPin: signal(false),
             enqueueKiosk,
@@ -514,7 +516,7 @@ describe('TerminalPage', () => {
       options[1].click();
       fixture.detectChanges();
 
-      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx', expect.any(String));
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx', expect.any(String), { viaAgent: false, source: null });
       expect(fixture.componentInstance.taskPickerOpen()).toBe(false);
       expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
     });
@@ -539,7 +541,7 @@ describe('TerminalPage', () => {
       vi.advanceTimersByTime(250);
       options[1].click();
 
-      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx', expect.any(String));
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'switch', null, 'kx', expect.any(String), { viaAgent: false, source: null });
     });
 
     it('names the main task as configured and says since when the section runs', () => {
@@ -674,7 +676,7 @@ describe('TerminalPage', () => {
       options[1].click();
       fixture.detectChanges();
 
-      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx', expect.any(String));
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, 'kx', expect.any(String), { viaAgent: false, source: null });
       expect(fixture.nativeElement.querySelector('.task-label')?.textContent).toContain('Kunde X');
     });
 
@@ -685,7 +687,7 @@ describe('TerminalPage', () => {
 
       startOptions(fixture)[0].click();
 
-      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, null, expect.any(String));
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'start', null, null, expect.any(String), { viaAgent: false, source: null });
     });
 
     it('queues an offline clock-in with its task and shows that task as running', () => {
@@ -1360,7 +1362,7 @@ describe('TerminalPage', () => {
         hint(fixture)!.click();
         fixture.detectChanges();
 
-        expect(clockImpl).toHaveBeenCalledExactlyOnceWith('max', '1234', 'stop', null, null, expect.any(String));
+        expect(clockImpl).toHaveBeenCalledExactlyOnceWith('max', '1234', 'stop', null, null, expect.any(String), { viaAgent: false, source: null });
         expect(fixture.componentInstance.correctionOpen()).toBe(true);
         expect(flowTitle(fixture)).toBe('Ende');
         expect(fixture.nativeElement.querySelector('app-correction-flow .flow-context')?.textContent).toContain('Nachtdienst');
@@ -1919,6 +1921,190 @@ describe('TerminalPage', () => {
       expect(fixture.componentInstance.selectedEmployee()).toBeNull();
       expect(fixture.componentInstance.absenceOpen()).toBe(false);
       expect(fixture.nativeElement.querySelector('.login-panel')).not.toBeNull();
+    });
+  });
+
+  describe('session timeout and card switch (issue #146)', () => {
+    const anna = { ...session.employee, id: 'anna', displayName: 'Anna Beispiel', initials: 'AB' };
+
+    function cacheCards(): void {
+      window.localStorage.setItem(
+        'stempeluhr.employee-card-cache.v1',
+        JSON.stringify({ '04ABCD': session.employee, '04EEFF': anna }),
+      );
+    }
+
+    /** One scan, picked up by the next local poll (the agent reports it once). */
+    function scan(fixture: ComponentFixture<TerminalPage>, cardId: string): void {
+      localScanValue = { cardId, scannedAt: new Date().toISOString(), consumed: false };
+      vi.advanceTimersByTime(1_000);
+      localScanValue = null;
+      fixture.detectChanges();
+    }
+
+    function pinSession(): ComponentFixture<TerminalPage> {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlock(fixture);
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    function employeeId(fixture: ComponentFixture<TerminalPage>): string | undefined {
+      return fixture.componentInstance.selectedEmployee()?.id;
+    }
+
+    it('ends a card session after a minute without input, even without any action', () => {
+      cacheCards();
+      const fixture = TestBed.createComponent(TerminalPage);
+      scan(fixture, '04abcd');
+      expect(employeeId(fixture)).toBe('max');
+
+      vi.advanceTimersByTime(SESSION_IDLE_MS - 1);
+      expect(employeeId(fixture)).toBe('max');
+
+      vi.advanceTimersByTime(1);
+      expect(fixture.componentInstance.selectedEmployee()).toBeNull();
+      expect(fixture.componentInstance.isUnlocked()).toBe(false);
+    });
+
+    it('starts the minute anew with every touch or key', () => {
+      const fixture = pinSession();
+      vi.advanceTimersByTime(SESSION_IDLE_MS - 1_000);
+      document.dispatchEvent(new Event('pointerdown'));
+      vi.advanceTimersByTime(SESSION_IDLE_MS - 1_000);
+      document.dispatchEvent(new Event('keydown'));
+      vi.advanceTimersByTime(SESSION_IDLE_MS - 1);
+      expect(employeeId(fixture)).toBe('max');
+
+      vi.advanceTimersByTime(1);
+      expect(fixture.componentInstance.selectedEmployee()).toBeNull();
+    });
+
+    it('never ends the session under a running action', () => {
+      clockImpl.mockReturnValue(new Subject<ClockStatus>());
+      const fixture = pinSession();
+      fixture.componentInstance.stop();
+
+      vi.advanceTimersByTime(SESSION_IDLE_MS * 2);
+
+      expect(employeeId(fixture)).toBe('max');
+      expect(fixture.componentInstance.isBusy()).toBe(true);
+    });
+
+    it('ends an offline session too, a minute after the queued stamp', () => {
+      const fixture = pinSession();
+      fixture.componentInstance.stop();
+      expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+      expect(employeeId(fixture)).toBe('max');
+
+      vi.advanceTimersByTime(SESSION_IDLE_MS - 1);
+      expect(employeeId(fixture)).toBe('max');
+      vi.advanceTimersByTime(1);
+      expect(fixture.componentInstance.selectedEmployee()).toBeNull();
+    });
+
+    it('switches to the colleague whose card is scanned into an open session', () => {
+      cacheCards();
+      const fixture = pinSession();
+      expect(fixture.componentInstance.hoursOverview()).not.toBeNull();
+
+      scan(fixture, '04eeff');
+
+      expect(employeeId(fixture)).toBe('anna');
+      expect(fixture.componentInstance.pin()).toBe('');
+      // Nothing of Max's session stays on screen.
+      expect(fixture.componentInstance.hoursOverview()).toBeNull();
+      expect(fixture.componentInstance.message()).toContain('Anna Beispiel');
+    });
+
+    it('keeps the session for the same card and starts its minute anew', () => {
+      cacheCards();
+      const fixture = TestBed.createComponent(TerminalPage);
+      scan(fixture, '04abcd');
+      fixture.componentInstance.message.set('Bitte Aktion wählen');
+      vi.advanceTimersByTime(SESSION_IDLE_MS - 2_000);
+
+      scan(fixture, '04:AB:CD');
+      vi.advanceTimersByTime(SESSION_IDLE_MS - 1);
+
+      expect(employeeId(fixture)).toBe('max');
+      expect(fixture.componentInstance.message()).toBe('Bitte Aktion wählen');
+    });
+
+    it('does not switch while an action is in flight', () => {
+      cacheCards();
+      const late = new Subject<ClockStatus>();
+      clockImpl.mockReturnValue(late);
+      const fixture = pinSession();
+      fixture.componentInstance.stop();
+
+      scan(fixture, '04eeff');
+
+      expect(employeeId(fixture)).toBe('max');
+      expect(fixture.componentInstance.message()).toBe('Karte erkannt - bitte kurz warten.');
+    });
+
+    it('closes the foreign session for an unknown card as well', () => {
+      const fixture = pinSession();
+
+      scan(fixture, '04999999');
+
+      expect(fixture.componentInstance.selectedEmployee()).toBeNull();
+      expect(fixture.componentInstance.hoursOverview()).toBeNull();
+    });
+
+    it('drops the hours of the previous employee that arrive after a card switch', () => {
+      cacheCards();
+      const late = new Subject<HoursOverview>();
+      hoursOverview.mockReturnValue(late);
+      const fixture = pinSession();
+
+      scan(fixture, '04eeff');
+      late.next(overview);
+
+      expect(employeeId(fixture)).toBe('anna');
+      expect(fixture.componentInstance.hoursOverview()).toBeNull();
+    });
+
+    it('drops a late stamp answer of the previous session', () => {
+      cacheCards();
+      const late = new Subject<ClockStatus>();
+      clockImpl.mockReturnValue(late);
+      const fixture = pinSession();
+      fixture.componentInstance.stop();
+      fixture.componentInstance.back();
+      scan(fixture, '04eeff');
+
+      late.next({ ...status, stateText: 'Ausgestempelt' });
+      vi.advanceTimersByTime(5_000);
+
+      expect(employeeId(fixture)).toBe('anna');
+      expect(fixture.componentInstance.message()).not.toBe('Ausgestempelt');
+    });
+
+    it('stamps through the agent once the terminal is authenticated', () => {
+      const queue = TestBed.inject(OfflineQueueService) as unknown as { isTerminalAuthenticated: ReturnType<typeof vi.fn> };
+      queue.isTerminalAuthenticated.mockReturnValue(true);
+      clockImpl.mockReturnValue(of(status));
+      const fixture = pinSession();
+
+      fixture.componentInstance.stop();
+
+      expect(queue.isTerminalAuthenticated).toHaveBeenCalledWith('term-1');
+      expect(clockImpl).toHaveBeenCalledWith('max', '1234', 'stop', null, null, expect.any(String), { viaAgent: true, source: null });
+    });
+
+    it('queues how the session was opened with an offline stamp', () => {
+      cacheCards();
+      const fixture = TestBed.createComponent(TerminalPage);
+      scan(fixture, '04abcd');
+      fixture.componentInstance.stop();
+      expect(enqueueKiosk).toHaveBeenLastCalledWith(expect.objectContaining({ source: 'card', nfcCardId: '04ABCD' }));
+
+      fixture.componentInstance.back();
+      unlock(fixture);
+      fixture.componentInstance.stop();
+      expect(enqueueKiosk).toHaveBeenLastCalledWith(expect.objectContaining({ source: 'pin', pin: '1234' }));
     });
   });
 });

@@ -61,6 +61,12 @@ const CHOICE_TAP_GUARD_MS = 400;
 const RESET_MS = 2200;
 /** Dasselbe, wenn die Antwort eine Warnung trägt (z. B. abgelehnter Wechsel, Issue #56). */
 const WARNING_RESET_MS = 6000;
+/**
+ * Eine per Karte oder PIN geöffnete Sitzung ohne Eingabe kehrt danach in den
+ * Ruhezustand zurück, auch offline (Issue #146): sonst stempelt der Nächste
+ * in der Sitzung seines Vorgängers. Ein Kartenscan zählt nicht als Eingabe.
+ */
+export const SESSION_IDLE_MS = 60_000;
 /** Läuft ein Abschnitt länger, bietet die Sitzung „Vergessen auszustempeln?“ an. */
 const FORGOT_STOP_AFTER_SECONDS = 12 * 3600;
 
@@ -79,9 +85,17 @@ interface PendingStamp {
   nfcCardId: string | null;
   /** Task of a 'start' or target of a 'switch' (null = default task); frozen with the identity. */
   task: EmployeeTask | null;
+  /** How the session was opened, for the stamp message of a replay (issue #146). */
+  source: 'card' | 'pin' | 'web' | null;
 }
 
-@Directive()
+@Directive({
+  host: {
+    // Jede Berührung und jede Taste hält eine offene Sitzung offen (SESSION_IDLE_MS).
+    '(document:pointerdown)': 'touchSession()',
+    '(document:keydown)': 'touchSession()',
+  },
+})
 export abstract class ClockWorkflow implements OnDestroy {
   private readonly kioskApi = inject(KioskApi);
   private readonly audioFeedback = inject(AudioFeedback);
@@ -342,6 +356,8 @@ export abstract class ClockWorkflow implements OnDestroy {
    * offline). The reset then runs once connectivity has recovered.
    */
   private pendingResetOnRecovery = false;
+  /** Beendet eine Sitzung ohne Eingabe (SESSION_IDLE_MS). */
+  private sessionIdleTimer: number | null = null;
   private readonly terminalId = this.readTerminalId();
   /** `source` der Korrekturanträge: Terminal-ID oder `clock`. */
   readonly correctionSource = this.terminalId ?? 'clock';
@@ -563,12 +579,14 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (!pin) {
       return;
     }
+    const generation = this.sessionGeneration;
     this.kioskApi.hoursOverview(pin).subscribe({
       next: hours => {
         // Stale Responses verwerfen: nach back()/Identitätswechsel ist pin()
         // leer, nach einem neuen Login unterscheidet der PIN - so können die
         // Stunden des Vorgängers nie unter einem anderen Namen erscheinen.
-        if (this.pin() === pin) {
+        // Die Generation fängt dazu den Wechsel per Karte und zurück ab.
+        if (this.pin() === pin && generation === this.sessionGeneration) {
           this.hoursOverview.set(hours);
         }
       },
@@ -634,6 +652,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.nfcCardId = null;
         this.message.set('');
         this.isBusy.set(false);
+        this.armSessionIdle();
         // PIN und Status für den nächsten Ausfall merken: der Kiosk kann sich
         // dann offline anmelden und den plausiblen Stempel-Button anbieten.
         if (!this.replayStatusPending()) rememberObservedStatus(session.employee.id, session.status);
@@ -912,6 +931,43 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clearWorkTimeHints();
     this.resetSessionChoices();
     this.pendingResetOnRecovery = false;
+    this.clearSessionIdle();
+  }
+
+  /** Eingabe am Gerät: eine offene Sitzung läuft wieder volle SESSION_IDLE_MS. */
+  touchSession(): void {
+    if (this.isUnlocked()) {
+      this.armSessionIdle();
+    }
+  }
+
+  private armSessionIdle(): void {
+    this.clearSessionIdle();
+    this.sessionIdleTimer = window.setTimeout(() => this.onSessionIdle(), SESSION_IDLE_MS);
+  }
+
+  private clearSessionIdle(): void {
+    if (this.sessionIdleTimer !== null) {
+      window.clearTimeout(this.sessionIdleTimer);
+      this.sessionIdleTimer = null;
+    }
+  }
+
+  /**
+   * Keine Eingabe seit SESSION_IDLE_MS. Eine laufende Aktion beendet die
+   * Sitzung selbst; Korrektur und Abwesenheit haben eigene, längere
+   * Timeouts. In allen drei Fällen später erneut prüfen.
+   */
+  private onSessionIdle(): void {
+    this.sessionIdleTimer = null;
+    if (!this.isUnlocked()) {
+      return;
+    }
+    if (this.isBusy() || this.correctionOpen() || this.absenceOpen()) {
+      this.armSessionIdle();
+      return;
+    }
+    this.back();
   }
 
   /**
@@ -1001,6 +1057,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     if (this.resetTimer) {
       window.clearTimeout(this.resetTimer);
     }
+    this.clearSessionIdle();
 
     if (this.connectivityPollTimer) {
       window.clearInterval(this.connectivityPollTimer);
@@ -1087,19 +1144,35 @@ export abstract class ClockWorkflow implements OnDestroy {
     // Deliberately runs even while isBusy(): a stamp request can take up to
     // its timeout, and an unacked scan blocks the agent's reader loop for
     // the whole selection timeout. Consuming scans is always safe - it only
-    // acks, never stamps. Also consume scans while UNLOCKED (offline the
-    // kiosk stays unlocked) for the same reason. We only ack here; no
-    // employee switch while an action is in flight.
+    // acks, never stamps.
     if (this.isUnlocked()) {
       this.localNfcScan.poll().subscribe(scan => {
         if (!scan) {
           return;
         }
 
-        this.localNfcScan.ack().subscribe();
-        this.message.set(
-          'Karte erkannt - bitte zuerst abmelden oder Aktion waehlen.',
-        );
+        // Die Karte der Sitzung: Der Mitarbeiter steht noch da.
+        if (this.nfcCardId !== null && (normalizeCardId(scan.cardId) ?? scan.cardId) === this.nfcCardId) {
+          this.localNfcScan.ack().subscribe();
+          this.touchSession();
+          return;
+        }
+        // Kein Wechsel, solange eine Aktion läuft (ihre Antwort gehört noch
+        // zu dieser Sitzung) oder ein Antrag halb ausgefüllt ist - beide
+        // enden von selbst, der Antrag nach seinem eigenen Timeout.
+        if (this.isBusy() || this.correctionOpen() || this.absenceOpen()) {
+          this.localNfcScan.ack().subscribe();
+          this.message.set(this.isBusy()
+            ? 'Karte erkannt - bitte kurz warten.'
+            : 'Karte erkannt - bitte zuerst den Antrag abschließen.');
+          return;
+        }
+        // Eine andere Karte (auch in einer PIN-Sitzung): Jemand anderes
+        // steht am Terminal (Issue #146). Die Sitzung endet, bevor die Karte
+        // wie im Ruhezustand ausgewertet wird - auch eine unbekannte Karte
+        // lässt die fremde Sitzung nicht offen.
+        this.back();
+        this.handleLocalScan(scan.cardId);
       });
       return;
     }
@@ -1319,6 +1392,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     // previous employee (privacy) - and without a pin no reload happens.
     this.hoursOverview.set(null);
     this.clearWorkTimeHints();
+    this.armSessionIdle();
   }
 
   /** Reload only after this employee's backlog has drained; stale login/status
@@ -1398,6 +1472,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       pin: this.pin(),
       nfcCardId: this.nfcCardId,
       task: taskId === null ? null : (this.employeeTasks().find(task => task.id === taskId) ?? { id: taskId, label: 'Tätigkeit' }),
+      source: !this.terminalId ? 'web' : this.nfcCardId ? 'card' : this.pin() ? 'pin' : null,
     };
 
     // Known outage: queue right away instead of letting the employee wait
@@ -1408,13 +1483,21 @@ export abstract class ClockWorkflow implements OnDestroy {
       return;
     }
 
-    this.kioskApi.clock(stamp.employeeId, stamp.pin, action, stamp.nfcCardId, stamp.task?.id ?? null, stamp.eventId).subscribe({
+    this.kioskApi.clock(stamp.employeeId, stamp.pin, action, stamp.nfcCardId, stamp.task?.id ?? null, stamp.eventId, {
+      viaAgent: this.offlineQueue.isTerminalAuthenticated(this.terminalId),
+      source: stamp.source === 'web' ? 'web' : null,
+    }).subscribe({
       next: status => {
         this.isOffline.set(false);
-        this.clockState.setStatus(status);
         if (stamp.employeeId) {
           rememberObservedStatus(stamp.employeeId, status);
         }
+        // Die Sitzung ist inzwischen eine andere (zurück, Kartenwechsel):
+        // Status, Meldung und Reset gehören ihr nicht mehr.
+        if (generation !== this.sessionGeneration) {
+          return;
+        }
+        this.clockState.setStatus(status);
         this.message.set(status.warning || status.stateText);
         this.isBusy.set(false);
         // Anders gebucht als gewählt: wie ein Fehler piepen und die Meldung
@@ -1438,10 +1521,18 @@ export abstract class ClockWorkflow implements OnDestroy {
           // failure, Kimai 408/429). Other 4xx responses are permanent (wrong
           // PIN, deleted employee, ...) - showing the error is better than
           // queuing an event that can never succeed.
+          if (generation !== this.sessionGeneration) {
+            // Queued all the same - only the screen belongs to someone else now.
+            this.enqueueStamp(stamp);
+            return;
+          }
           this.queueOffline(stamp);
           return;
         }
 
+        if (generation !== this.sessionGeneration) {
+          return;
+        }
         this.message.set('Kimai konnte nicht speichern');
         this.isBusy.set(false);
         this.audioFeedback.playBeeps(2);
@@ -1458,20 +1549,7 @@ export abstract class ClockWorkflow implements OnDestroy {
    * connectivity returns, and shows where it leaves the employee.
    */
   private queueOffline(stamp: PendingStamp): void {
-    this.offlineQueue.enqueueKiosk({
-      ...(this.terminalId ? { terminalId: this.terminalId } : {}),
-      eventId: stamp.eventId,
-      employeeId: stamp.employeeId,
-      pin: stamp.pin,
-      action: stamp.action,
-      performedAt: stamp.performedAt,
-      // Live-path parity: a session unlocked by NFC touch has NO pin - the
-      // replay resolves the employee via the card instead.
-      nfcCardId: stamp.nfcCardId,
-      taskId: stamp.task?.id ?? null,
-      employeeName: stamp.employeeName,
-    });
-    this.isOffline.set(true);
+    this.enqueueStamp(stamp);
     // Offline gibt es keine Hinweise; nach dem Nachtrag lädt
     // refreshStatusAfterReplay bzw. die nächste Anmeldung sie neu.
     this.clearWorkTimeHints();
@@ -1500,8 +1578,29 @@ export abstract class ClockWorkflow implements OnDestroy {
     // Stay unlocked instead of resetting to the idle screen: the current
     // employee may want to stamp again (e.g. pause) while the backend is
     // still unreachable. Once connectivity recovers, the recovered signal
-    // runs the deferred back().
+    // runs the deferred back(). The idle timeout still ends it (issue #146).
     this.pendingResetOnRecovery = true;
+    this.armSessionIdle();
+  }
+
+  /** Puts the stamp into the queue; the screen is up to the caller. */
+  private enqueueStamp(stamp: PendingStamp): void {
+    this.offlineQueue.enqueueKiosk({
+      ...(this.terminalId ? { terminalId: this.terminalId } : {}),
+      eventId: stamp.eventId,
+      employeeId: stamp.employeeId,
+      pin: stamp.pin,
+      action: stamp.action,
+      performedAt: stamp.performedAt,
+      // Live-path parity: a session unlocked by NFC touch has NO pin - the
+      // replay resolves the employee via the card instead.
+      nfcCardId: stamp.nfcCardId,
+      taskId: stamp.task?.id ?? null,
+      employeeName: stamp.employeeName,
+      source: stamp.source,
+    });
+    this.isOffline.set(true);
+    this.pendingRecoveryFlush = true;
   }
 
   private generateEventId(): string {

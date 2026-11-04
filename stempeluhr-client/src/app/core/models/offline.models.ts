@@ -26,6 +26,12 @@ export interface OfflineKioskClockEvent {
    */
   taskId?: string | null;
   /**
+   * How the session of this action was opened ('card', 'pin') or 'web' for
+   * the /clock page - only for the stamp message (issue #146). It survives
+   * the terminal replay, which drops pin and card. Older queues lack it.
+   */
+  source?: 'card' | 'pin' | 'web' | null;
+  /**
    * Display name of the employee, ONLY so a refused stamp can name the person
    * who has to be repaired in Kimai. The API ignores the extra field; it is
    * not part of the replay contract.

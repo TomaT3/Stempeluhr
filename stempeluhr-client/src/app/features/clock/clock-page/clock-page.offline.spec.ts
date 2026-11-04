@@ -114,6 +114,7 @@ describe('ClockPage offline behaviour', () => {
           provide: OfflineQueueService,
           useValue: {
             authorizeEmployee: vi.fn(),
+            isTerminalAuthenticated: vi.fn(() => false),
             authorizeEmployeeCard: vi.fn(),
             needsPin: signal(false),
             enqueueKiosk,
@@ -293,6 +294,8 @@ describe('ClockPage offline behaviour', () => {
     component.stop();
     clockResult.error({ status: 0 });
     expect(enqueueKiosk).toHaveBeenCalledTimes(1);
+    // The replay names the browser as the source (issue #146).
+    expect(enqueueKiosk.mock.calls[0][0].source).toBe('web');
     expect(component.isOffline()).toBe(true);
 
     // No auto-reset while offline, and no poll to recover from.
