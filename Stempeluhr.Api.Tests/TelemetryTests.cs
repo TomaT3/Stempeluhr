@@ -1,7 +1,13 @@
 using System.Diagnostics;
+using System.Reflection;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using OpenTelemetry;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Trace;
 using Stempeluhr.Api.Services;
 using Xunit;
@@ -11,7 +17,7 @@ namespace Stempeluhr.Api.Tests;
 /// <summary>
 /// Logs und Traces gehen per OTLP an OpenObserve. Ohne Endpunkt bleibt alles
 /// wie bisher; mit Endpunkt dürfen weder Telegram-Bot-Token noch Query-Strings
-/// das Haus verlassen.
+/// das Haus verlassen, und Hintergrund-Abfragen übertönen die Stempel nicht.
 /// </summary>
 public sealed class TelemetryTests
 {
@@ -52,8 +58,44 @@ public sealed class TelemetryTests
         Assert.Equal(expected, TelemetryRedactionProcessor.Redact(url));
     }
 
+    [Theory]
+    [InlineData("https://api.telegram.org/bot123:SECRET/getUpdates", false)]
+    [InlineData("http://nas:8086/api/v2/write?org=home", false)]
+    [InlineData("https://api.telegram.org/bot123:SECRET/sendMessage", true)]
+    [InlineData("https://kimai.example.com/api/timesheets", true)]
+    public void IsTracedHttpCall_SkipsPollingAndInflux(string url, bool traced)
+    {
+        Assert.Equal(traced, TelemetrySetup.IsTracedHttpCall(new HttpRequestMessage(HttpMethod.Post, url)));
+    }
+
     [Fact]
-    public void Exporter_NeverSeesBotToken_AndSkipsPolling()
+    public void ServiceVersion_IsTheReleaseTag_NotThePinnedAssemblyVersion()
+    {
+        var expected = typeof(TelemetrySetup).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
+
+        Assert.Equal(expected, TelemetrySetup.ServiceVersion);
+        Assert.NotEqual("0.0.0.0", TelemetrySetup.ServiceVersion);
+    }
+
+    [Fact]
+    public void KimaiHttpLogs_AreRaisedOnlyForTheExporter()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Configuration[TelemetrySetup.EndpointKey] = "http://nas:5080/api/default";
+        builder.AddStempeluhrTelemetry();
+
+        using var services = builder.Services.BuildServiceProvider();
+        var rule = Assert.Single(
+            services.GetRequiredService<IOptions<LoggerFilterOptions>>().Value.Rules,
+            rule => rule.CategoryName == TelemetrySetup.KimaiHttpLogCategory);
+
+        Assert.Equal(typeof(OpenTelemetryLoggerProvider).FullName, rule.ProviderName);
+        Assert.Equal(LogLevel.Warning, rule.LogLevel);
+    }
+
+    [Fact]
+    public void Exporter_KeepsCallsOfAStamp_AndFailedBackgroundCalls_ButNoBotToken()
     {
         var exported = new List<Activity>();
         using var source = new ActivitySource("Stempeluhr.Tests.Redaction." + Guid.NewGuid());
@@ -63,25 +105,107 @@ public sealed class TelemetryTests
             .AddInMemoryExporter(exported)
             .Build())
         {
-            using (var send = source.StartActivity("POST"))
+            using (source.StartActivity("kiosk.clock"))
+            using (var send = source.StartActivity("POST", ActivityKind.Client))
             {
                 send!.SetTag("url.full", "https://api.telegram.org/bot123456:SECRET/sendMessage");
                 send.SetTag("url.path", "/bot123456:SECRET/sendMessage");
             }
-            using (var poll = source.StartActivity("POST"))
+
+            using (var background = source.StartActivity("GET", ActivityKind.Client))
             {
-                poll!.SetTag("url.full", "https://api.telegram.org/bot123456:SECRET/getUpdates");
+                background!.SetTag("url.full", "https://kimai.example.com/api/timesheets?marker=ok");
             }
-            using (var influx = source.StartActivity("POST"))
+
+            using (var failed = source.StartActivity("GET", ActivityKind.Client))
             {
-                influx!.SetTag("url.full", "http://nas:8086/api/v2/write?org=home&bucket=stempeluhr");
+                failed!.SetTag("url.full", "https://kimai.example.com/api/users/me");
+                failed.SetStatus(ActivityStatusCode.Error);
             }
+
             provider!.ForceFlush();
         }
 
-        var span = Assert.Single(exported);
-        Assert.Equal("https://api.telegram.org/bot***/sendMessage", span.GetTagItem("url.full"));
-        Assert.Equal("/bot***/sendMessage", span.GetTagItem("url.path"));
-        Assert.DoesNotContain(span.TagObjects, tag => tag.Value is string value && value.Contains("SECRET"));
+        var urls = exported.Select(span => span.GetTagItem("url.full")).OfType<string>().ToArray();
+        Assert.Equal(["https://api.telegram.org/bot***/sendMessage", "https://kimai.example.com/api/users/me"], urls.Order());
+        Assert.Contains(exported, span => span.OperationName == "kiosk.clock");
+        var telegram = exported.Single(span => span.GetTagItem("url.path") is not null);
+        Assert.Equal("/bot***/sendMessage", telegram.GetTagItem("url.path"));
+        Assert.DoesNotContain(exported.SelectMany(span => span.TagObjects), tag => tag.Value is string value && value.Contains("SECRET"));
+    }
+
+    /// <summary>
+    /// Über einen echten <see cref="HttpClient"/>, nicht über gesetzte Tags:
+    /// Benennt ein Update der Instrumentierung <c>url.full</c> um, fällt das
+    /// hier auf, statt dass der Token unbemerkt exportiert wird. Kein Netz: Der
+    /// Verbindungsaufbau scheitert immer, solche Aufrufe bleiben sichtbar.
+    /// </summary>
+    [Fact]
+    public async Task RealHttpClient_RedactsTheToken_AndNeverRecordsPolling()
+    {
+        var marker = "marker" + Guid.NewGuid().ToString("N");
+        var exported = new List<Activity>();
+        using var client = new HttpClient(new SocketsHttpHandler
+        {
+            ConnectCallback = (_, _) => throw new IOException("no network in this test"),
+        });
+
+        using (var provider = Sdk.CreateTracerProviderBuilder()
+            .AddStempeluhrHttpTracing()
+            .AddInMemoryExporter(exported)
+            .Build())
+        {
+            await Assert.ThrowsAsync<HttpRequestException>(() => client.PostAsync(
+                $"http://api.telegram.org/bot123456:SECRET/{marker}?token=QUERYSECRET", null));
+            await Assert.ThrowsAsync<HttpRequestException>(() => client.PostAsync(
+                $"http://api.telegram.org/bot123456:{marker}/getUpdates", null));
+            provider!.ForceFlush();
+        }
+
+        var urls = exported.Select(span => span.GetTagItem("url.full")).OfType<string>().Where(url => url.Contains(marker)).ToArray();
+        Assert.Equal($"http://api.telegram.org/bot***/{marker}", Assert.Single(urls));
+        Assert.DoesNotContain(exported.SelectMany(span => span.TagObjects), tag => tag.Value is string value && value.Contains("SECRET"));
+    }
+
+    [Fact]
+    public void RunDetached_HidesTheSpanInside_AndRestoresIt()
+    {
+        using var parent = new Activity("stamp").Start();
+        Activity? inside = parent;
+
+        StempeluhrTelemetry.RunDetached(() => inside = Activity.Current);
+
+        Assert.Null(inside);
+        Assert.Same(parent, Activity.Current);
+    }
+}
+
+/// <summary>
+/// Sammelt Stempel-Spans einer Trace, wie unter einem eingehenden
+/// <c>traceparent</c>. Nur diese Trace: andere Testklassen laufen parallel.
+/// </summary>
+internal static class SpanCapture
+{
+    public static async Task<List<Activity>> InTraceAsync(Func<Task> act)
+    {
+        var traceId = ActivityTraceId.CreateRandom();
+        var spans = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == StempeluhrTelemetry.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if (activity.TraceId != traceId) return;
+                lock (spans) spans.Add(activity);
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using (new Activity("incoming").SetParentId(traceId, ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded).Start())
+        {
+            await act();
+        }
+        return spans;
     }
 }

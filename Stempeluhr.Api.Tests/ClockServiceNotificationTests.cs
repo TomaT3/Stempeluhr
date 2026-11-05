@@ -756,6 +756,7 @@ public sealed partial class ClockServiceNotificationTests
 
         public bool TimezoneReturnsNull { get; set; }
         public bool TimezoneThrows { get; set; }
+        public Action? OnTimezoneLookup { get; set; }
         public int TimezoneLookupCount { get; private set; }
         public int StartCalls { get; private set; }
         public int StopCalls { get; private set; }
@@ -770,6 +771,7 @@ public sealed partial class ClockServiceNotificationTests
         public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)
         {
             TimezoneLookupCount++;
+            OnTimezoneLookup?.Invoke();
             if (TimezoneThrows)
             {
                 // Transportfehler-Verhalten von KimaiClient: wirft statt null.

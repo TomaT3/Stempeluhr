@@ -106,10 +106,22 @@ public sealed class ClockService(
         var eventId = EventIdOf(request);
         using var live = eventId is null ? null : kioskEvents?.BeginLive(eventId);
 
-        using var activity = StempeluhrTelemetry.StartStamp("kiosk.clock", eventId, request.Action, context.Employee.Id);
+        using var activity = StempeluhrTelemetry.StartStamp("kiosk.clock", eventId, request.Action, context.Employee.Id, context.Employee.DisplayName);
         StempeluhrTelemetry.TagOrigin(activity, context.Origin);
-        var response = await DispatchClockActionAsync(request, context, eventId, cancellationToken);
-        // "booked" setzt NotifyTransition, sobald Kimai wirklich geändert wurde.
+        ClockActionResponse response;
+        try
+        {
+            response = await DispatchClockActionAsync(request, context, eventId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Auch wenn ein Teil schon gebucht ist (Stop ging durch, der Start danach nicht).
+            StempeluhrTelemetry.TagFailure(activity, "failed", ex);
+            throw;
+        }
+
+        // "booked" setzt NotifyTransition, sobald Kimai wirklich geändert wurde;
+        // "continued" die Ausgleichsbuchung nach einem abgelehnten Wechsel.
         if (activity?.GetTagItem("stempeluhr.outcome") is null)
         {
             StempeluhrTelemetry.TagOutcome(activity, response.Result == ClockActionResult.Success ? "noop" : "bad_request");
@@ -489,6 +501,7 @@ public sealed class ClockService(
         {
             if (await ContinuePreviousTaskAsync(settings, employee, running, target, ex, cancellationToken) is { } continued)
             {
+                StempeluhrTelemetry.TagCurrentOutcome("continued");
                 return continued;
             }
 
@@ -618,10 +631,7 @@ public sealed class ClockService(
         // Karten-ID - die Quelle nennt nur die Art.
         logger?.LogInformation(
             "Stamp {Action} for employee {EmployeeId} via {Origin}", action, employee.Id, origin?.ToString() ?? "unbekannt");
-        if (System.Diagnostics.Activity.Current is { } current && current.Source == StempeluhrTelemetry.Source)
-        {
-            StempeluhrTelemetry.TagOutcome(current, "booked");
-        }
+        StempeluhrTelemetry.TagCurrentOutcome("booked");
 
         if (notifier is null || !settings.TelegramEnabled)
         {
@@ -631,7 +641,7 @@ public sealed class ClockService(
         // Synchron direkt am Übergang erfasst (vor jedem await): Das ist die
         // Stempelzeit - nicht erst nach TZ-Lookup/Telegram-POST.
         var stampUtc = DateTimeOffset.UtcNow;
-        _ = SendNotificationAsync(settings, employee, action, taskLabel, origin, stampUtc);
+        StempeluhrTelemetry.RunDetached(() => _ = SendNotificationAsync(settings, employee, action, taskLabel, origin, stampUtc));
     }
 
     private async Task SendNotificationAsync(

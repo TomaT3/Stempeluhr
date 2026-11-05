@@ -379,8 +379,38 @@ public sealed class OfflineClockService(
     private async Task<(string Message, string State, AppliedOfflineStamp? Stamp)> ApplyKioskEventAsync(
         OfflineKioskClockEventDto entry, CancellationToken cancellationToken)
     {
+        // Vor der Anmeldung: Auch ein abgelehntes oder gepuffertes Ereignis muss
+        // über seine Event-ID auffindbar sein. Den Namen gibt es erst danach.
+        using var activity = StempeluhrTelemetry.StartStamp("offline.apply", entry.EventId, entry.Action, entry.EmployeeId, null);
+        activity?.SetTag("stempeluhr.performed_at", entry.PerformedAt.ToString("O"));
+        try
+        {
+            return await ApplyKioskEventCoreAsync(entry, activity, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            var outcome = FailureOutcome(ex);
+            StempeluhrTelemetry.TagFailure(activity, outcome, ex, isError: outcome == "rejected");
+            throw;
+        }
+    }
+
+    /// <summary>Was die Aufrufer mit der Ausnahme tun: puffern, zurückhalten oder ablehnen.</summary>
+    private static string FailureOutcome(Exception exception) => exception switch
+    {
+        PinLockedException => "locked",
+        KimaiApiException kimaiError when IsRetryable(kimaiError) => "buffered",
+        _ when IsTransientError(exception) => "buffered",
+        _ => "rejected",
+    };
+
+    private async Task<(string Message, string State, AppliedOfflineStamp? Stamp)> ApplyKioskEventCoreAsync(
+        OfflineKioskClockEventDto entry, System.Diagnostics.Activity? activity, CancellationToken cancellationToken)
+    {
         var settings = settingsStore.Load();
         var employee = ResolveKioskEmployee(settings, entry);
+        activity?.SetTag("stempeluhr.employee_id", employee.Id);
+        activity?.SetTag("stempeluhr.employee_name", employee.DisplayName);
 
         if (kioskEvents.IsLiveInFlight(entry.EventId))
         {
@@ -403,11 +433,11 @@ public sealed class OfflineClockService(
             ? StampOrigin.Create(null, entry.AuthenticatedTerminalId, entry.Source)
             : StampOrigin.Create(
                 ClockService.MethodOf(employees, settings, employee, entry.Pin, entry.NfcCardId), null, entry.Source);
-        using var activity = StempeluhrTelemetry.StartStamp("offline.apply", entry.EventId, action, employee.Id);
+        activity?.SetTag("stempeluhr.action", action);
         StempeluhrTelemetry.TagOrigin(activity, origin);
-        activity?.SetTag("stempeluhr.performed_at", entry.PerformedAt.ToString("O"));
         var outcome = await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
-        StempeluhrTelemetry.TagOutcome(activity, outcome.Mutated ? "booked" : outcome.State);
+        StempeluhrTelemetry.TagOutcome(activity, outcome.Mutated ? "booked" : "noop");
+        activity?.SetTag("stempeluhr.state", outcome.State);
         if (outcome.Mutated)
         {
             logger.LogInformation(
@@ -1081,8 +1111,12 @@ public sealed class OfflineClockService(
         AppliedOfflineStamp[] stamps = [.. _appliedStamps];
         _appliedStamps.Clear();
         _syncLock.Release();
-        if (announce) rejectionNotifier?.Report();
-        if (stamps.Length > 0) stampNotifier?.Report(stamps);
+        // Telegram gehört nicht zur Trace des Nachtrags.
+        StempeluhrTelemetry.RunDetached(() =>
+        {
+            if (announce) rejectionNotifier?.Report();
+            if (stamps.Length > 0) stampNotifier?.Report(stamps);
+        });
     }
 
     /// <summary>
@@ -1099,7 +1133,7 @@ public sealed class OfflineClockService(
     {
         var interrupted = false;
         var drained = 0;
-        // Nur mit Arbeit: der Dienst ruft alle 15 s auf.
+        // Nicht bei leerer Outbox: der Dienst ruft alle 15 s auf.
         using var activity = _kioskOutbox.Count > 0 ? StempeluhrTelemetry.Source.StartActivity("outbox.flush") : null;
         activity?.SetTag("stempeluhr.outbox_size", _kioskOutbox.Count);
         SortChronologically(_kioskOutbox, entry => entry.PerformedAt);
@@ -1187,6 +1221,8 @@ public sealed class OfflineClockService(
             logger.LogInformation("Outbox flushed {Count} offline event(s)", drained);
         }
 
+        activity?.SetTag("stempeluhr.drained", drained);
+        activity?.SetTag("stempeluhr.interrupted", interrupted);
         return interrupted;
     }
 

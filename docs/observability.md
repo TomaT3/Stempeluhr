@@ -33,17 +33,32 @@ Nur Umgebungsvariablen am Container, nichts in `data/settings.json`:
 | Span | Attribute |
 | --- | --- |
 | `POST /api/...` (ASP.NET Core) | Route, Status, Dauer. Nur `/api`, ohne `/api/health` |
-| `kiosk.clock` | `stempeluhr.event_id`, `.action`, `.employee_id`, `.source` (card/pin/web/unknown), `.terminal_id`, `.outcome` (booked/noop/bad_request) |
+| `kiosk.clock` | `stempeluhr.event_id`, `.action`, `.employee_id`, `.employee_name`, `.source` (card/pin/web/unknown), `.terminal_id`, `.outcome` (booked/continued/noop/bad_request/failed), bei `failed` auch `error.type`, `.error` und Fehlerstatus |
 | `offline.sync` | `stempeluhr.batch_size` |
-| `offline.apply` | wie `kiosk.clock` plus `.performed_at`; `.outcome` ist `booked` oder der No-op-Zustand |
-| `outbox.flush` | `stempeluhr.outbox_size`, nur wenn die Outbox nicht leer ist |
+| `offline.apply` | wie `kiosk.clock` plus `.performed_at` und `.state` (Kimai-Zustand); `.outcome` ist `booked`, `noop`, `buffered`, `locked` oder `rejected` (nur dann Fehlerstatus). Abgelehnte Ereignisse tragen die angegebene `employee_id`, aber keinen Namen |
+| `outbox.flush` | `stempeluhr.outbox_size`, `.drained`, `.interrupted`, nur wenn die Outbox nicht leer ist |
 | HTTP-Client | Kimai- und Telegram-Aufrufe mit Status und Dauer |
 
-Nie im Export: PIN, Karten-ID, Namen, Tokens, Request- oder Response-Bodies.
-Query-Strings werden aus `url.full` entfernt, der Telegram-Bot-Token im Pfad
-wird zu `/bot***`. Das Telegram-Long-Polling und die Influx-Schreibaufrufe
-werden gar nicht exportiert. `employee_id` ist die interne ID aus den
-Einstellungen.
+`continued` heißt: Kimai hat den Wechsel abgelehnt, das laufende Blatt wurde
+gestoppt und die Arbeit auf der vorherigen Tätigkeit fortgesetzt.
+
+**Personenbezug:** Der Export enthält bewusst Namen von Mitarbeitern, damit sich
+ein Stempel ohne Nachschlagen zuordnen lässt. Logs und Fehlertexte werden nicht
+gefiltert und können auch Antworten von Kimai und Telegram enthalten. Das Backend
+deshalb nur selbst hosten und nur im LAN bzw. per VPN erreichbar machen.
+
+Nie im Export: PIN, Karten-ID, Tokens. Query-Strings werden aus `url.full`
+entfernt, der Telegram-Bot-Token im Pfad wird zu `/bot***`.
+
+Nicht exportiert, weil sie die Stempel übertönen:
+
+- das Telegram-Long-Polling und die Influx-Schreibaufrufe,
+- erfolgreiche HTTP-Aufrufe ohne Eltern-Span, etwa die Arbeitszeit-Prüfung alle
+  5 Minuten oder Telegram-Benachrichtigungen. Fehlgeschlagene bleiben sichtbar,
+- die HttpClient-Logzeilen zu Kimai unterhalb von Warning. Die Konsole zeigt sie
+  weiterhin.
+
+Benachrichtigungen laufen in einer eigenen Trace, nicht unter dem Stempel.
 
 Trace-Kontext: Ein eingehendes `traceparent` (W3C) wird übernommen. Kiosk und
 Agent setzen es noch nicht; bis dahin beginnt jede Anfrage eine eigene Trace.
@@ -56,6 +71,8 @@ SQL über `POST /api/default/_search?type=traces` bzw. `?type=logs`:
 ```sql
 SELECT * FROM "stempeluhr" WHERE trace_id = '4bf92f3577b34da6a3ce929d0e0e4736'
 SELECT * FROM "stempeluhr" WHERE stempeluhr_event_id = '<event-id>'
+SELECT * FROM "stempeluhr" WHERE stempeluhr_employee_name = 'Max Mustermann' ORDER BY _timestamp DESC
+SELECT * FROM "stempeluhr" WHERE stempeluhr_outcome IN ('failed', 'rejected')
 ```
 
 OpenObserve bietet unter `/api/default/mcp` einen MCP-Server (u. a.

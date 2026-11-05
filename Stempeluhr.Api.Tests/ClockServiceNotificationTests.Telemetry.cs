@@ -7,7 +7,7 @@ namespace Stempeluhr.Api.Tests;
 
 /// <summary>
 /// Ein Live-Stempel hängt unter der Trace des Kiosks (eingehendes
-/// <c>traceparent</c>) und nennt Event-ID, Quelle und Ergebnis, nie die PIN.
+/// <c>traceparent</c>) und nennt Event-ID, Name, Quelle und Ergebnis, nie die PIN.
 /// </summary>
 public sealed partial class ClockServiceNotificationTests
 {
@@ -25,6 +25,7 @@ public sealed partial class ClockServiceNotificationTests
         Assert.Equal("evt-1", span.GetTagItem("stempeluhr.event_id"));
         Assert.Equal("start", span.GetTagItem("stempeluhr.action"));
         Assert.Equal("max", span.GetTagItem("stempeluhr.employee_id"));
+        Assert.Equal("Max Mustermann", span.GetTagItem("stempeluhr.employee_name"));
         Assert.Equal("pi-1", span.GetTagItem("stempeluhr.terminal_id"));
         Assert.Equal("pin", span.GetTagItem("stempeluhr.source"));
         Assert.Equal("booked", span.GetTagItem("stempeluhr.outcome"));
@@ -39,34 +40,60 @@ public sealed partial class ClockServiceNotificationTests
         Assert.Equal("noop", Assert.Single(spans).GetTagItem("stempeluhr.outcome"));
     }
 
-    /// <summary>
-    /// Startet einen Eltern-Span wie die ASP.NET-Core-Instrumentierung für ein
-    /// eingehendes <c>traceparent</c> und sammelt nur Spans dieser Trace -
-    /// andere Testklassen laufen parallel.
-    /// </summary>
-    private static async Task<List<Activity>> CaptureClockSpans(Action<ScriptedKimaiClient> script, KioskClockRequest request)
+    [Fact]
+    public async Task ClockAsync_StopWentThroughButStartFailed_IsTaggedFailed()
     {
-        var (service, kimai, _) = Create(Settings(telegramEnabled: false));
+        // Der Fall, den man suchen will: Stop gebucht, Start scheitert an Kimai.
+        var spans = await CaptureClockSpans(kimai =>
+        {
+            kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
+            kimai.StartFailures.Enqueue(KimaiError(503));
+        }, SwitchRequest("kx"), SettingsWithTask(), expectThrow: true);
+
+        var span = Assert.Single(spans);
+        Assert.Equal("failed", span.GetTagItem("stempeluhr.outcome"));
+        Assert.Equal(ActivityStatusCode.Error, span.Status);
+        Assert.Equal(nameof(KimaiApiException), span.GetTagItem("error.type"));
+    }
+
+    [Fact]
+    public async Task ClockAsync_RejectedSwitchContinuedOnPreviousTask_IsTaggedContinued()
+    {
+        var spans = await CaptureClockSpans(kimai =>
+        {
+            kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
+            kimai.EnqueueStatus(Working with { ActiveIsDefaultTask = true });
+            kimai.StartFailures.Enqueue(KimaiError(400));
+        }, SwitchRequest("kx"), SettingsWithTask());
+
+        Assert.Equal("continued", Assert.Single(spans).GetTagItem("stempeluhr.outcome"));
+    }
+
+    [Fact]
+    public async Task ClockAsync_Notification_RunsOutsideTheStampSpan()
+    {
+        Activity? atLookup = new("not-called");
+        var spans = await CaptureClockSpans(kimai =>
+        {
+            kimai.EnqueueStatus(ClockedOut);
+            kimai.EnqueueStatus(Working);
+            kimai.OnTimezoneLookup = () => atLookup = Activity.Current;
+        }, Request("start"), Settings(telegramEnabled: true));
+
+        Assert.Equal("booked", Assert.Single(spans).GetTagItem("stempeluhr.outcome"));
+        Assert.Null(atLookup);
+    }
+
+    private static async Task<List<Activity>> CaptureClockSpans(
+        Action<ScriptedKimaiClient> script, KioskClockRequest request, RuntimeSettings? settings = null, bool expectThrow = false)
+    {
+        var (service, kimai, _) = Create(settings ?? Settings(telegramEnabled: false));
         script(kimai);
 
-        var traceId = ActivityTraceId.CreateRandom();
-        var spans = new List<Activity>();
-        using var listener = new ActivityListener
+        return await SpanCapture.InTraceAsync(async () =>
         {
-            ShouldListenTo = source => source.Name == StempeluhrTelemetry.SourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activity =>
-            {
-                if (activity.TraceId != traceId) return;
-                lock (spans) spans.Add(activity);
-            },
-        };
-        ActivitySource.AddActivityListener(listener);
-
-        using (new Activity("incoming").SetParentId(traceId, ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded).Start())
-        {
-            await service.ClockAsync(request);
-        }
-        return spans;
+            if (expectThrow) await Assert.ThrowsAnyAsync<Exception>(() => service.ClockAsync(request));
+            else await service.ClockAsync(request);
+        });
     }
 }
