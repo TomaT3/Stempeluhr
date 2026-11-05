@@ -115,8 +115,13 @@ public sealed class ClockService(
         }
         catch (Exception ex)
         {
-            // Auch wenn ein Teil schon gebucht ist (Stop ging durch, der Start danach nicht).
-            StempeluhrTelemetry.TagFailure(activity, "failed", ex);
+            // Schon gesetzt: Die Buchung ging durch, nur das Statuslesen danach
+            // nicht. Das Ergebnis bleibt, der Nachtrag wird zum No-op.
+            var settled = activity?.GetTagItem("stempeluhr.outcome") as string;
+            // Ein halber Wechsel (Stop ging durch, der Start nicht) ist hier noch
+            // nicht gesetzt: "failed", oder "retry", wenn der Nachtrag ihn abschließt.
+            var outcome = settled ?? (IsRetriedByKiosk(ex) ? "retry" : "failed");
+            StempeluhrTelemetry.TagFailure(activity, outcome, ex, isError: outcome == "failed");
             throw;
         }
 
@@ -127,6 +132,20 @@ public sealed class ClockService(
             StempeluhrTelemetry.TagOutcome(activity, response.Result == ClockActionResult.Success ? "noop" : "bad_request");
         }
         return response;
+    }
+
+    /// <summary>
+    /// Kimai war gerade nicht erreichbar, oder der Kiosk hat nach 8 s
+    /// aufgegeben: Er reiht den Stempel ein und trägt ihn nach, verloren ist
+    /// nichts. Der Nachtrag erscheint unter derselben Event-ID als offline.apply.
+    /// </summary>
+    private static bool IsRetriedByKiosk(Exception exception)
+    {
+        return exception is KimaiApiException { IsTransient: true }
+            or HttpRequestException
+            or System.Net.Sockets.SocketException
+            or OperationCanceledException
+            or TimeoutException;
     }
 
     private async Task<ClockActionResponse> DispatchClockActionAsync(

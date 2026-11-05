@@ -54,16 +54,19 @@ public static class StempeluhrTelemetry
 
     /// <summary>
     /// Der Stempel kam nicht durch. <paramref name="isError"/> ist false, wenn
-    /// das Ereignis nicht verloren ist (gepuffert, gesperrt): Dann bleibt der
-    /// Span ohne Fehlerstatus, nennt den Grund aber trotzdem.
+    /// das Ereignis nicht verloren ist (gepuffert, gesperrt, wird nachgetragen):
+    /// Dann bleibt der Span ohne Fehlerstatus, nennt den Grund aber trotzdem.
+    /// Der Text kann Client-Werte enthalten („Unbekannte Aktion: …“) und wird
+    /// gekürzt; das SDK-Limit gilt nicht für die Statusbeschreibung.
     /// </summary>
     public static void TagFailure(Activity? activity, string outcome, Exception exception, bool isError = true)
     {
         if (activity is null) return;
+        var message = TelemetrySetup.LimitLength(exception.Message);
         TagOutcome(activity, outcome);
         activity.SetTag("error.type", exception.GetType().Name);
-        activity.SetTag("stempeluhr.error", exception.Message);
-        if (isError) activity.SetStatus(ActivityStatusCode.Error, exception.Message);
+        activity.SetTag("stempeluhr.error", message);
+        if (isError) activity.SetStatus(ActivityStatusCode.Error, message);
     }
 
     /// <summary>
@@ -103,6 +106,37 @@ public static class TelemetrySetup
     /// <summary>Log-Kategorie des typisierten Kimai-Clients.</summary>
     public const string KimaiHttpLogCategory = "System.Net.Http.HttpClient.IKimaiClient";
 
+    /// <summary>Trifft als Präfix auch den Polling-Client <c>TelegramPoll</c>.</summary>
+    public const string TelegramHttpLogCategory = "System.Net.Http.HttpClient.Telegram";
+
+    public const string InfluxHttpLogCategory = "System.Net.Http.HttpClient.Influx";
+
+    /// <summary>Standard-Variable des SDK; gilt für Attribute von Spans und Logs.</summary>
+    public const string AttributeLengthLimitKey = "OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT";
+
+    /// <summary>
+    /// Obergrenze für exportierte Texte. Event-ID, Aktion und Mitarbeiter-ID
+    /// kommen ungeprüft und ohne Längenlimit vom Client; ein Riesenwert könnte
+    /// sonst den Export-Batch sprengen und echte Stempel-Spans mitreißen.
+    /// Großzügig, weil auch Stacktraces darunter fallen.
+    /// </summary>
+    public const int MaxExportedValueLength = 8192;
+
+    public static string LimitLength(string value)
+        => value.Length <= MaxExportedValueLength ? value : value[..MaxExportedValueLength];
+
+    /// <summary>
+    /// Nur für den Exporter, die Konsole bleibt unberührt. Die HttpClient-Logs
+    /// nennen die volle URL, bei Telegram also den Bot-Token: Diese Kategorie
+    /// geht deshalb nie in den Export, egal welches Log-Level konfiguriert ist.
+    /// Filter für einen Provider haben Vorrang vor den allgemeinen Log-Leveln.
+    /// </summary>
+    public static ILoggingBuilder AddStempeluhrExportLogFilters(this ILoggingBuilder logging) => logging
+        .AddFilter<OpenTelemetryLoggerProvider>(TelegramHttpLogCategory, LogLevel.None)
+        .AddFilter<OpenTelemetryLoggerProvider>(InfluxHttpLogCategory, LogLevel.Warning)
+        // Jeder Kimai-Aufruf ist schon ein Span.
+        .AddFilter<OpenTelemetryLoggerProvider>(KimaiHttpLogCategory, LogLevel.Warning);
+
     /// <summary>
     /// Der Release-Tag wie in <c>/api/health</c>. <c>AssemblyVersion</c> steht
     /// fest auf 0.0.0.0 (Directory.Build.props).
@@ -128,8 +162,8 @@ public static class TelemetrySetup
             options.IncludeFormattedMessage = true;
             options.ParseStateValues = true;
         });
-        // Jeder Kimai-Aufruf ist schon ein Span. Die Konsole behält diese Zeilen.
-        builder.Logging.AddFilter<OpenTelemetryLoggerProvider>(KimaiHttpLogCategory, LogLevel.Warning);
+        builder.Logging.AddStempeluhrExportLogFilters();
+        builder.Configuration[AttributeLengthLimitKey] ??= MaxExportedValueLength.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         builder.Services.AddOpenTelemetry()
             .ConfigureResource(resource => resource.AddService(serviceName, serviceVersion: ServiceVersion))
@@ -139,6 +173,7 @@ public static class TelemetrySetup
                 .AddStempeluhrHttpTracing()
                 .AddOtlpExporter(options => options.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf))
             .WithLogging(logging => logging
+                .AddProcessor(new TelemetryLogLengthProcessor())
                 .AddOtlpExporter(options => options.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf));
 
         return builder;
@@ -163,6 +198,18 @@ public static class TelemetrySetup
         var path = request.RequestUri?.AbsolutePath ?? string.Empty;
         return !path.EndsWith("/getUpdates", StringComparison.Ordinal)
             && !path.EndsWith("/api/v2/write", StringComparison.Ordinal);
+    }
+}
+
+/// <summary>
+/// Läuft vor dem Exporter. Das SDK-Limit kürzt nur Attribute; der Log-Text
+/// enthält dieselben Client-Werte (etwa die Event-ID) aber noch einmal.
+/// </summary>
+public sealed class TelemetryLogLengthProcessor : BaseProcessor<LogRecord>
+{
+    public override void OnEnd(LogRecord data)
+    {
+        if (data.FormattedMessage is { } message) data.FormattedMessage = TelemetrySetup.LimitLength(message);
     }
 }
 

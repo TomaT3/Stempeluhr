@@ -142,15 +142,19 @@ public sealed class OfflineClockService(
                 {
                     var pending = pendingEvents[i];
                     buffered++;
+                    // The failed event already has its offline.apply span.
+                    var traced = i == failedIndex;
                     if (lockedEmployees.Contains(pending.EmployeeId))
                     {
                         // An earlier event of this employee stayed with the
                         // kiosk (lock). A server copy of this later one could
                         // replay ahead of it once the lock expires.
+                        if (!traced) TraceNotApplied(pending, "locked");
                         results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, LockedMessage));
                         continue;
                     }
 
+                    if (!traced) TraceNotApplied(pending, "buffered");
                     AddToOutbox(pending);
                     results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, BufferedMessage));
                 }
@@ -165,6 +169,7 @@ public sealed class OfflineClockService(
                 {
                     // Later events of a locked employee must not overtake the
                     // held-back one, even if the lock expired meanwhile.
+                    TraceNotApplied(entry, "locked");
                     buffered++;
                     results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, LockedMessage));
                     continue;
@@ -176,6 +181,7 @@ public sealed class OfflineClockService(
                     // "duplicate" without checking the journal could silently
                     // discard an outbox event that was actually rejected.
                     var refused = rejectedEvents.Find(entry.EventId);
+                    TraceNotApplied(entry, refused is null ? "duplicate" : "rejected");
                     if (refused is not null)
                     {
                         // An outbox flush can reject after the original sync
@@ -230,6 +236,7 @@ public sealed class OfflineClockService(
                     const string skippedMessage = "Uebersprungen - die Anmeldedaten dieses Batches wurden abgelehnt.";
                     for (var s = i + 1; s < orderedKioskEvents.Count; s++)
                     {
+                        TraceNotApplied(orderedKioskEvents[s], "skipped");
                         results.Add(new OfflineSyncEventResultDto(orderedKioskEvents[s].EventId, BufferedStatus, skippedMessage));
                     }
 
@@ -342,6 +349,7 @@ public sealed class OfflineClockService(
             // outbox must not add another copy (see _kioskOutboxIds). The
             // sender still gets "buffered" - the server DOES hold it and will
             // apply it on recovery.
+            TraceNotApplied(entry, interrupted ? "buffered" : "locked");
             AddToOutbox(entry);
             results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, message));
         }
@@ -370,6 +378,19 @@ public sealed class OfflineClockService(
         {
             _kioskOutbox.Add(entry);
         }
+    }
+
+    /// <summary>
+    /// Ein Ereignis, das <see cref="ApplyKioskEventAsync"/> nicht erreicht, muss
+    /// trotzdem über seine Event-ID auffindbar sein. Ohne Anmeldung, also ohne
+    /// Namen. Kein Fehlerstatus: Verloren geht dabei nichts, und abgelehnt wurde
+    /// schon früher. Wird es später gebucht, folgt ein offline.apply.
+    /// </summary>
+    private static void TraceNotApplied(OfflineKioskClockEventDto entry, string outcome)
+    {
+        using var activity = StempeluhrTelemetry.StartStamp("offline.skip", entry.EventId, entry.Action, entry.EmployeeId, null);
+        activity?.SetTag("stempeluhr.performed_at", entry.PerformedAt.ToString("O"));
+        StempeluhrTelemetry.TagOutcome(activity, outcome);
     }
 
     /// <summary>
@@ -1161,6 +1182,7 @@ public sealed class OfflineClockService(
             {
                 // Already applied via the normal sync path (client re-sent the
                 // batch) - nothing left to do.
+                TraceNotApplied(kioskEntry, "duplicate");
                 _kioskOutboxIds.Remove(kioskEntry.EventId);
                 drained++;
                 continue;

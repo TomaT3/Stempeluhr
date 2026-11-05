@@ -764,8 +764,13 @@ public sealed partial class ClockServiceNotificationTests
 
         public void EnqueueStatus(ClockStatusDto status) => _statuses.Enqueue(status);
 
+        /// <summary>Je Statusabfrage ein Eintrag: die Ausnahme, oder null für eine normale Antwort.</summary>
+        public Queue<Exception?> StatusFailures { get; } = new();
+
         public Task<ClockStatusDto> GetStatusAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) =>
-            Task.FromResult(_statuses.Count > 0 ? _statuses.Dequeue() : ClockedOut);
+            StatusFailures.TryDequeue(out var failure) && failure is not null
+                ? Task.FromException<ClockStatusDto>(failure)
+                : Task.FromResult(_statuses.Count > 0 ? _statuses.Dequeue() : ClockedOut);
 
         public Task<int?> GetCurrentUserIdAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)

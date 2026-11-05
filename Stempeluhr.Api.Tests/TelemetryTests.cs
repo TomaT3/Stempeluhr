@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -92,6 +94,84 @@ public sealed class TelemetryTests
 
         Assert.Equal(typeof(OpenTelemetryLoggerProvider).FullName, rule.ProviderName);
         Assert.Equal(LogLevel.Warning, rule.LogLevel);
+    }
+
+    /// <summary>
+    /// appsettings.Development.json hat keinen Telegram-Filter, und ein Operator
+    /// kann das Level zum Debuggen hochsetzen: Der Token bleibt trotzdem draußen.
+    /// </summary>
+    [Theory]
+    [InlineData("System.Net.Http.HttpClient.Telegram.LogicalHandler")]
+    [InlineData("System.Net.Http.HttpClient.TelegramPoll.ClientHandler")]
+    public void TelegramHttpLogs_NeverReachTheExporter_WhateverLevelIsConfigured(string category)
+    {
+        var exported = new List<LogRecord>();
+        using (var factory = LoggerFactory.Create(logging =>
+        {
+            logging.SetMinimumLevel(LogLevel.Trace);
+            logging.AddFilter(TelemetrySetup.TelegramHttpLogCategory, LogLevel.Trace);
+            logging.AddStempeluhrExportLogFilters();
+            logging.AddOpenTelemetry(options => options.AddInMemoryExporter(exported));
+        }))
+        {
+            var logger = factory.CreateLogger(category);
+            logger.LogInformation("Sending HTTP request POST https://api.telegram.org/bot123:SECRET/sendMessage");
+            logger.LogError("POST https://api.telegram.org/bot123:SECRET/sendMessage");
+            factory.CreateLogger<TelemetryTests>().LogInformation("control");
+        }
+
+        Assert.Equal("control", Assert.Single(exported).Body);
+    }
+
+    /// <summary>
+    /// Über den echten OTLP-Exporter gegen einen lokalen Empfänger: Das Limit
+    /// steckt in einer SDK-Variable, die sonst niemand prüft. Ein Client kann
+    /// über /api/kiosk/clock/sync vor der Anmeldung MB-große Werte schicken.
+    /// </summary>
+    [Fact]
+    public async Task OtlpExport_CutsOversizedClientValues_InSpansAndLogs()
+    {
+        var oversized = new string('x', 1_000_000);
+        var received = new ConcurrentDictionary<string, long>();
+
+        var collectorBuilder = WebApplication.CreateBuilder();
+        collectorBuilder.Logging.ClearProviders();
+        collectorBuilder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var collector = collectorBuilder.Build();
+        collector.MapPost("/v1/{signal}", async (string signal, HttpRequest request) =>
+        {
+            using var body = new MemoryStream();
+            await request.Body.CopyToAsync(body);
+            received.AddOrUpdate(signal, body.Length, (_, size) => Math.Max(size, body.Length));
+            return Results.Ok();
+        });
+        await collector.StartAsync();
+
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.Configuration[TelemetrySetup.EndpointKey] = collector.Urls.First();
+        builder.AddStempeluhrTelemetry();
+        await using (var services = builder.Services.BuildServiceProvider())
+        {
+            var tracer = services.GetRequiredService<TracerProvider>();
+            var logs = services.GetRequiredService<LoggerProvider>();
+            var failure = new InvalidOperationException($"Unbekannte Aktion: {oversized}");
+
+            using (var span = StempeluhrTelemetry.StartStamp("offline.apply", oversized, oversized, oversized, null))
+            {
+                StempeluhrTelemetry.TagFailure(span, "rejected", failure);
+            }
+
+            services.GetRequiredService<ILogger<TelemetryTests>>()
+                .LogWarning(failure, "Offline kiosk event {EventId} rejected", oversized);
+
+            Assert.True(tracer.ForceFlush());
+            Assert.True(logs.ForceFlush());
+        }
+
+        // Ein paar Felder à 8 KiB; andere Testklassen können kleine Spans beisteuern.
+        Assert.InRange(received["traces"], TelemetrySetup.MaxExportedValueLength, 200_000);
+        Assert.InRange(received["logs"], TelemetrySetup.MaxExportedValueLength, 200_000);
     }
 
     [Fact]
