@@ -835,6 +835,15 @@ Die Einstellungen werden ohne Neustart wirksam. Ist Influx nicht erreichbar,
 gehen die Werte dieser Zeit verloren. Das Log meldet den Ausfall einmal und die
 Wiederkehr einmal. Stempeln und Überwachung beeinflusst das nie.
 
+### Logs und Traces (optional)
+
+Mit `OTEL_EXPORTER_OTLP_ENDPOINT` am Container schickt die API Logs und Traces
+per OTLP an ein Backend wie OpenObserve. Ein Stempel lässt sich dann über seine
+Trace- oder Event-ID oder dem Namen samt Kimai-Aufrufen finden. Der Export
+enthält Namen von Mitarbeitern und ungefilterte Fehlertexte, aber nie PIN,
+Karten-ID oder Tokens. Einrichtung, Felder und Beispielabfragen:
+[Logs und Traces](docs/observability.md).
+
 ### Terminal (Raspberry Pi)
 
 Zuerst ein eigenes Terminal-Token in `data/settings.json` registrieren und

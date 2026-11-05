@@ -27,7 +27,7 @@ namespace Stempeluhr.Api.Tests;
 /// its end, so simulating an ongoing outage needs one failing status call
 /// for the batch processing plus one for that trailing flush.
 /// </summary>
-public sealed class OfflineClockServiceTests
+public sealed partial class OfflineClockServiceTests
 {
     private static readonly DateTimeOffset T08 = Parse("2026-08-24T08:00:00Z");
     private static readonly DateTimeOffset T10 = Parse("2026-08-24T10:00:00Z");

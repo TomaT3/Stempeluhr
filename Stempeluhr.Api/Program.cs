@@ -5,6 +5,8 @@ using Stempeluhr.Api.Middleware;
 using Stempeluhr.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+// Optional: Logs und Traces per OTLP (z. B. OpenObserve), nur mit OTEL_EXPORTER_OTLP_ENDPOINT.
+builder.AddStempeluhrTelemetry();
 
 builder.Services.AddSingleton<IRuntimeSettingsStore, RuntimeSettingsStore>();
 builder.Services.AddSingleton(sp => new RejectedOfflineEventStore(

@@ -12,7 +12,7 @@ namespace Stempeluhr.Api.Tests;
 /// spam the customer's chat. Offline replays announce themselves through
 /// OfflineStampNotifier instead (OfflineClockServiceTests, issue #117).
 /// </summary>
-public sealed class ClockServiceNotificationTests
+public sealed partial class ClockServiceNotificationTests
 {
     private static readonly ClockStatusDto Working = new(true, 5, "2026-09-05T06:00:00Z", 600, "working", "Eingestempelt");
     private static readonly ClockStatusDto Paused = new(true, 5, "2026-09-05T06:00:00Z", 600, "paused", "In Pause");
@@ -756,6 +756,7 @@ public sealed class ClockServiceNotificationTests
 
         public bool TimezoneReturnsNull { get; set; }
         public bool TimezoneThrows { get; set; }
+        public Action? OnTimezoneLookup { get; set; }
         public int TimezoneLookupCount { get; private set; }
         public int StartCalls { get; private set; }
         public int StopCalls { get; private set; }
@@ -763,13 +764,19 @@ public sealed class ClockServiceNotificationTests
 
         public void EnqueueStatus(ClockStatusDto status) => _statuses.Enqueue(status);
 
+        /// <summary>Je Statusabfrage ein Eintrag: die Ausnahme, oder null für eine normale Antwort.</summary>
+        public Queue<Exception?> StatusFailures { get; } = new();
+
         public Task<ClockStatusDto> GetStatusAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) =>
-            Task.FromResult(_statuses.Count > 0 ? _statuses.Dequeue() : ClockedOut);
+            StatusFailures.TryDequeue(out var failure) && failure is not null
+                ? Task.FromException<ClockStatusDto>(failure)
+                : Task.FromResult(_statuses.Count > 0 ? _statuses.Dequeue() : ClockedOut);
 
         public Task<int?> GetCurrentUserIdAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<string?> GetCurrentUserTimezoneAsync(RuntimeSettings s, EmployeeSettings e, CancellationToken ct = default)
         {
             TimezoneLookupCount++;
+            OnTimezoneLookup?.Invoke();
             if (TimezoneThrows)
             {
                 // Transportfehler-Verhalten von KimaiClient: wirft statt null.

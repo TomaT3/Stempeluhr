@@ -106,6 +106,51 @@ public sealed class ClockService(
         var eventId = EventIdOf(request);
         using var live = eventId is null ? null : kioskEvents?.BeginLive(eventId);
 
+        using var activity = StempeluhrTelemetry.StartStamp("kiosk.clock", eventId, request.Action, context.Employee.Id, context.Employee.DisplayName);
+        StempeluhrTelemetry.TagOrigin(activity, context.Origin);
+        ClockActionResponse response;
+        try
+        {
+            response = await DispatchClockActionAsync(request, context, eventId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Schon gesetzt: Die Buchung ging durch, nur das Statuslesen danach
+            // nicht. Das Ergebnis bleibt, der Nachtrag wird zum No-op.
+            var settled = activity?.GetTagItem("stempeluhr.outcome") as string;
+            // Ein halber Wechsel (Stop ging durch, der Start nicht) ist hier noch
+            // nicht gesetzt: "failed", oder "retry", wenn der Nachtrag ihn abschließt.
+            var outcome = settled ?? (IsRetriedByKiosk(ex) ? "retry" : "failed");
+            StempeluhrTelemetry.TagFailure(activity, outcome, ex, isError: outcome == "failed");
+            throw;
+        }
+
+        // "booked" setzt NotifyTransition, sobald Kimai wirklich geändert wurde;
+        // "continued" die Ausgleichsbuchung nach einem abgelehnten Wechsel.
+        if (activity?.GetTagItem("stempeluhr.outcome") is null)
+        {
+            StempeluhrTelemetry.TagOutcome(activity, response.Result == ClockActionResult.Success ? "noop" : "bad_request");
+        }
+        return response;
+    }
+
+    /// <summary>
+    /// Kimai war gerade nicht erreichbar, oder der Kiosk hat nach 8 s
+    /// aufgegeben: Er reiht den Stempel ein und trägt ihn nach, verloren ist
+    /// nichts. Der Nachtrag erscheint unter derselben Event-ID als offline.apply.
+    /// </summary>
+    private static bool IsRetriedByKiosk(Exception exception)
+    {
+        return exception is KimaiApiException { IsTransient: true }
+            or HttpRequestException
+            or System.Net.Sockets.SocketException
+            or OperationCanceledException
+            or TimeoutException;
+    }
+
+    private async Task<ClockActionResponse> DispatchClockActionAsync(
+        KioskClockRequest request, EmployeeContext context, string? eventId, CancellationToken cancellationToken)
+    {
         if (string.Equals(request.Action, "start", StringComparison.OrdinalIgnoreCase))
         {
             return await StartClockAsync(context.Settings, context.Employee, request.TaskId, context.Origin, cancellationToken);
@@ -475,6 +520,7 @@ public sealed class ClockService(
         {
             if (await ContinuePreviousTaskAsync(settings, employee, running, target, ex, cancellationToken) is { } continued)
             {
+                StempeluhrTelemetry.TagCurrentOutcome("continued");
                 return continued;
             }
 
@@ -604,6 +650,7 @@ public sealed class ClockService(
         // Karten-ID - die Quelle nennt nur die Art.
         logger?.LogInformation(
             "Stamp {Action} for employee {EmployeeId} via {Origin}", action, employee.Id, origin?.ToString() ?? "unbekannt");
+        StempeluhrTelemetry.TagCurrentOutcome("booked");
 
         if (notifier is null || !settings.TelegramEnabled)
         {
@@ -613,7 +660,7 @@ public sealed class ClockService(
         // Synchron direkt am Übergang erfasst (vor jedem await): Das ist die
         // Stempelzeit - nicht erst nach TZ-Lookup/Telegram-POST.
         var stampUtc = DateTimeOffset.UtcNow;
-        _ = SendNotificationAsync(settings, employee, action, taskLabel, origin, stampUtc);
+        StempeluhrTelemetry.RunDetached(() => _ = SendNotificationAsync(settings, employee, action, taskLabel, origin, stampUtc));
     }
 
     private async Task SendNotificationAsync(

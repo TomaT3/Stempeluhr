@@ -107,6 +107,8 @@ public sealed class OfflineClockService(
             .Where(e => !string.IsNullOrWhiteSpace(e.EventId) && !string.IsNullOrWhiteSpace(e.EmployeeId))
             .OrderBy(e => e.PerformedAt)
             .ToList();
+        using var activity = StempeluhrTelemetry.Source.StartActivity("offline.sync");
+        activity?.SetTag("stempeluhr.batch_size", events.Count);
 
         // Serialize the whole operation against parallel syncs and the
         // background flush (List<T> is not thread-safe, and the ordering
@@ -140,15 +142,19 @@ public sealed class OfflineClockService(
                 {
                     var pending = pendingEvents[i];
                     buffered++;
+                    // The failed event already has its offline.apply span.
+                    var traced = i == failedIndex;
                     if (lockedEmployees.Contains(pending.EmployeeId))
                     {
                         // An earlier event of this employee stayed with the
                         // kiosk (lock). A server copy of this later one could
                         // replay ahead of it once the lock expires.
+                        if (!traced) TraceNotApplied(pending, "locked");
                         results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, LockedMessage));
                         continue;
                     }
 
+                    if (!traced) TraceNotApplied(pending, "buffered");
                     AddToOutbox(pending);
                     results.Add(new OfflineSyncEventResultDto(pending.EventId, BufferedStatus, BufferedMessage));
                 }
@@ -163,6 +169,7 @@ public sealed class OfflineClockService(
                 {
                     // Later events of a locked employee must not overtake the
                     // held-back one, even if the lock expired meanwhile.
+                    TraceNotApplied(entry, "locked");
                     buffered++;
                     results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, LockedMessage));
                     continue;
@@ -174,6 +181,7 @@ public sealed class OfflineClockService(
                     // "duplicate" without checking the journal could silently
                     // discard an outbox event that was actually rejected.
                     var refused = rejectedEvents.Find(entry.EventId);
+                    TraceNotApplied(entry, refused is null ? "duplicate" : "rejected");
                     if (refused is not null)
                     {
                         // An outbox flush can reject after the original sync
@@ -228,6 +236,7 @@ public sealed class OfflineClockService(
                     const string skippedMessage = "Uebersprungen - die Anmeldedaten dieses Batches wurden abgelehnt.";
                     for (var s = i + 1; s < orderedKioskEvents.Count; s++)
                     {
+                        TraceNotApplied(orderedKioskEvents[s], "skipped");
                         results.Add(new OfflineSyncEventResultDto(orderedKioskEvents[s].EventId, BufferedStatus, skippedMessage));
                     }
 
@@ -340,6 +349,7 @@ public sealed class OfflineClockService(
             // outbox must not add another copy (see _kioskOutboxIds). The
             // sender still gets "buffered" - the server DOES hold it and will
             // apply it on recovery.
+            TraceNotApplied(entry, interrupted ? "buffered" : "locked");
             AddToOutbox(entry);
             results.Add(new OfflineSyncEventResultDto(entry.EventId, BufferedStatus, message));
         }
@@ -371,14 +381,57 @@ public sealed class OfflineClockService(
     }
 
     /// <summary>
+    /// Ein Ereignis, das <see cref="ApplyKioskEventAsync"/> nicht erreicht, muss
+    /// trotzdem über seine Event-ID auffindbar sein. Ohne Anmeldung, also ohne
+    /// Namen. Kein Fehlerstatus: Verloren geht dabei nichts, und abgelehnt wurde
+    /// schon früher. Wird es später gebucht, folgt ein offline.apply.
+    /// </summary>
+    private static void TraceNotApplied(OfflineKioskClockEventDto entry, string outcome)
+    {
+        using var activity = StempeluhrTelemetry.StartStamp("offline.skip", entry.EventId, entry.Action, entry.EmployeeId, null);
+        activity?.SetTag("stempeluhr.performed_at", entry.PerformedAt.ToString("O"));
+        StempeluhrTelemetry.TagOutcome(activity, outcome);
+    }
+
+    /// <summary>
     /// Returns the stamp to announce only when the event changed Kimai (no
     /// no-op) and Telegram is on.
     /// </summary>
     private async Task<(string Message, string State, AppliedOfflineStamp? Stamp)> ApplyKioskEventAsync(
         OfflineKioskClockEventDto entry, CancellationToken cancellationToken)
     {
+        // Vor der Anmeldung: Auch ein abgelehntes oder gepuffertes Ereignis muss
+        // über seine Event-ID auffindbar sein. Den Namen gibt es erst danach.
+        using var activity = StempeluhrTelemetry.StartStamp("offline.apply", entry.EventId, entry.Action, entry.EmployeeId, null);
+        activity?.SetTag("stempeluhr.performed_at", entry.PerformedAt.ToString("O"));
+        try
+        {
+            return await ApplyKioskEventCoreAsync(entry, activity, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            var outcome = FailureOutcome(ex);
+            StempeluhrTelemetry.TagFailure(activity, outcome, ex, isError: outcome == "rejected");
+            throw;
+        }
+    }
+
+    /// <summary>Was die Aufrufer mit der Ausnahme tun: puffern, zurückhalten oder ablehnen.</summary>
+    private static string FailureOutcome(Exception exception) => exception switch
+    {
+        PinLockedException => "locked",
+        KimaiApiException kimaiError when IsRetryable(kimaiError) => "buffered",
+        _ when IsTransientError(exception) => "buffered",
+        _ => "rejected",
+    };
+
+    private async Task<(string Message, string State, AppliedOfflineStamp? Stamp)> ApplyKioskEventCoreAsync(
+        OfflineKioskClockEventDto entry, System.Diagnostics.Activity? activity, CancellationToken cancellationToken)
+    {
         var settings = settingsStore.Load();
         var employee = ResolveKioskEmployee(settings, entry);
+        activity?.SetTag("stempeluhr.employee_id", employee.Id);
+        activity?.SetTag("stempeluhr.employee_name", employee.DisplayName);
 
         if (kioskEvents.IsLiveInFlight(entry.EventId))
         {
@@ -393,7 +446,6 @@ public sealed class OfflineClockService(
         }
 
         var action = NormalizeKioskAction(entry.Action);
-        var outcome = await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
         // Source of the original action (issue #146). An authenticated
         // terminal names itself and reports how the session was opened (its
         // events carry no credentials any more); otherwise the credential
@@ -402,6 +454,11 @@ public sealed class OfflineClockService(
             ? StampOrigin.Create(null, entry.AuthenticatedTerminalId, entry.Source)
             : StampOrigin.Create(
                 ClockService.MethodOf(employees, settings, employee, entry.Pin, entry.NfcCardId), null, entry.Source);
+        activity?.SetTag("stempeluhr.action", action);
+        StempeluhrTelemetry.TagOrigin(activity, origin);
+        var outcome = await ApplyActionAsync(settings, employee, action, entry.EventId, entry.TaskId, entry.PerformedAt, cancellationToken);
+        StempeluhrTelemetry.TagOutcome(activity, outcome.Mutated ? "booked" : "noop");
+        activity?.SetTag("stempeluhr.state", outcome.State);
         if (outcome.Mutated)
         {
             logger.LogInformation(
@@ -1075,8 +1132,12 @@ public sealed class OfflineClockService(
         AppliedOfflineStamp[] stamps = [.. _appliedStamps];
         _appliedStamps.Clear();
         _syncLock.Release();
-        if (announce) rejectionNotifier?.Report();
-        if (stamps.Length > 0) stampNotifier?.Report(stamps);
+        // Telegram gehört nicht zur Trace des Nachtrags.
+        StempeluhrTelemetry.RunDetached(() =>
+        {
+            if (announce) rejectionNotifier?.Report();
+            if (stamps.Length > 0) stampNotifier?.Report(stamps);
+        });
     }
 
     /// <summary>
@@ -1093,6 +1154,9 @@ public sealed class OfflineClockService(
     {
         var interrupted = false;
         var drained = 0;
+        // Nicht bei leerer Outbox: der Dienst ruft alle 15 s auf.
+        using var activity = _kioskOutbox.Count > 0 ? StempeluhrTelemetry.Source.StartActivity("outbox.flush") : null;
+        activity?.SetTag("stempeluhr.outbox_size", _kioskOutbox.Count);
         SortChronologically(_kioskOutbox, entry => entry.PerformedAt);
 
         // Events of an employee whose PIN is locked (issue #8) stay in place,
@@ -1118,6 +1182,7 @@ public sealed class OfflineClockService(
             {
                 // Already applied via the normal sync path (client re-sent the
                 // batch) - nothing left to do.
+                TraceNotApplied(kioskEntry, "duplicate");
                 _kioskOutboxIds.Remove(kioskEntry.EventId);
                 drained++;
                 continue;
@@ -1178,6 +1243,8 @@ public sealed class OfflineClockService(
             logger.LogInformation("Outbox flushed {Count} offline event(s)", drained);
         }
 
+        activity?.SetTag("stempeluhr.drained", drained);
+        activity?.SetTag("stempeluhr.interrupted", interrupted);
         return interrupted;
     }
 
