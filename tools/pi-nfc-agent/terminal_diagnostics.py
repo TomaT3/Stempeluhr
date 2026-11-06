@@ -17,6 +17,16 @@ from datetime import datetime, timezone
 from typing import Callable
 
 OPERATIONS = {"clock", "sync", "login", "identify", "hours", "hints", "health"}
+# Allowed values of the kiosk's flow events. Older kiosks do not send them.
+FLOW_NAMES = {"session.open", "session.end", "scan.identified", "scan.unknown", "stamp.route", "flow.discarded"}
+FLOW_CHOICES = {
+    "method": {"card", "pin", "pin-offline"},
+    "reason": {"user", "idle", "done", "recovered", "flow-timeout", "replaced", "status", "offline", "failed"},
+    "route": {"agent", "direct", "queue"},
+    "via": {"cache", "server", "offline", "error"},
+    "what": {"clock", "identify", "hours", "hints", "status"},
+    "action": {"start", "stop", "pauseStart", "pauseEnd", "switch"},
+}
 
 
 def number(value, maximum=1_000_000_000):
@@ -57,6 +67,16 @@ def sanitize_heartbeat(raw: dict) -> dict:
                     event["eventId"] = event_id
             elif entry.get("kind") == "error" and entry.get("code") in ("javascript", "promise", "storage"):
                 event = {"kind": "error", "code": entry["code"]}
+            elif entry.get("kind") == "flow" and isinstance(entry.get("name"), str) and entry["name"] in FLOW_NAMES:
+                event = {"kind": "flow", "name": entry["name"]}
+                for key, choices in FLOW_CHOICES.items():
+                    if isinstance(entry.get(key), str) and entry[key] in choices:
+                        event[key] = entry[key]
+                for key in ("eventId", "employeeId"):
+                    if isinstance(entry.get(key), str) and re.fullmatch(r"[0-9A-Za-z-]{1,64}", entry[key]):
+                        event[key] = entry[key]
+                if type(entry.get("fallback")) is int and -1 <= entry["fallback"] <= 599:
+                    event["fallback"] = entry["fallback"]
             elif entry.get("kind") == "state":
                 event = {"kind": "state"}
                 for key, choices in (("screen", {"idle", "session"}), ("blocked", {"none", "request", "backlog", "status"})):

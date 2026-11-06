@@ -144,4 +144,37 @@ public sealed partial class ClockServiceNotificationTests
             else await service.ClockAsync(request);
         });
     }
+
+    [Fact]
+    public async Task ClockAsync_WrongPin_IsFoundByEventId_WithoutNameOrPin()
+    {
+        var spans = await CaptureClockSpans(_ => { },
+            new KioskClockRequest("max", "9999", "start", null, EventId: "evt-wrong") { AuthenticatedTerminalId = "pi-1" });
+
+        var span = Assert.Single(spans);
+        Assert.Equal("kiosk.clock", span.OperationName);
+        Assert.Equal("evt-wrong", span.GetTagItem("stempeluhr.event_id"));
+        Assert.Equal("unauthorized", span.GetTagItem("stempeluhr.outcome"));
+        Assert.Equal("max", span.GetTagItem("stempeluhr.employee_id"));
+        Assert.Equal("pi-1", span.GetTagItem("stempeluhr.terminal_id"));
+        Assert.Null(span.GetTagItem("stempeluhr.employee_name"));
+        Assert.DoesNotContain(span.TagObjects, tag => tag.Value is string value && value.Contains("9999"));
+    }
+
+    [Fact]
+    public async Task ClockAsync_LockedEmployee_IsTaggedLocked_NotAsAnError()
+    {
+        var settings = Settings(telegramEnabled: false);
+        var guard = new PinAttemptGuard();
+        for (var i = 0; i < PinAttemptGuard.EmployeeThreshold; i++) guard.RecordFailure(PinAttemptGuard.EmployeeKey("max"));
+        var service = new ClockService(new StubSettingsStore(settings), new EmployeeService(), new ScriptedKimaiClient(), new RecordingNotifier(), pinAttempts: guard);
+
+        var spans = await SpanCapture.InTraceAsync(async () =>
+            await Assert.ThrowsAsync<PinLockedException>(() => service.ClockAsync(Request("start") with { EventId = "evt-locked" })));
+
+        var span = Assert.Single(spans);
+        Assert.Equal("evt-locked", span.GetTagItem("stempeluhr.event_id"));
+        Assert.Equal("locked", span.GetTagItem("stempeluhr.outcome"));
+        Assert.NotEqual(ActivityStatusCode.Error, span.Status);
+    }
 }

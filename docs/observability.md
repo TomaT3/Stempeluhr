@@ -33,11 +33,11 @@ Nur Umgebungsvariablen am Container, nichts in `data/settings.json`:
 | Span | Attribute |
 | --- | --- |
 | `POST /api/...` (ASP.NET Core) | Route, Status, Dauer. Nur `/api`, ohne `/api/health` |
-| `kiosk.clock` | `stempeluhr.event_id`, `.action`, `.employee_id`, `.employee_name`, `.source` (card/pin/web/unknown), `.terminal_id`, `.outcome` (booked/continued/noop/bad_request/retry/failed), bei `retry` und `failed` auch `error.type` und `.error`, nur bei `failed` Fehlerstatus. Erst nach erfolgreicher Anmeldung, abgelehnte PINs und Sperren erzeugen hier keinen Span |
-| `offline.sync` | `stempeluhr.batch_size` |
+| `kiosk.clock` | `stempeluhr.event_id`, `.action`, `.employee_id`, `.employee_name`, `.source` (card/pin/web/unknown), `.terminal_id`, `.outcome` (booked/continued/noop/bad_request/retry/failed/unauthorized/locked), bei `retry`, `failed` und `locked` auch `error.type` und `.error`, nur bei `failed` Fehlerstatus. Bei `unauthorized` und `locked` steht die angegebene `employee_id`, aber kein Name |
+| `offline.sync` | `stempeluhr.batch_size`; `.outcome` `failed` und Fehlerstatus, wenn der Lauf abbricht |
 | `offline.apply` | wie `kiosk.clock` plus `.performed_at` und `.state` (Kimai-Zustand); `.outcome` ist `booked`, `noop`, `buffered`, `locked` oder `rejected` (nur dann Fehlerstatus). Abgelehnte Ereignisse tragen die angegebene `employee_id`, aber keinen Namen |
 | `offline.skip` | Ereignis, das `offline.apply` nicht erreicht: Event-ID, Aktion, angegebene `employee_id`, `.performed_at`, ohne Namen und Fehlerstatus. `.outcome` ist `buffered`, `locked`, `skipped` (nach einer abgelehnten PIN im selben Batch, der Kiosk behält es), `duplicate` oder `rejected` (bereits abgelehnt, erneut gesendet) |
-| `outbox.flush` | `stempeluhr.outbox_size`, `.drained`, `.interrupted`, nur wenn die Outbox nicht leer ist |
+| `outbox.flush` | `stempeluhr.outbox_size`, `.drained`, `.interrupted`, nur wenn die Outbox nicht leer ist; `.outcome` `failed` und Fehlerstatus, wenn der Lauf abbricht |
 | HTTP-Client | Kimai- und Telegram-Aufrufe mit Status und Dauer |
 
 `continued` heißt: Kimai hat den Wechsel abgelehnt, das laufende Blatt wurde
@@ -74,6 +74,23 @@ Benachrichtigungen laufen in einer eigenen Trace, nicht unter dem Stempel.
 Trace-Kontext: Ein eingehendes `traceparent` (W3C) wird übernommen. Kiosk und
 Agent setzen es noch nicht; bis dahin beginnt jede Anfrage eine eigene Trace.
 
+## Ereignisse der Terminals
+
+`/api/kiosk/diagnostics` schreibt jedes Ereignis des Kiosks als eigenen
+Log-Eintrag. Die Liste der Ereignisse steht in den
+[Terminal-Störungen](terminal-diagnostics.md#erfassung-auf-dem-terminal).
+
+| Attribut | Inhalt |
+| --- | --- |
+| `stempeluhr_kiosk_event` | `session.open`, `stamp.route`, `http.clock`, `error.storage`, `state`, … |
+| `stempeluhr_device_time`, `stempeluhr_seq` | Zeit und Reihenfolge auf dem Gerät |
+| `stempeluhr_terminal_id`, `stempeluhr_event_id`, `stempeluhr_employee_id`, `stempeluhr_employee_name` | wie an den Spans |
+| `stempeluhr_route`, `_fallback`, `_method`, `_reason`, `_via`, `_what`, `_action` | je nach Ereignis |
+
+Der Agent schickt die Ereignisse einmal pro Minute. `_timestamp` ist deshalb die
+Zeit des Berichts: Für die Reihenfolge nach `stempeluhr_device_time` und
+`stempeluhr_seq` sortieren. Die Geräteuhr kann von der Serverzeit abweichen.
+
 ## Suchen
 
 In OpenObserve unter Logs bzw. Traces den Stream `stempeluhr` wählen, oder per
@@ -83,6 +100,8 @@ SQL über `POST /api/default/_search?type=traces` bzw. `?type=logs`:
 SELECT * FROM "stempeluhr" WHERE trace_id = '4bf92f3577b34da6a3ce929d0e0e4736'
 SELECT * FROM "stempeluhr" WHERE stempeluhr_event_id = '<event-id>'
 SELECT * FROM "stempeluhr" WHERE stempeluhr_employee_name = 'Max Mustermann' ORDER BY _timestamp DESC
+SELECT * FROM "stempeluhr" WHERE stempeluhr_kiosk_event = 'stamp.route' AND stempeluhr_fallback IS NOT NULL
+SELECT * FROM "stempeluhr" WHERE stempeluhr_terminal_id = 'stempeluhr-01' ORDER BY stempeluhr_device_time, stempeluhr_seq
 SELECT * FROM "stempeluhr" WHERE stempeluhr_outcome IN ('failed', 'rejected')
 ```
 

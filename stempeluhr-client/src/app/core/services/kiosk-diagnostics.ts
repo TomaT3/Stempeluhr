@@ -18,6 +18,34 @@ export interface KioskDiagnosticState {
   rejected: number;
 }
 
+/** Wie ein Vorgang am Terminal verlief. Agent und API lassen nur diese Werte durch. */
+export type KioskFlowName =
+  | 'session.open'
+  | 'session.end'
+  | 'scan.identified'
+  | 'scan.unknown'
+  | 'stamp.route'
+  | 'flow.discarded';
+
+export interface KioskFlowFields {
+  /** Interne Mitarbeiter-ID, nie der Name. Die API ergänzt den Namen serverseitig. */
+  employeeId?: string | null;
+  eventId?: string | null;
+  action?: string;
+  /** session.open: womit die Sitzung geöffnet wurde. */
+  method?: 'card' | 'pin' | 'pin-offline';
+  /** session.end und stamp.route (queue): warum. */
+  reason?: 'user' | 'idle' | 'done' | 'recovered' | 'flow-timeout' | 'replaced' | 'status' | 'offline' | 'failed';
+  /** stamp.route: über den Agenten, direkt oder in die Queue. */
+  route?: 'agent' | 'direct' | 'queue';
+  /** stamp.route: HTTP-Status, der den Wechsel erzwungen hat (0 = nicht erreichbar). */
+  fallback?: number;
+  /** scan.*: woher die Antwort kam. */
+  via?: 'cache' | 'server' | 'offline' | 'error';
+  /** flow.discarded: welche Antwort zu spät kam. */
+  what?: 'clock' | 'identify' | 'hours' | 'hints' | 'status';
+}
+
 /** Only allowlisted metadata is recorded. Never read PINs, cards, names,
  * error messages, response bodies, input contents or full request URLs. */
 @Injectable({ providedIn: 'root' })
@@ -54,6 +82,12 @@ export class KioskDiagnostics {
     if (this.timer === null) return;
     this.events.push({ ...event, seq: ++this.sequence, at: new Date().toISOString() });
     this.events = this.events.slice(-40);
+  }
+
+  /** Ein Schritt im Ablauf. Felder ohne Wert fallen weg. */
+  flow(name: KioskFlowName, fields: KioskFlowFields = {}): void {
+    const present = Object.entries(fields).filter(([, value]) => value !== null && value !== undefined && value !== '');
+    this.record({ kind: 'flow', name, ...Object.fromEntries(present) });
   }
 
   track(operation: string, eventId?: string): (status: number) => void {
@@ -139,9 +173,8 @@ const operations: Record<string, string> = {
 };
 
 export const kioskDiagnosticsInterceptor: HttpInterceptorFn = (request, next) => {
-  const operation =
-    operations[request.url.split('?')[0]] ??
-    (/^http:\/\/127\.0\.0\.1:\d+\/terminal\/sync$/.test(request.url) ? 'sync' : null);
+  const agentRoute = /^http:\/\/127\.0\.0\.1:\d+\/terminal\/(sync|clock)$/.exec(request.url)?.[1];
+  const operation = operations[request.url.split('?')[0]] ?? agentRoute ?? null;
   if (!operation) return next(request);
   const eventId =
     operation === 'clock' ? (request.body as { eventId?: string } | null)?.eventId : undefined;

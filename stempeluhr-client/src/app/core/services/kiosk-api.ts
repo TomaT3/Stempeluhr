@@ -16,6 +16,7 @@ import {
   SubmitCorrection,
   WorkTimeHints,
 } from '../models/kiosk.models';
+import { KioskDiagnostics } from './kiosk-diagnostics';
 import { LOCAL_NFC_SCAN_PORT } from './local-nfc-scan.service';
 
 /** Timeout für den read-only identify-Call (Kiosk bleibt sonst stumm bei hängendem Backend). */
@@ -60,6 +61,7 @@ export interface ClockOptions {
 export class KioskApi {
   private readonly http = inject(HttpClient);
   private readonly agentPort = inject(LOCAL_NFC_SCAN_PORT);
+  private readonly diagnostics = inject(KioskDiagnostics);
 
   pinLogin(pin: string) {
     return this.http.post<KioskEmployeeSession>('/api/kiosk/pin-login', { pin }).pipe(timeout(REQUEST_TIMEOUT_MS));
@@ -82,9 +84,12 @@ export class KioskApi {
   ) {
     const body = { employeeId, pin, action, nfcCardId, taskId, eventId, ...(options.source ? { source: options.source } : {}) };
     const direct = this.http.post<ClockStatus>('/api/kiosk/clock', body).pipe(timeout(REQUEST_TIMEOUT_MS));
+    const route = { eventId, employeeId, action };
     if (!options.viaAgent) {
+      this.diagnostics.flow('stamp.route', { ...route, route: 'direct' });
       return direct;
     }
+    this.diagnostics.flow('stamp.route', { ...route, route: 'agent' });
     // Über den Agenten erfährt der Server das Terminal (Issue #146). Ein
     // älterer Agent kennt die Route nicht (404), einer ohne Token antwortet
     // 503, ein gestoppter Agent (Update, Absturz) ist nicht erreichbar (0) -
@@ -96,9 +101,13 @@ export class KioskApi {
       .post<ClockStatus>(`http://127.0.0.1:${this.agentPort}/terminal/clock`, body)
       .pipe(
         timeout(REQUEST_TIMEOUT_MS),
-        catchError(error =>
-          error instanceof HttpErrorResponse && [0, 404, 503].includes(error.status) ? direct : throwError(() => error),
-        ),
+        catchError(error => {
+          if (error instanceof HttpErrorResponse && [0, 404, 503].includes(error.status)) {
+            this.diagnostics.flow('stamp.route', { ...route, route: 'direct', fallback: error.status });
+            return direct;
+          }
+          return throwError(() => error);
+        }),
       );
   }
 
