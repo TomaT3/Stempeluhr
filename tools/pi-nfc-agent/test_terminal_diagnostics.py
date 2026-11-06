@@ -45,6 +45,22 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(history.count('"kind": "forward-failed"'), 2)
             self.assertNotIn("TEST-TOKEN", history)
 
+    def test_flow_events_keep_only_allowed_fields(self):
+        clean = sanitize_heartbeat({"events": [
+            {"kind": "flow", "name": "stamp.route", "route": "direct", "fallback": 404, "eventId": "ev-1",
+             "employeeId": "emp-1", "action": "stop", "at": "2026-11-06T00:36:41Z", "seq": 7,
+             "cardId": "04ABCDEF", "pin": "1234", "displayName": "SECRET"},
+            {"kind": "flow", "name": "session.end", "employeeId": "<script>", "reason": "SECRET", "fallback": 9999},
+            {"kind": "flow", "name": "SECRET"},
+            {"kind": "flow"},
+        ]})
+        self.assertEqual(len(clean["events"]), 2)
+        route, end = clean["events"]
+        self.assertEqual(route, {"kind": "flow", "name": "stamp.route", "route": "direct", "fallback": 404,
+                                 "eventId": "ev-1", "employeeId": "emp-1", "action": "stop",
+                                 "at": "2026-11-06T00:36:41+00:00", "seq": 7})
+        self.assertEqual(end, {"kind": "flow", "name": "session.end"})
+
     def test_javascript_timestamp_is_normalized_for_python39(self):
         import terminal_diagnostics
         from datetime import datetime as real_datetime

@@ -58,6 +58,10 @@ public sealed record StampOrigin(StampMethod? Method, string? TerminalId = null,
         return Method == StampMethod.Card ? "Karte am Terminal" : null;
     }
 
-    /// <summary>Für das API-Log: nie PIN oder Karten-ID, nur die Art.</summary>
-    public override string ToString() => Describe() ?? "unbekannt";
+    /// <summary>
+    /// Für das API-Log: nie PIN oder Karten-ID, nur die Art. Anders als die
+    /// Meldung nennt es auch die PIN ohne Terminal, wie das Attribut am Span.
+    /// </summary>
+    public override string ToString() =>
+        Describe() ?? (Method == StampMethod.Pin ? "PIN ohne Terminal" : "unbekannt");
 }

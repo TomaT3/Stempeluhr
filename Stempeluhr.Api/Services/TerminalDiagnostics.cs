@@ -1,12 +1,40 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Stempeluhr.Api.Models;
 
 namespace Stempeluhr.Api.Services;
+
+/// <summary>Ein erlaubtes Ereignis des Kiosks; <see cref="At"/> ist die Gerätezeit.</summary>
+public sealed record TerminalEvent(
+    string? Kind, string? Name, string? Operation, string? Code, string? EventId, string? EmployeeId,
+    double? Status, double? DurationMs, string? At, double? Seq,
+    string? Screen, string? Blocked, bool? Busy, bool? Offline, double? Pending, double? Rejected,
+    string? Method, string? Reason, string? Route, string? Via, string? What, string? Action, double? Fallback)
+{
+    /// <summary>session.open, http.clock, error.storage oder state; null bei unbekannter Art.</summary>
+    [JsonIgnore]
+    public string? Label => Kind switch
+    {
+        "flow" => Name,
+        "http" when Operation is not null => "http." + Operation,
+        "error" when Code is not null => "error." + Code,
+        "state" => "state",
+        _ => null,
+    };
+}
 
 /// <summary>Only explicitly allowed technical fields may enter central logs.</summary>
 public static class TerminalDiagnostics
 {
+    private static readonly JsonSerializerOptions DetailOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // Nur erlaubte Werte, und im Log soll die Zeit lesbar bleiben (+00:00).
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     public static object Filter(JsonElement report)
     {
         var ui = Object(report, "ui");
@@ -37,20 +65,84 @@ public static class TerminalDiagnostics
                 operation = Choice(r, "operation", "clock", "sync", "login", "identify", "hours", "hints", "health"),
                 ageMs = Number(r, "ageMs"),
             }).ToArray(),
-            events = Array(ui, "events").Take(80).Select(e => new
-            {
-                kind = Choice(e, "kind", "http", "error", "state"),
-                operation = Choice(e, "operation", "clock", "sync", "login", "identify", "hours", "hints", "health"),
-                code = Choice(e, "code", "javascript", "promise", "storage"),
-                eventId = SafeIdentifier(e, "eventId"),
-                status = Number(e, "status", -1, 599), durationMs = Number(e, "durationMs"),
-                at = Timestamp(e, "at"), seq = Number(e, "seq", 0, 9_007_199_254_740_991),
-                screen = Choice(e, "screen", "idle", "session"),
-                blocked = Choice(e, "blocked", "none", "request", "backlog", "status"),
-                busy = Boolean(e, "busy"), offline = Boolean(e, "offline"),
-                pending = Number(e, "pending"), rejected = Number(e, "rejected"),
-            }).ToArray(),
         };
+    }
+
+    /// <summary>Die Ereignisse seit dem letzten Bericht, siehe <see cref="LogEvents"/>.</summary>
+    public static IReadOnlyList<TerminalEvent> Events(JsonElement report) =>
+        Array(Object(report, "ui"), "events").Take(80).Select(e => new TerminalEvent(
+            Kind: Choice(e, "kind", "http", "error", "state", "flow"),
+            Name: Choice(e, "name", "session.open", "session.end", "scan.identified", "scan.unknown", "stamp.route", "flow.discarded"),
+            Operation: Choice(e, "operation", "clock", "sync", "login", "identify", "hours", "hints", "health"),
+            Code: Choice(e, "code", "javascript", "promise", "storage"),
+            EventId: SafeIdentifier(e, "eventId"),
+            EmployeeId: SafeIdentifier(e, "employeeId"),
+            Status: Number(e, "status", -1, 599),
+            DurationMs: Number(e, "durationMs"),
+            At: Timestamp(e, "at"),
+            Seq: Number(e, "seq", 0, 9_007_199_254_740_991),
+            Screen: Choice(e, "screen", "idle", "session"),
+            Blocked: Choice(e, "blocked", "none", "request", "backlog", "status"),
+            Busy: Boolean(e, "busy"),
+            Offline: Boolean(e, "offline"),
+            Pending: Number(e, "pending"),
+            Rejected: Number(e, "rejected"),
+            Method: Choice(e, "method", "card", "pin", "pin-offline"),
+            Reason: Choice(e, "reason", "user", "idle", "done", "recovered", "flow-timeout", "replaced", "status", "offline", "failed"),
+            Route: Choice(e, "route", "agent", "direct", "queue"),
+            Via: Choice(e, "via", "cache", "server", "offline", "error"),
+            What: Choice(e, "what", "clock", "identify", "hours", "hints", "status"),
+            Action: Choice(e, "action", "start", "stop", "pauseStart", "pauseEnd", "switch"),
+            Fallback: Number(e, "fallback", -1, 599))).ToArray();
+
+    /// <summary>
+    /// Jedes Ereignis als eigener Log-Eintrag. Die Attribute heißen wie an den
+    /// Spans (<c>stempeluhr.event_id</c>, <c>.employee_id</c>, <c>.employee_name</c>,
+    /// <c>.terminal_id</c>), damit dieselbe Abfrage beide findet. Den Namen
+    /// ergänzt erst der Server: Auf dem Pi und in der Konsole steht nur die ID.
+    /// </summary>
+    public static void LogEvents(ILogger logger, string terminalId, JsonElement report, RuntimeSettings settings)
+    {
+        foreach (var entry in Events(report))
+        {
+            if (entry.Label is not { } label) continue;
+
+            var employeeName = entry.EmployeeId is { } id
+                ? settings.Employees.FirstOrDefault(e => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase))?.DisplayName
+                : null;
+            var attributes = new Dictionary<string, object?>
+            {
+                ["stempeluhr.kiosk_event"] = label,
+                ["stempeluhr.terminal_id"] = terminalId,
+                ["stempeluhr.device_time"] = entry.At,
+                ["stempeluhr.seq"] = entry.Seq,
+                ["stempeluhr.event_id"] = entry.EventId,
+                ["stempeluhr.employee_id"] = entry.EmployeeId,
+                ["stempeluhr.employee_name"] = employeeName,
+                ["stempeluhr.action"] = entry.Action,
+                ["stempeluhr.method"] = entry.Method,
+                ["stempeluhr.reason"] = entry.Reason,
+                ["stempeluhr.route"] = entry.Route,
+                ["stempeluhr.fallback"] = entry.Fallback,
+                ["stempeluhr.via"] = entry.Via,
+                ["stempeluhr.what"] = entry.What,
+                ["stempeluhr.http_status"] = entry.Status,
+                ["stempeluhr.duration_ms"] = entry.DurationMs,
+                ["stempeluhr.screen"] = entry.Screen,
+                ["stempeluhr.blocked"] = entry.Blocked,
+                ["stempeluhr.busy"] = entry.Busy,
+                ["stempeluhr.offline"] = entry.Offline,
+                ["stempeluhr.pending"] = entry.Pending,
+                ["stempeluhr.rejected"] = entry.Rejected,
+            }.Where(pair => pair.Value is not null).ToDictionary();
+
+            using (logger.BeginScope(attributes))
+            {
+                logger.LogInformation(
+                    "Terminal {TerminalId} event {KioskEvent} at {DeviceTime}: {Details}",
+                    terminalId, label, entry.At, JsonSerializer.Serialize(entry, DetailOptions));
+            }
+        }
     }
 
     /// <summary>The same allowed fields as <see cref="Filter"/>, typed for monitoring.</summary>

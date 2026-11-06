@@ -21,12 +21,14 @@ public static class KioskEndpoints
             IRuntimeSettingsStore store, TerminalHealthStore health, TerminalMetricsWriter metrics,
             ILogger<Program> logger) =>
         {
-            var terminalId = TerminalAuthentication.Authenticate(context.Request, store.Load());
+            var settings = store.Load();
+            var terminalId = TerminalAuthentication.Authenticate(context.Request, settings);
             if (terminalId is null) return Results.Unauthorized();
             if (!diagnosticLimiter.TryAcquire(terminalId)) return Results.StatusCode(429);
             if (report.ValueKind != JsonValueKind.Object) return Results.BadRequest();
             logger.LogInformation("Terminal {TerminalId} diagnostics: {Report}",
                 terminalId, JsonSerializer.Serialize(TerminalDiagnostics.Filter(report)));
+            TerminalDiagnostics.LogEvents(logger, terminalId, report, settings);
             var summary = TerminalDiagnostics.Summarize(report);
             health.Record(terminalId, summary);
             metrics.Enqueue(terminalId, summary);
