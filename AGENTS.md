@@ -5,13 +5,9 @@ nur, was zusätzlich für Änderungen gilt.
 
 ## Arbeitsweise
 
-- Nie direkt auf `main`: Feature-/Fix-Branch und Pull Request. Nicht
-  force-pushen, bestehende Änderungen nicht ungefragt zurücksetzen.
-- Issue- und PR-Beschreibungen vor der Umsetzung gegen den aktuellen Code
-  prüfen; abschließende Issues im PR-Text mit `Closes #<issue>` verknüpfen.
+- Allgemeine Arbeitsregeln (Branches, Secrets, Tests, Exit-Codes): `docs/working-rules.md` im Home Repo [agent-config](https://github.com/TomaT3/agent-config).
 - API-Tests sind xUnit (`[Fact]`, `[Theory]`) und laufen über
   `Stempeluhr.Api.Tests/Stempeluhr.Api.Tests.csproj` (nicht über die `.slnx`).
-- Build- und Testbefehle nicht durch Pipes führen, die den Exit-Code verdecken.
 - Nach einer Merge-Freigabe: mergen und Branches löschen. Ein Release nur
   auf ausdrückliche Anweisung starten. Bei gestapelten PRs vor jedem Merge die
   Basis auf `main` umstellen – das Löschen eines Basis-Branches schließt
