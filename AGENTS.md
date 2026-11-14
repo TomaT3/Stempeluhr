@@ -5,7 +5,7 @@ nur, was zusätzlich für Änderungen gilt.
 
 ## Arbeitsweise
 
-- Allgemeine Arbeitsregeln (Branches, Secrets, Tests, Exit-Codes): `docs/working-rules.md` im Home Repo [agent-config](https://github.com/TomaT3/agent-config).
+- Allgemeine Arbeitsregeln (Branches, Secrets, Tests, Exit-Codes): `docs/working-rules.md` im Home Repo [agent-home-repo](https://github.com/TomaT3/agent-home-repo).
 - API-Tests sind xUnit (`[Fact]`, `[Theory]`) und laufen über
   `Stempeluhr.Api.Tests/Stempeluhr.Api.Tests.csproj` (nicht über die `.slnx`).
 - Nach einer Merge-Freigabe: mergen und Branches löschen. Ein Release nur
