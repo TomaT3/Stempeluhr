@@ -107,6 +107,9 @@ export class KioskApi {
     // Ein älterer Agent lässt den Header im Preflight nicht zu; der Browser
     // meldete dann Status 0, und der Stempel liefe ohne Terminal direkt.
     const viaAgent = this.agentAcceptsTraceparent() ? traced : {};
+    const agentClock = (options: object) => this.http
+      .post<ClockStatus>(`http://127.0.0.1:${this.agentPort}/terminal/clock`, body, options)
+      .pipe(timeout(REQUEST_TIMEOUT_MS));
     // Über den Agenten erfährt der Server das Terminal (Issue #146). Ein
     // älterer Agent kennt die Route nicht (404), einer ohne Token antwortet
     // 503, ein gestoppter Agent (Update, Absturz) ist nicht erreichbar (0) -
@@ -114,20 +117,28 @@ export class KioskApi {
     // bisher. Sonst bliebe ein PIN-Stempel in der Queue, deren Nachtrag
     // ebenfalls nur über den Agenten läuft. Ein Timeout (kein HTTP-Status)
     // fällt nicht zurück: der Agent könnte die Anfrage schon weitergegeben haben.
-    return this.http
-      .post<ClockStatus>(`http://127.0.0.1:${this.agentPort}/terminal/clock`, body, viaAgent)
-      .pipe(
-        timeout(REQUEST_TIMEOUT_MS),
-        catchError(error => {
-          if (error instanceof HttpErrorResponse && [0, 404, 503].includes(error.status)) {
-            // Vielleicht ein anderer Agent als beim letzten Mal: neu fragen.
-            if (error.status === 0) this.agentTracing = null;
-            this.diagnostics.flow('stamp.route', { ...route, route: 'direct', fallback: error.status });
-            return direct;
-          }
-          return throwError(() => error);
-        }),
-      );
+    const isFallback = (error: unknown): error is HttpErrorResponse =>
+      error instanceof HttpErrorResponse && [0, 404, 503].includes(error.status);
+    const toDirect = (error: unknown) => {
+      if (!isFallback(error)) return throwError(() => error);
+      this.diagnostics.flow('stamp.route', { ...route, route: 'direct', fallback: error.status });
+      return direct;
+    };
+    return agentClock(viaAgent).pipe(
+      catchError(error => {
+        if (!isFallback(error)) return throwError(() => error);
+        // Vielleicht ein anderer Agent als beim letzten Mal: neu fragen.
+        this.agentTracing = null;
+        // Status 0 mit Header kann ein inzwischen älterer Agent sein, dessen
+        // Preflight den Header ablehnt (Rückrollen ohne Neuladen des Kiosks):
+        // einmal ohne Header über den Agenten, sonst fehlte das Terminal.
+        if (error.status === 0 && traceparent && viaAgent === traced) {
+          this.diagnostics.flow('stamp.route', { ...route, route: 'agent', fallback: 0 });
+          return agentClock({}).pipe(catchError(toDirect));
+        }
+        return toDirect(error);
+      }),
+    );
   }
 
   /**

@@ -36,6 +36,7 @@ import {
   withOfflineLabel,
 } from '../../core/services/offline-cache';
 import { OfflineQueueService } from '../../core/services/offline-queue';
+import { newEventId } from '../../core/services/trace-context';
 import type { CorrectionStart } from './correction-flow/correction-flow';
 
 /** Wartezeit zwischen Versions-Hinweis und Auto-Reload (Mitarbeiter kann abbrechen). */
@@ -1653,11 +1654,7 @@ export abstract class ClockWorkflow implements OnDestroy {
   }
 
   private generateEventId(): string {
-    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-      return crypto.randomUUID().replaceAll('-', '');
-    }
-
-    return `${Date.now().toString(16)}${Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')}`;
+    return newEventId();
   }
 
   private scheduleReset(delayMs = RESET_MS): void {

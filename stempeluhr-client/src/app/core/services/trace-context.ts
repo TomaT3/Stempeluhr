@@ -7,9 +7,18 @@
  */
 
 /**
- * Event-IDs sind 32 Hex-Zeichen (UUID ohne Bindestriche). Ohne
- * `crypto.randomUUID` (Kiosk über http://) sind sie kürzer und werden links
- * aufgefüllt. Alles andere hat keine Trace-ID.
+ * Neue Event-ID: 32 Hex-Zeichen, damit sie unverändert Trace-ID ist.
+ * `crypto.getRandomValues` gibt es anders als `crypto.randomUUID` auch ohne
+ * sicheren Kontext (Kiosk über http://).
+ */
+export function newEventId(): string {
+  return randomHex(16);
+}
+
+/**
+ * Event-IDs sind 32 Hex-Zeichen. Ältere Kiosk-Versionen erzeugten über http://
+ * kürzere IDs; solche Ereignisse können noch in einer Queue liegen und werden
+ * links aufgefüllt. Alles andere hat keine Trace-ID.
  */
 export function traceIdOf(eventId: string | null | undefined): string | null {
   if (!eventId || !/^[0-9a-f]{1,32}$/i.test(eventId) || /^0+$/.test(eventId)) return null;
@@ -19,11 +28,12 @@ export function traceIdOf(eventId: string | null | undefined): string | null {
 /** `traceparent` für einen Versuch dieses Stempels, oder null ohne passende Event-ID. */
 export function traceparentFor(eventId: string | null | undefined): string | null {
   const traceId = traceIdOf(eventId);
-  return traceId ? `00-${traceId}-${randomSpanId()}-01` : null;
+  return traceId ? `00-${traceId}-${randomHex(8)}-01` : null;
 }
 
-function randomSpanId(): string {
-  const bytes = new Uint8Array(8);
+/** Zufällige Bytes als Hex, nie nur Nullen (in W3C ungültig). */
+function randomHex(length: number): string {
+  const bytes = new Uint8Array(length);
   do {
     crypto.getRandomValues(bytes);
   } while (bytes.every(byte => byte === 0));

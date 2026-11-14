@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using OpenTelemetry;
+using OpenTelemetry.Trace;
 using Stempeluhr.Api.Models;
 using Stempeluhr.Api.Services;
 using Xunit;
@@ -205,6 +207,32 @@ public sealed partial class OfflineClockServiceTests
         Assert.Equal("duplicate", skip.GetTagItem("stempeluhr.outcome"));
         var sync = spans.Single(span => span.OperationName == "offline.sync");
         Assert.Equal(sync.Context.SpanId, ApplySpan(spans, "next").ParentSpanId);
+    }
+
+    /// <summary>
+    /// Wie im Betrieb: ParentBased-Sampler und Exporter. Ein Client mit
+    /// Flags <c>00</c> darf den Nachtrag nicht unsichtbar machen.
+    /// </summary>
+    [Fact]
+    public async Task OfflineApply_WithAnUnsampledTraceparent_IsStillRecorded()
+    {
+        var (service, _) = CreateService();
+        var traceId = ActivityTraceId.CreateRandom();
+        var exported = new List<Activity>();
+        using (var provider = Sdk.CreateTracerProviderBuilder()
+            .AddSource(StempeluhrTelemetry.SourceName)
+            .SetSampler(new ParentBasedSampler(new AlwaysOnSampler()))
+            .AddInMemoryExporter(exported)
+            .Build())
+        {
+            await service.SyncKioskAsync(
+                [Kiosk("unsampled", "start", T08) with { Traceparent = $"00-{traceId}-{ActivitySpanId.CreateRandom()}-00" }]);
+            provider!.ForceFlush();
+        }
+
+        var apply = ApplySpan(exported, "unsampled");
+        Assert.Equal(traceId, apply.TraceId);
+        Assert.Equal("booked", apply.GetTagItem("stempeluhr.outcome"));
     }
 
     [Theory]

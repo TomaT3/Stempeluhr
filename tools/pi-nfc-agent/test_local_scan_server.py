@@ -392,8 +392,9 @@ def test_traceparent_forwarding() -> None:
         sync = {"events": [{"eventId": "e1", "traceparent": TRACEPARENT}]}
         assert send("/terminal/clock", clock, TRACEPARENT) == 200
         assert seen[-1] == ("/api/kiosk/clock", TRACEPARENT), seen[-1]
+        # A batch holds several traces: the header never applies to it.
         assert send("/terminal/sync", sync, TRACEPARENT) == 200
-        assert seen[-1] == ("/api/kiosk/clock/sync", TRACEPARENT), seen[-1]
+        assert seen[-1] == ("/api/kiosk/clock/sync", None), seen[-1]
         # Invalid or missing: the request still goes through, without the header.
         assert send("/terminal/clock", clock, "garbage") == 200
         assert seen[-1] == ("/api/kiosk/clock", None), seen[-1]

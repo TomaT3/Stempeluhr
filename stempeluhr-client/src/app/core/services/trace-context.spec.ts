@@ -1,6 +1,19 @@
-import { traceIdOf, traceparentFor } from './trace-context';
+import { newEventId, traceIdOf, traceparentFor } from './trace-context';
 
 describe('trace context (issue #148)', () => {
+  it('creates event IDs that are their own trace ID, also without crypto.randomUUID', () => {
+    const randomUUID = crypto.randomUUID;
+    Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true });
+    try {
+      const eventId = newEventId();
+      expect(eventId).toMatch(/^[0-9a-f]{32}$/);
+      expect(traceIdOf(eventId)).toBe(eventId);
+      expect(newEventId()).not.toBe(eventId);
+    } finally {
+      Object.defineProperty(crypto, 'randomUUID', { value: randomUUID, configurable: true });
+    }
+  });
+
   it('uses the event ID as trace ID', () => {
     expect(traceIdOf('4BF92F3577B34DA6A3CE929D0E0E4736')).toBe('4bf92f3577b34da6a3ce929d0e0e4736');
   });

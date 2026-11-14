@@ -29,11 +29,16 @@ public static class StempeluhrTelemetry
     /// verweist auf den laufenden Span (Batch oder Outbox). Ohne gültigen
     /// Kontext wie <see cref="StartStamp"/>, ohne Namen wie dort vor der Anmeldung.
     /// Beim Beenden ist <see cref="Activity.Current"/> wieder der Batch.
+    /// Ein Kontext ohne Sampled-Flag gilt als aufgezeichnet: Sonst verwürfe der
+    /// ParentBased-Sampler den Nachtrag samt Kimai-Aufrufen, und der Stempel
+    /// wäre über seine Event-ID nicht mehr zu finden.
     /// </summary>
     public static Activity? StartReplay(string name, string? traceparent, string? eventId, string? action, string? employeeId)
     {
-        if (!ActivityContext.TryParse(traceparent, null, isRemote: true, out var parent))
+        if (!ActivityContext.TryParse(traceparent, null, isRemote: true, out var parsed))
             return StartStamp(name, eventId, action, employeeId, null);
+        var parent = new ActivityContext(parsed.TraceId, parsed.SpanId,
+            parsed.TraceFlags | ActivityTraceFlags.Recorded, parsed.TraceState, isRemote: true);
         var links = Activity.Current is { } current ? new[] { new ActivityLink(current.Context) } : null;
         return TagStamp(Source.StartActivity(name, ActivityKind.Internal, parent, links: links), eventId, action, employeeId, null);
     }

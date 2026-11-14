@@ -74,8 +74,9 @@ Benachrichtigungen laufen in einer eigenen Trace, nicht unter dem Stempel.
 ## Ein Stempel, eine Trace
 
 Die Trace-ID eines Stempels ist seine Event-ID. Der Kiosk schickt sie als
-`traceparent` (W3C) mit. Kürzere Ersatz-IDs eines Kiosks ohne `crypto.randomUUID`
-werden links mit Nullen auf 32 Zeichen aufgefüllt. In derselben Trace liegen:
+`traceparent` (W3C) mit. Event-IDs sind immer 32 Hex-Zeichen, auch über http://.
+Nur kürzere IDs älterer Kiosk-Versionen, die noch in einer Queue liegen, werden
+links mit Nullen auf 32 Zeichen aufgefüllt. In derselben Trace liegen:
 
 - der Live-Versuch: `POST /api/kiosk/clock`, `kiosk.clock` und die Kimai-Aufrufe,
   direkt oder über den Agenten,
@@ -88,14 +89,19 @@ werden links mit Nullen auf 32 Zeichen aufgefüllt. In derselben Trace liegen:
 In der Queue steht das `traceparent` pro Ereignis im Body, nicht als Header.
 Auch Ereignisse, die eine ältere Kiosk-Version eingereiht hat, bekommen es so
 beim Senden. Ein ungültiger Wert wird ignoriert; der Span hängt dann wie bisher
-unter dem Batch.
+unter dem Batch. Ein Wert ohne Sampled-Flag (`-00`) wird trotzdem aufgezeichnet.
+Der Agent reicht beim Sync keinen `traceparent`-Header weiter, nur beim
+Live-Stempel.
 
 Über den Agenten geht der Header nur, wenn dessen `/health`
 `features: ["traceparent"]` meldet. Ein älterer Agent lässt den Header im
 CORS-Preflight nicht zu; der Stempel liefe dann ohne Terminal direkt. Der Kiosk
 fragt `/health` im Hintergrund ab. Der erste Stempel nach dem Laden geht deshalb
 ohne Header über den Agenten und beginnt dort eine eigene Trace, der Nachtrag
-landet trotzdem in der Trace der Event-ID.
+landet trotzdem in der Trace der Event-ID. Scheitert ein Stempel mit Header an
+Status 0 (etwa ein zurückgerollter Agent), versucht der Kiosk es einmal ohne
+Header über den Agenten, erst dann direkt. Nach jedem Rückfall (0, 404, 503)
+fragt er `/health` neu ab.
 
 Der Kiosk zeichnet selbst keine Spans auf. Der oberste Span einer Trace zeigt
 deshalb auf einen Eltern-Span, den es im Backend nicht gibt.

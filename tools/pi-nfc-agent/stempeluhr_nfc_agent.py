@@ -292,9 +292,10 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             except (ValueError, KeyError, TypeError):
                 self._send_json(400, {"error": "invalid sync batch"})
                 return
+        # No traceparent header here: a sync batch holds stamps of several
+        # traces, each event carries its own in the body.
         try:
-            with upstream_request(config, path, body, timeout=270 if post else 15,
-                                  traceparent=valid_traceparent(self.headers.get("traceparent"))) as response:
+            with upstream_request(config, path, body, timeout=270 if post else 15) as response:
                 result = json.load(response)
             self._send_json(200, result)
         except urllib.error.HTTPError as error:
