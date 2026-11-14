@@ -212,6 +212,11 @@ für eine Browser-/Seitenstörung, beweisen aber allein keinen Renderer-Hänger
 (z. B. auch eine geschlossene Seite, Hintergrundtab oder blockiertes Loopback).
 Für die Abgrenzung Systemmetriken, Kernel- und NFC-Journal heranziehen.
 
+Zuerst ohne SSH nachsehen: Zustand, Systemmetriken und die Ereignisse vor dem
+Hänger liegen in OpenObserve, siehe
+[Fehlersuche ohne SSH](observability.md#fehlersuche-ohne-ssh). Journale und die
+vollständige JSONL-Historie gibt es nur auf dem Pi.
+
 Auf dem Admin-Rechner im Repository (bash):
 
 ```bash
@@ -226,9 +231,11 @@ Browserprofil. `/health` und `/diagnostics` werden dabei auf dem Standardport
 8737 abgefragt; bei abweichendem Port die zwei Abfragen anpassen.
 Die vollständige begrenzte JSONL-Historie wird unabhängig vom Zeitfilter exportiert.
 
-Im API-/Containerlog nach derselben Event-ID und den neuen `Kimai POST/PATCH`
-Diagnosen suchen. Diese nennen die Operation, Laufzeit, HTTP-Status und
-unerlaubte Felder. Erfolgreiche Kimai-Aufrufe stehen auf Debug-Level;
+Auf der API-Seite in OpenObserve mit der Event-ID als `trace_id` suchen, ohne
+OpenObserve im Containerlog nach der Event-ID und den `Kimai POST/PATCH`
+Diagnosen. Diese nennen die Operation, Laufzeit, HTTP-Status und
+unerlaubte Felder. Erfolgreiche Kimai-Aufrufe stehen auf Debug-Level (standardmäßig
+nicht protokolliert), in OpenObserve aber immer als Kimai-Span mit Status;
 Ablehnungen auf Warning-Level. Die vollständigen Fehler bleiben im Adminjournal.
 Für Serverlogs Docker-Logrotation konfigurieren (z. B. `max-size: 10m`,
 `max-file: "3"`); die Aufbewahrung der API-Logs übernimmt der Betreiber.
