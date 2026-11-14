@@ -21,8 +21,25 @@ public static class StempeluhrTelemetry
     public static readonly ActivitySource Source = new(SourceName);
 
     public static Activity? StartStamp(string name, string? eventId, string? action, string? employeeId, string? employeeName)
+        => TagStamp(Source.StartActivity(name), eventId, action, employeeId, employeeName);
+
+    /// <summary>
+    /// Ein nachgetragener Stempel: Er hängt an der Trace seines ersten
+    /// Versuchs (<paramref name="traceparent"/> aus der Queue des Kiosks) und
+    /// verweist auf den laufenden Span (Batch oder Outbox). Ohne gültigen
+    /// Kontext wie <see cref="StartStamp"/>, ohne Namen wie dort vor der Anmeldung.
+    /// Beim Beenden ist <see cref="Activity.Current"/> wieder der Batch.
+    /// </summary>
+    public static Activity? StartReplay(string name, string? traceparent, string? eventId, string? action, string? employeeId)
     {
-        var activity = Source.StartActivity(name);
+        if (!ActivityContext.TryParse(traceparent, null, isRemote: true, out var parent))
+            return StartStamp(name, eventId, action, employeeId, null);
+        var links = Activity.Current is { } current ? new[] { new ActivityLink(current.Context) } : null;
+        return TagStamp(Source.StartActivity(name, ActivityKind.Internal, parent, links: links), eventId, action, employeeId, null);
+    }
+
+    private static Activity? TagStamp(Activity? activity, string? eventId, string? action, string? employeeId, string? employeeName)
+    {
         if (activity is null) return null;
         activity.SetTag("stempeluhr.event_id", eventId);
         activity.SetTag("stempeluhr.action", action);

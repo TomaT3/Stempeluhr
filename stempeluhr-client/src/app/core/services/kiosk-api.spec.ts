@@ -3,7 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 import { Observable, TimeoutError } from 'rxjs';
 
-import { KioskApi, REQUEST_TIMEOUT_MS, isTransientHttpStatus } from './kiosk-api';
+import { AGENT_FEATURES_TTL_MS, KioskApi, REQUEST_TIMEOUT_MS, isTransientHttpStatus } from './kiosk-api';
 import { KioskDiagnostics } from './kiosk-diagnostics';
 
 describe('KioskApi', () => {
@@ -151,6 +151,68 @@ describe('KioskApi', () => {
 
       api.clock('max', '1234', 'start').subscribe();
       expect(http.expectOne('/api/kiosk/clock').request.body).not.toHaveProperty('source');
+    });
+  });
+
+  describe('traceparent (issue #148)', () => {
+    const eventId = '4bf92f3577b34da6a3ce929d0e0e4736';
+    const agentClock = 'http://127.0.0.1:8737/terminal/clock';
+    const agentHealth = 'http://127.0.0.1:8737/health';
+    const traceOf = (eventId: string) => new RegExp(`^00-${eventId}-[0-9a-f]{16}-01$`);
+
+    function stampViaAgent() {
+      api.clock('max', '1234', 'stop', null, null, eventId, { viaAgent: true }).subscribe({ error: () => undefined });
+    }
+
+    it('sends the event ID as trace ID with a direct stamp', () => {
+      api.clock('max', '1234', 'stop', null, null, eventId).subscribe();
+
+      expect(http.expectOne('/api/kiosk/clock').request.headers.get('traceparent')).toMatch(traceOf(eventId));
+    });
+
+    it('sends no traceparent without a usable event ID', () => {
+      api.clock('max', '1234', 'stop').subscribe();
+
+      expect(http.expectOne('/api/kiosk/clock').request.headers.has('traceparent')).toBe(false);
+    });
+
+    it('sends it to the agent only once the agent names the feature', () => {
+      stampViaAgent();
+      expect(http.expectOne(agentClock).request.headers.has('traceparent')).toBe(false);
+      http.expectOne(agentHealth).flush({ ok: true, version: '1.0.0', features: ['traceparent'] });
+
+      stampViaAgent();
+      expect(http.expectOne(agentClock).request.headers.get('traceparent')).toMatch(traceOf(eventId));
+      http.expectNone(agentHealth);
+    });
+
+    it('never sends it to an older agent, which would fail the preflight, and asks again later', () => {
+      stampViaAgent();
+      http.expectOne(agentClock);
+      http.expectOne(agentHealth).flush({ ok: true, version: '0.9.0' });
+
+      stampViaAgent();
+      expect(http.expectOne(agentClock).request.headers.has('traceparent')).toBe(false);
+      http.expectNone(agentHealth);
+
+      vi.advanceTimersByTime(AGENT_FEATURES_TTL_MS.missing);
+      stampViaAgent();
+      http.expectOne(agentClock);
+      http.expectOne(agentHealth);
+    });
+
+    it('asks again after the agent was unreachable, and keeps the header on the direct fallback', () => {
+      stampViaAgent();
+      http.expectOne(agentClock);
+      http.expectOne(agentHealth).flush({ ok: true, features: ['traceparent'] });
+
+      stampViaAgent();
+      http.expectOne(agentClock).error(new ProgressEvent('error'));
+      expect(http.expectOne('/api/kiosk/clock').request.headers.get('traceparent')).toMatch(traceOf(eventId));
+
+      stampViaAgent();
+      expect(http.expectOne(agentClock).request.headers.has('traceparent')).toBe(false);
+      http.expectOne(agentHealth);
     });
   });
 

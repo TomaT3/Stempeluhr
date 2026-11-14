@@ -146,6 +146,83 @@ public sealed partial class OfflineClockServiceTests
         Assert.Equal("locked", SkipSpan(spans, "max-stop").GetTagItem("stempeluhr.outcome"));
     }
 
+    /// <summary>Kontext des ersten Versuchs am Kiosk.</summary>
+    private static (string Traceparent, ActivityTraceId TraceId, ActivitySpanId SpanId) KioskTrace()
+    {
+        var traceId = ActivityTraceId.CreateRandom();
+        var spanId = ActivitySpanId.CreateRandom();
+        return ($"00-{traceId}-{spanId}-01", traceId, spanId);
+    }
+
+    [Fact]
+    public async Task OfflineApply_JoinsTheTraceOfTheFirstAttempt_AndLinksTheBatch()
+    {
+        var (service, _) = CreateService();
+        var kiosk = KioskTrace();
+
+        var spans = await SpanCapture.InTraceAsync(
+            () => service.SyncKioskAsync([Kiosk("joined", "start", T08) with { Traceparent = kiosk.Traceparent }]),
+            kiosk.TraceId);
+
+        var apply = ApplySpan(spans, "joined");
+        Assert.Equal(kiosk.TraceId, apply.TraceId);
+        Assert.Equal(kiosk.SpanId, apply.ParentSpanId);
+        Assert.Equal("booked", apply.GetTagItem("stempeluhr.outcome"));
+        var sync = spans.Single(span => span.OperationName == "offline.sync");
+        Assert.Equal(sync.Context.SpanId, Assert.Single(apply.Links).Context.SpanId);
+    }
+
+    [Fact]
+    public async Task OfflineApply_FromTheOutbox_StaysInTheTraceOfTheFirstAttempt()
+    {
+        var (service, kimai) = CreateService();
+        var kiosk = KioskTrace();
+        kimai.FailNextStatusCalls = 2;
+        await service.SyncKioskAsync([Kiosk("later", "start", T08) with { Traceparent = kiosk.Traceparent }]);
+
+        var spans = await SpanCapture.InTraceAsync(() => service.FlushOutboxAsync(), kiosk.TraceId);
+
+        var apply = ApplySpan(spans, "later");
+        Assert.Equal(kiosk.TraceId, apply.TraceId);
+        Assert.Equal("booked", apply.GetTagItem("stempeluhr.outcome"));
+        var flush = spans.Single(span => span.OperationName == "outbox.flush");
+        Assert.Equal(flush.Context.SpanId, Assert.Single(apply.Links).Context.SpanId);
+    }
+
+    [Fact]
+    public async Task OfflineSkip_JoinsTheTraceOfTheFirstAttempt_AndLaterEventsStayInTheBatch()
+    {
+        var (service, _) = CreateService();
+        var kiosk = KioskTrace();
+        await service.SyncKioskAsync([Kiosk("once", "start", T08)]);
+
+        var spans = await SpanCapture.InTraceAsync(() => service.SyncKioskAsync(
+            [Kiosk("once", "start", T08) with { Traceparent = kiosk.Traceparent }, Kiosk("next", "stop", T10)]),
+            kiosk.TraceId);
+
+        var skip = SkipSpan(spans, "once");
+        Assert.Equal(kiosk.TraceId, skip.TraceId);
+        Assert.Equal("duplicate", skip.GetTagItem("stempeluhr.outcome"));
+        var sync = spans.Single(span => span.OperationName == "offline.sync");
+        Assert.Equal(sync.Context.SpanId, ApplySpan(spans, "next").ParentSpanId);
+    }
+
+    [Theory]
+    [InlineData("garbage")]
+    [InlineData("00-00000000000000000000000000000000-00f067aa0ba902b7-01")]
+    public async Task OfflineApply_WithAnInvalidTraceparent_StaysInTheBatch(string traceparent)
+    {
+        var (service, _) = CreateService();
+
+        var spans = await SpanCapture.InTraceAsync(
+            () => service.SyncKioskAsync([Kiosk("invalid", "start", T08) with { Traceparent = traceparent }]));
+
+        var sync = spans.Single(span => span.OperationName == "offline.sync");
+        var apply = ApplySpan(spans, "invalid");
+        Assert.Equal(sync.Context.SpanId, apply.ParentSpanId);
+        Assert.Empty(apply.Links);
+    }
+
     /// <summary>Der Speicher der Event-IDs fällt aus: ein Fehler außerhalb der Ereignis-Behandlung.</summary>
     private sealed class BrokenEventIdStore : IOfflineEventIdStore
     {

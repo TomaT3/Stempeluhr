@@ -310,6 +310,21 @@ describe('OfflineQueueService sync batching', () => {
     expect(service.pendingCount().length).toBe(0);
   });
 
+  it('sends each event with the trace of its live attempt, without storing it (issue #148)', async () => {
+    const eventId = '4bf92f3577b34da6a3ce929d0e0e4736';
+    service.enqueueKiosk(kioskEvent(eventId));
+    service.enqueueKiosk(kioskEvent('not-hex'));
+    service.syncNow().subscribe();
+
+    const req = httpMock.expectOne(kioskEndpoint);
+    const [traced, untraced] = req.request.body.events as OfflineKioskClockEvent[];
+    expect(traced.traceparent).toMatch(new RegExp(`^00-${eventId}-[0-9a-f]{16}-01$`));
+    expect(untraced).not.toHaveProperty('traceparent');
+    expect(window.localStorage.getItem('stempeluhr.offline-queue.v1')).not.toContain('traceparent');
+    req.flush(resultFor([], 'applied'));
+    await drainMicrotasks();
+  });
+
   it('does not emit recovered when the server only buffers (API up, Kimai down)', async () => {
     let recovered = 0;
     service.recovered.subscribe(() => recovered++);

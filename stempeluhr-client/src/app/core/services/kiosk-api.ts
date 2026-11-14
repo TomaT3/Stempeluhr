@@ -1,6 +1,6 @@
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
-import { catchError, throwError, timeout } from 'rxjs';
+import { catchError, finalize, throwError, timeout } from 'rxjs';
 
 import { Absence, KioskAbsenceOverview, SubmitAbsence } from '../models/absence.models';
 import {
@@ -18,6 +18,7 @@ import {
 } from '../models/kiosk.models';
 import { KioskDiagnostics } from './kiosk-diagnostics';
 import { LOCAL_NFC_SCAN_PORT } from './local-nfc-scan.service';
+import { traceparentFor } from './trace-context';
 
 /** Timeout für den read-only identify-Call (Kiosk bleibt sonst stumm bei hängendem Backend). */
 export const IDENTIFY_TIMEOUT_MS = 10_000;
@@ -55,6 +56,13 @@ export interface ClockOptions {
   source?: 'web' | null;
 }
 
+/**
+ * Wie lange die Antwort von `/health` des Agenten gilt. Ein Update startet den
+ * Agenten neu, ohne dass der Kiosk neu lädt: Eine fehlende Fähigkeit wird
+ * deshalb bald wieder geprüft, eine vorhandene seltener.
+ */
+export const AGENT_FEATURES_TTL_MS = { supported: 60 * 60_000, missing: 5 * 60_000 };
+
 @Injectable({
   providedIn: 'root',
 })
@@ -62,6 +70,9 @@ export class KioskApi {
   private readonly http = inject(HttpClient);
   private readonly agentPort = inject(LOCAL_NFC_SCAN_PORT);
   private readonly diagnostics = inject(KioskDiagnostics);
+  /** Ob der Agent `traceparent` annimmt; null = unbekannt. */
+  private agentTracing: { supported: boolean; until: number } | null = null;
+  private probingAgent = false;
 
   pinLogin(pin: string) {
     return this.http.post<KioskEmployeeSession>('/api/kiosk/pin-login', { pin }).pipe(timeout(REQUEST_TIMEOUT_MS));
@@ -83,13 +94,19 @@ export class KioskApi {
     options: ClockOptions = {},
   ) {
     const body = { employeeId, pin, action, nfcCardId, taskId, eventId, ...(options.source ? { source: options.source } : {}) };
-    const direct = this.http.post<ClockStatus>('/api/kiosk/clock', body).pipe(timeout(REQUEST_TIMEOUT_MS));
+    // Same origin: the header needs no preflight and reaches the API as is.
+    const traceparent = traceparentFor(eventId);
+    const traced = traceparent ? { headers: new HttpHeaders({ traceparent }) } : {};
+    const direct = this.http.post<ClockStatus>('/api/kiosk/clock', body, traced).pipe(timeout(REQUEST_TIMEOUT_MS));
     const route = { eventId, employeeId, action };
     if (!options.viaAgent) {
       this.diagnostics.flow('stamp.route', { ...route, route: 'direct' });
       return direct;
     }
     this.diagnostics.flow('stamp.route', { ...route, route: 'agent' });
+    // Ein älterer Agent lässt den Header im Preflight nicht zu; der Browser
+    // meldete dann Status 0, und der Stempel liefe ohne Terminal direkt.
+    const viaAgent = this.agentAcceptsTraceparent() ? traced : {};
     // Über den Agenten erfährt der Server das Terminal (Issue #146). Ein
     // älterer Agent kennt die Route nicht (404), einer ohne Token antwortet
     // 503, ein gestoppter Agent (Update, Absturz) ist nicht erreichbar (0) -
@@ -98,17 +115,44 @@ export class KioskApi {
     // ebenfalls nur über den Agenten läuft. Ein Timeout (kein HTTP-Status)
     // fällt nicht zurück: der Agent könnte die Anfrage schon weitergegeben haben.
     return this.http
-      .post<ClockStatus>(`http://127.0.0.1:${this.agentPort}/terminal/clock`, body)
+      .post<ClockStatus>(`http://127.0.0.1:${this.agentPort}/terminal/clock`, body, viaAgent)
       .pipe(
         timeout(REQUEST_TIMEOUT_MS),
         catchError(error => {
           if (error instanceof HttpErrorResponse && [0, 404, 503].includes(error.status)) {
+            // Vielleicht ein anderer Agent als beim letzten Mal: neu fragen.
+            if (error.status === 0) this.agentTracing = null;
             this.diagnostics.flow('stamp.route', { ...route, route: 'direct', fallback: error.status });
             return direct;
           }
           return throwError(() => error);
         }),
       );
+  }
+
+  /**
+   * Bekannte Antwort des Agenten, sonst false. Fragt `/health` im Hintergrund
+   * nach, statt den Stempel warten zu lassen: Der erste Stempel nach dem Laden
+   * geht deshalb ohne Header über den Agenten.
+   */
+  private agentAcceptsTraceparent(): boolean {
+    const known = this.agentTracing;
+    if ((!known || Date.now() >= known.until) && !this.probingAgent) {
+      this.probingAgent = true;
+      this.http
+        .get<{ features?: unknown }>(`http://127.0.0.1:${this.agentPort}/health`)
+        .pipe(timeout(3_000), finalize(() => (this.probingAgent = false)))
+        .subscribe({
+          next: health => {
+            const supported = Array.isArray(health?.features) && health.features.includes('traceparent');
+            const ttl = supported ? AGENT_FEATURES_TTL_MS.supported : AGENT_FEATURES_TTL_MS.missing;
+            this.agentTracing = { supported, until: Date.now() + ttl };
+          },
+          // Nicht erreichbar: beim nächsten Stempel wieder fragen.
+          error: () => undefined,
+        });
+    }
+    return known?.supported ?? false;
   }
 
   /**

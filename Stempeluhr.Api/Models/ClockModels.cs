@@ -50,6 +50,9 @@ public sealed record NfcClockRequest(string? CardId, string? Action, string? Ter
 /// lack it. <paramref name="Source"/> says how the session of the original
 /// action was opened ("card", "pin") or that it came from the /clock page
 /// ("web") - only for the stamp message, never for authentication.
+/// <paramref name="Traceparent"/> is the W3C trace context of the original
+/// attempt (issue #148): the replay joins the trace of the stamp instead of
+/// the batch. Telemetry only; invalid values are ignored.
 /// </summary>
 public sealed record OfflineKioskClockEventDto(
     string EventId,
@@ -59,7 +62,8 @@ public sealed record OfflineKioskClockEventDto(
     DateTimeOffset PerformedAt,
     string? NfcCardId = null,
     string? TaskId = null,
-    string? Source = null)
+    string? Source = null,
+    string? Traceparent = null)
 {
     // Assigned only after HTTP terminal authentication, never from client JSON.
     [System.Text.Json.Serialization.JsonIgnore]

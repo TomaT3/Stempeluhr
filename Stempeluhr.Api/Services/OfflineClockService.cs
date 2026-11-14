@@ -393,7 +393,7 @@ public sealed class OfflineClockService(
     /// </summary>
     private static void TraceNotApplied(OfflineKioskClockEventDto entry, string outcome)
     {
-        using var activity = StempeluhrTelemetry.StartStamp("offline.skip", entry.EventId, entry.Action, entry.EmployeeId, null);
+        using var activity = StempeluhrTelemetry.StartReplay("offline.skip", entry.Traceparent, entry.EventId, entry.Action, entry.EmployeeId);
         activity?.SetTag("stempeluhr.performed_at", entry.PerformedAt.ToString("O"));
         StempeluhrTelemetry.TagOutcome(activity, outcome);
     }
@@ -407,7 +407,8 @@ public sealed class OfflineClockService(
     {
         // Vor der Anmeldung: Auch ein abgelehntes oder gepuffertes Ereignis muss
         // über seine Event-ID auffindbar sein. Den Namen gibt es erst danach.
-        using var activity = StempeluhrTelemetry.StartStamp("offline.apply", entry.EventId, entry.Action, entry.EmployeeId, null);
+        // Die Trace ist die des ersten Versuchs am Kiosk, sofern er sie mitschickt.
+        using var activity = StempeluhrTelemetry.StartReplay("offline.apply", entry.Traceparent, entry.EventId, entry.Action, entry.EmployeeId);
         activity?.SetTag("stempeluhr.performed_at", entry.PerformedAt.ToString("O"));
         try
         {

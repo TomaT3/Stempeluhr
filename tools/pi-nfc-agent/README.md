@@ -15,7 +15,7 @@ und in der API, nicht im Agenten.
 | `GET` | `/terminal/catalog` | authentifizierter Mitarbeiter-Katalog vom Server |
 | `POST` | `/terminal/sync` | PIN-freier Queue-Nachtrag mit Agent-Token |
 | `POST` | `/terminal/clock` | Live-Stempel mit Agent-Token; PIN bzw. Karte bleiben im Body, das Token nennt der API nur das Terminal für die Stempel-Meldung |
-| `GET` | `/health` | `{"ok": true, "version": "x.y.z"}` |
+| `GET` | `/health` | `{"ok": true, "version": "x.y.z", "features": ["traceparent"]}` |
 | `POST` | `/diagnostics/heartbeat` | technisches Browser-Lebenszeichen; ausschließlich konfigurierte Origin |
 | `GET` | `/diagnostics` | letzte Pi-/Browser-Diagnose für lokale Wartung |
 
@@ -30,6 +30,10 @@ auch bei curl Pflicht. Der Agent setzt `Authorization: Bearer …` und
 `X-Terminal-Id` selbst, folgt keinen Redirects und liefert das Token nie aus.
 Der Agent setzt die eigene Terminal-ID; eine abweichende Kiosk-URL blockiert
 den Nachtrag nicht.
+Ein gültiges `traceparent` (W3C, Version 00) der Kiosk-Seite gibt der Agent an
+die API weiter, ein ungültiges lässt er weg. `features` in `/health` sagt dem
+Kiosk, dass der Agent den Header im Preflight zulässt: Ältere Agents würden die
+Anfrage daran scheitern lassen ([Logs und Traces](../../docs/observability.md#ein-stempel-eine-trace)).
 Fehlendes Token ergibt 503 (Browser behält bis zum ersten erfolgreichen
 Katalogabruf den Legacy-Nachtrag); 401 bei Entzug/Rotation wird an den Browser
 weitergereicht. Die Queue bleibt dabei erhalten.

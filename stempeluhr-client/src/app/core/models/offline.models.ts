@@ -37,6 +37,12 @@ export interface OfflineKioskClockEvent {
    * not part of the replay contract.
    */
   employeeName?: string | null;
+  /**
+   * W3C trace context of this replay (issue #148), set only when sending and
+   * derived from the event ID: the replay lands in the same trace as the
+   * live attempt. Not stored in the queue.
+   */
+  traceparent?: string | null;
 }
 
 export interface OfflineSyncEventResult {

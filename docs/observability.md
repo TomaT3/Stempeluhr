@@ -71,8 +71,34 @@ Nicht exportiert, weil sie die Stempel übertönen:
 
 Benachrichtigungen laufen in einer eigenen Trace, nicht unter dem Stempel.
 
-Trace-Kontext: Ein eingehendes `traceparent` (W3C) wird übernommen. Kiosk und
-Agent setzen es noch nicht; bis dahin beginnt jede Anfrage eine eigene Trace.
+## Ein Stempel, eine Trace
+
+Die Trace-ID eines Stempels ist seine Event-ID. Der Kiosk schickt sie als
+`traceparent` (W3C) mit. Kürzere Ersatz-IDs eines Kiosks ohne `crypto.randomUUID`
+werden links mit Nullen auf 32 Zeichen aufgefüllt. In derselben Trace liegen:
+
+- der Live-Versuch: `POST /api/kiosk/clock`, `kiosk.clock` und die Kimai-Aufrufe,
+  direkt oder über den Agenten,
+- der Nachtrag aus der Queue: `offline.apply` bzw. `offline.skip` samt
+  Kimai-Aufrufen, auch wenn er erst später aus der Outbox der API kommt
+  (`outbox.flush`). Der Nachtrag verweist per Span-Link auf `offline.sync` bzw.
+  `outbox.flush`. Der Batch selbst bleibt eine eigene Trace, weil er Stempel
+  mehrerer Traces enthält.
+
+In der Queue steht das `traceparent` pro Ereignis im Body, nicht als Header.
+Auch Ereignisse, die eine ältere Kiosk-Version eingereiht hat, bekommen es so
+beim Senden. Ein ungültiger Wert wird ignoriert; der Span hängt dann wie bisher
+unter dem Batch.
+
+Über den Agenten geht der Header nur, wenn dessen `/health`
+`features: ["traceparent"]` meldet. Ein älterer Agent lässt den Header im
+CORS-Preflight nicht zu; der Stempel liefe dann ohne Terminal direkt. Der Kiosk
+fragt `/health` im Hintergrund ab. Der erste Stempel nach dem Laden geht deshalb
+ohne Header über den Agenten und beginnt dort eine eigene Trace, der Nachtrag
+landet trotzdem in der Trace der Event-ID.
+
+Der Kiosk zeichnet selbst keine Spans auf. Der oberste Span einer Trace zeigt
+deshalb auf einen Eltern-Span, den es im Backend nicht gibt.
 
 ## Ereignisse der Terminals
 
@@ -97,7 +123,9 @@ In OpenObserve unter Logs bzw. Traces den Stream `stempeluhr` wählen, oder per
 SQL über `POST /api/default/_search?type=traces` bzw. `?type=logs`:
 
 ```sql
+-- Event-ID = Trace-ID: Live-Versuch, Nachtrag und Kimai-Aufrufe eines Stempels
 SELECT * FROM "stempeluhr" WHERE trace_id = '4bf92f3577b34da6a3ce929d0e0e4736'
+-- dazu die Log-Einträge des Kiosks (eigene Trace pro Bericht)
 SELECT * FROM "stempeluhr" WHERE stempeluhr_event_id = '<event-id>'
 SELECT * FROM "stempeluhr" WHERE stempeluhr_employee_name = 'Max Mustermann' ORDER BY _timestamp DESC
 SELECT * FROM "stempeluhr" WHERE stempeluhr_kiosk_event = 'stamp.route' AND stempeluhr_fallback IS NOT NULL
