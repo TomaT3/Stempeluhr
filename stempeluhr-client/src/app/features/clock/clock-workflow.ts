@@ -21,7 +21,7 @@ import { AudioFeedback } from '../../core/services/audio-feedback';
 import { ClockState, projectClockStatus } from '../../core/services/clock-state';
 import { KioskApi, isTransientHttpStatus } from '../../core/services/kiosk-api';
 import { LocalNfcScanService } from '../../core/services/local-nfc-scan.service';
-import { KioskDiagnostics } from '../../core/services/kiosk-diagnostics';
+import { KioskDiagnostics, KioskFlowFields } from '../../core/services/kiosk-diagnostics';
 import {
   forgetEmployeePin,
   lastKnownStatus,
@@ -66,6 +66,8 @@ const WARNING_RESET_MS = 6000;
  * Ruhezustand zurück, auch offline (Issue #146): sonst stempelt der Nächste
  * in der Sitzung seines Vorgängers. Ein Kartenscan zählt nicht als Eingabe.
  */
+type SessionEndReason = NonNullable<KioskFlowFields['reason']>;
+
 export const SESSION_IDLE_MS = 60_000;
 /** Läuft ein Abschnitt länger, bietet die Sitzung „Vergessen auszustempeln?“ an. */
 const FORGOT_STOP_AFTER_SECONDS = 12 * 3600;
@@ -397,7 +399,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       }
       if (this.pendingResetOnRecovery) {
         this.pendingResetOnRecovery = false;
-        this.back();
+        this.back('recovered');
       } else if ((this.replayStatusPending() || wasOffline)
         && this.selectedEmployee() && !this.hasPendingForEmployee(this.selectedEmployee()?.id)) {
         this.refreshStatusAfterReplay();
@@ -588,6 +590,8 @@ export abstract class ClockWorkflow implements OnDestroy {
         // Die Generation fängt dazu den Wechsel per Karte und zurück ab.
         if (this.pin() === pin && generation === this.sessionGeneration) {
           this.hoursOverview.set(hours);
+        } else {
+          this.diagnostics.flow('flow.discarded', { what: 'hours' });
         }
       },
       // Fehler (offline/4xx): Karte bleibt ausgeblendet bzw. zeigt letzte Werte.
@@ -614,6 +618,8 @@ export abstract class ClockWorkflow implements OnDestroy {
       next: hints => {
         if (generation === this.sessionGeneration && this.selectedEmployee()?.id === employeeId) {
           this.workTimeHints.set(hints);
+        } else {
+          this.diagnostics.flow('flow.discarded', { what: 'hints', employeeId });
         }
       },
       error: () => undefined,
@@ -641,6 +647,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.clearWorkTimeHints();
     this.kioskApi.pinLogin(pin).subscribe({
       next: session => {
+        this.recordSessionOpen('pin', session.employee.id);
         this.selectedEmployee.set(session.employee);
         this.resetSessionChoices();
         this.replayStatusPending.set(pendingAtLogin.has(session.employee.id)
@@ -796,7 +803,7 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** 2 min ohne Tipp im Korrekturablauf: zurück in den Ruhezustand. */
   onCorrectionTimedOut(): void {
-    this.back();
+    this.back('flow-timeout');
   }
 
   /** Öffnet „Abwesenheit“ in der Sitzung; nur online und wenn der Server sie eingerichtet meldet. */
@@ -846,7 +853,7 @@ export abstract class ClockWorkflow implements OnDestroy {
 
   /** 2 min ohne Tipp im Abwesenheitsablauf: zurück in den Ruhezustand. */
   onAbsenceTimedOut(): void {
-    this.back();
+    this.back('flow-timeout');
   }
 
   /**
@@ -910,7 +917,11 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.sendClockAction('switch', taskId);
   }
 
-  back(): void {
+  back(reason: SessionEndReason = 'user'): void {
+    const employeeId = this.selectedEmployee()?.id;
+    if (this.isUnlocked() && employeeId) {
+      this.diagnostics.flow('session.end', { employeeId, reason });
+    }
     this.replayStatusPending.set(false);
     this.replayStatusRequest?.unsubscribe();
     this.replayStatusRequest = null;
@@ -967,7 +978,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       this.armSessionIdle();
       return;
     }
-    this.back();
+    this.back('idle');
   }
 
   /**
@@ -1169,7 +1180,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         // Terminal (Issue #146). Die Sitzung endet, bevor die Karte wie im
         // Ruhezustand ausgewertet wird - auch eine unbekannte Karte lässt die
         // fremde Sitzung nicht offen.
-        this.back();
+        this.back('replaced');
         this.handleLocalScan(scan.cardId);
       });
       return;
@@ -1201,6 +1212,7 @@ export abstract class ClockWorkflow implements OnDestroy {
 
     if (employee) {
       const sessionCardId = normalized ?? cardId;
+      this.diagnostics.flow('scan.identified', { via: 'cache', employeeId: employee.id });
       this.applyOfflineIdentity(employee, sessionCardId, null);
       // Wem die Karte gehört, weiß hier nur der Cache. Stempel mit fehlender
       // PIN bekommen die Karten-ID erst, wenn der Server den Mitarbeiter
@@ -1232,11 +1244,13 @@ export abstract class ClockWorkflow implements OnDestroy {
               rememberEmployeeCard(confirmedCardId, event.employee);
             }
             if (generation !== this.sessionGeneration) {
+              this.diagnostics.flow('flow.discarded', { what: 'identify', employeeId: employee.id });
               return;
             }
             if (event.employee && event.employee.id !== employee.id) {
               // Karte inzwischen umgehängt: ein Identitätswechsel wie jeder
               // andere - nie Name, Status oder Auswahl des alten stehen lassen.
+              this.diagnostics.flow('scan.identified', { via: 'server', employeeId: event.employee.id });
               this.applyOfflineIdentity(event.employee, sessionCardId, null, event.status);
               this.resumeCardBacklog(event.employee, confirmedCardId);
               if (!this.replayStatusPending()) this.loadWorkTimeHints();
@@ -1271,6 +1285,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     // While offline the identify call can only fail (or hang until its
     // timeout) - skip it and answer immediately instead.
     if (this.isOffline()) {
+      this.diagnostics.flow('scan.unknown', { via: 'offline' });
       this.message.set('Unbekannte Karte');
       this.audioFeedback.playBeeps(2);
       return;
@@ -1288,22 +1303,27 @@ export abstract class ClockWorkflow implements OnDestroy {
           rememberEmployeeCard(event.cardId ?? identifyCardId, event.employee);
         }
         if (generation !== this.sessionGeneration) {
+          this.diagnostics.flow('flow.discarded', { what: 'identify', employeeId: event.employee?.id });
           return;
         }
         if (event.success && event.employee) {
+          this.diagnostics.flow('scan.identified', { via: 'server', employeeId: event.employee.id });
           this.applyOfflineIdentity(event.employee, event.cardId ?? identifyCardId, null, event.status);
           this.resumeCardBacklog(event.employee, event.cardId ?? identifyCardId);
           if (!this.replayStatusPending()) this.loadWorkTimeHints();
           this.audioFeedback.playBeeps(1);
         } else {
+          this.diagnostics.flow('scan.unknown', { via: 'server' });
           this.message.set(event.message || 'Unbekannte Karte');
           this.audioFeedback.playBeeps(2);
         }
       },
       error: () => {
         if (generation !== this.sessionGeneration) {
+          this.diagnostics.flow('flow.discarded', { what: 'identify' });
           return;
         }
+        this.diagnostics.flow('scan.unknown', { via: 'error' });
         this.message.set('Unbekannte Karte');
         this.audioFeedback.playBeeps(2);
       },
@@ -1357,6 +1377,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     pin: string | null,
     status?: ClockStatus | null,
   ): void {
+    this.recordSessionOpen(cardId ? 'card' : 'pin-offline', employee.id);
     this.selectedEmployee.set(employee);
     this.resetSessionChoices();
     this.replayStatusPending.set(!this.isOffline() && this.hasPendingForEmployee(employee.id));
@@ -1393,6 +1414,15 @@ export abstract class ClockWorkflow implements OnDestroy {
     this.armSessionIdle();
   }
 
+  /** Vor dem Setzen der neuen Identität: Eine noch offene Sitzung endet hier. */
+  private recordSessionOpen(method: 'card' | 'pin' | 'pin-offline', employeeId: string): void {
+    const previous = this.isUnlocked() ? this.selectedEmployee()?.id : undefined;
+    if (previous) {
+      this.diagnostics.flow('session.end', { employeeId: previous, reason: 'replaced' });
+    }
+    this.diagnostics.flow('session.open', { employeeId, method });
+  }
+
   /** Reload only after this employee's backlog has drained; stale login/status
    * responses must never enable a live stamp that can overtake that backlog. */
   private refreshStatusAfterReplay(): void {
@@ -1408,9 +1438,12 @@ export abstract class ClockWorkflow implements OnDestroy {
     }))) : this.kioskApi.identify(this.nfcCardId!, this.terminalId ?? 'default');
     this.replayStatusRequest = request.subscribe({
       next: result => {
-        if (generation !== this.sessionGeneration || this.selectedEmployee()?.id !== employeeId) return;
+        if (generation !== this.sessionGeneration || this.selectedEmployee()?.id !== employeeId) {
+          this.diagnostics.flow('flow.discarded', { what: 'status', employeeId });
+          return;
+        }
         if (result.employee?.id !== employeeId || !result.status) {
-          this.back();
+          this.back('status');
           return;
         }
         if (this.hasPendingForEmployee(employeeId)) return;
@@ -1422,7 +1455,10 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.loadWorkTimeHints();
       },
       error: () => {
-        if (generation !== this.sessionGeneration) return;
+        if (generation !== this.sessionGeneration) {
+          this.diagnostics.flow('flow.discarded', { what: 'status', employeeId });
+          return;
+        }
         // Stay blocked until another sync or a new login obtains fresh status.
         this.message.set('Status nicht erreichbar – bitte erneut anmelden.');
       },
@@ -1477,6 +1513,7 @@ export abstract class ClockWorkflow implements OnDestroy {
     // for a request that can only time out. The polls reset isOffline as soon
     // as the backend answers again (and trigger the replay).
     if (this.isOffline()) {
+      this.recordQueued(stamp, 'offline');
       this.queueOffline(stamp);
       return;
     }
@@ -1493,6 +1530,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         // Die Sitzung ist inzwischen eine andere (zurück, Kartenwechsel):
         // Status, Meldung und Reset gehören ihr nicht mehr.
         if (generation !== this.sessionGeneration) {
+          this.recordDiscardedClock(stamp);
           return;
         }
         this.clockState.setStatus(status);
@@ -1519,8 +1557,10 @@ export abstract class ClockWorkflow implements OnDestroy {
           // failure, Kimai 408/429). Other 4xx responses are permanent (wrong
           // PIN, deleted employee, ...) - showing the error is better than
           // queuing an event that can never succeed.
+          this.recordQueued(stamp, 'failed', status);
           if (generation !== this.sessionGeneration) {
             // Queued all the same - only the screen belongs to someone else now.
+            this.recordDiscardedClock(stamp);
             this.enqueueStamp(stamp);
             return;
           }
@@ -1529,6 +1569,7 @@ export abstract class ClockWorkflow implements OnDestroy {
         }
 
         if (generation !== this.sessionGeneration) {
+          this.recordDiscardedClock(stamp);
           return;
         }
         this.message.set('Kimai konnte nicht speichern');
@@ -1540,6 +1581,16 @@ export abstract class ClockWorkflow implements OnDestroy {
         this.scheduleReset();
       },
     });
+  }
+
+  private recordQueued(stamp: PendingStamp, reason: 'offline' | 'failed', status?: number): void {
+    this.diagnostics.flow('stamp.route', {
+      route: 'queue', reason, fallback: status, eventId: stamp.eventId, employeeId: stamp.employeeId, action: stamp.action,
+    });
+  }
+
+  private recordDiscardedClock(stamp: PendingStamp): void {
+    this.diagnostics.flow('flow.discarded', { what: 'clock', eventId: stamp.eventId, employeeId: stamp.employeeId });
   }
 
   /**
@@ -1614,7 +1665,7 @@ export abstract class ClockWorkflow implements OnDestroy {
       window.clearTimeout(this.resetTimer);
     }
 
-    this.resetTimer = window.setTimeout(() => this.back(), delayMs);
+    this.resetTimer = window.setTimeout(() => this.back('done'), delayMs);
   }
 
   private readTerminalId(): string | null {

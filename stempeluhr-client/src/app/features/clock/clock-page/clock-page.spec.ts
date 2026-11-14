@@ -6,11 +6,13 @@ import { of, Subject, throwError } from 'rxjs';
 import { ClockStatus, HoursOverview, KioskEmployeeSession, NfcClockEvent, WorkTimeHint } from '../../../core/models/kiosk.models';
 import { AudioFeedback } from '../../../core/services/audio-feedback';
 import { KioskApi } from '../../../core/services/kiosk-api';
+import { KioskDiagnostics } from '../../../core/services/kiosk-diagnostics';
 import { LocalNfcScan, LocalNfcScanService } from '../../../core/services/local-nfc-scan.service';
 import { ABSENCE_NOW, ABSENCE_OVERVIEW, absence } from '../absence-flow/absence-fixtures';
 import { ABSENCE_TAP_GUARD_MS } from '../absence-flow/absence-flow';
 import { CORRECTION_IDLE_MS } from '../correction-flow/correction-flow';
 import { CORRECTION_NOW, CORRECTION_TIMESHEETS, correction } from '../correction-flow/correction-fixtures';
+import { SESSION_IDLE_MS } from '../clock-workflow';
 import { ClockPage } from './clock-page';
 
 describe('ClockPage', () => {
@@ -429,6 +431,87 @@ describe('ClockPage', () => {
     afterEach(() => {
       vi.useRealTimers();
       window.localStorage.clear();
+    });
+
+    describe('Ablauf in der Diagnose', () => {
+      function scanKnownCard(): void {
+        localScanValue = { cardId: '04AB', scannedAt: new Date().toISOString(), consumed: false };
+        vi.advanceTimersByTime(1_000);
+        identifyResult.next({
+          eventId: 'ev-nfc-1',
+          occurredAt: new Date().toISOString(),
+          terminalId: 'term-1',
+          cardId: '04AB',
+          employee: session.employee,
+          status: status,
+          message: 'NFC-Karte erkannt.',
+          success: true,
+        });
+      }
+
+      it('records scan and session open without the card id, and who left', () => {
+        const flow = vi.spyOn(TestBed.inject(KioskDiagnostics), 'flow');
+        const component = createPollingFixture().componentInstance;
+
+        scanKnownCard();
+        component.back();
+
+        expect(flow.mock.calls).toEqual([
+          ['scan.identified', { via: 'server', employeeId: 'max' }],
+          ['session.open', { employeeId: 'max', method: 'card' }],
+          ['session.end', { employeeId: 'max', reason: 'user' }],
+        ]);
+        expect(JSON.stringify(flow.mock.calls)).not.toContain('04AB');
+      });
+
+      it('records the end by the idle timeout', () => {
+        const flow = vi.spyOn(TestBed.inject(KioskDiagnostics), 'flow');
+        createPollingFixture();
+        scanKnownCard();
+        // Die Karte liegt nicht mehr auf: sonst zählt jeder Poll als Eingabe.
+        localScanValue = null;
+
+        vi.advanceTimersByTime(SESSION_IDLE_MS);
+
+        expect(flow).toHaveBeenCalledWith('session.end', { employeeId: 'max', reason: 'idle' });
+      });
+
+      it('records no session end when nothing was open', () => {
+        const flow = vi.spyOn(TestBed.inject(KioskDiagnostics), 'flow');
+        createPollingFixture().componentInstance.back();
+
+        expect(flow).not.toHaveBeenCalled();
+      });
+
+      it('records an unknown card without its id', () => {
+        const flow = vi.spyOn(TestBed.inject(KioskDiagnostics), 'flow');
+        createPollingFixture();
+        localScanValue = { cardId: '04FF', scannedAt: new Date().toISOString(), consumed: false };
+        vi.advanceTimersByTime(1_000);
+        identifyResult.next({
+          eventId: 'ev-nfc-2', occurredAt: new Date().toISOString(), terminalId: 'term-1', cardId: '04FF',
+          employee: null, status: null, message: 'Unbekannt', success: false,
+        });
+
+        expect(flow).toHaveBeenCalledExactlyOnceWith('scan.unknown', { via: 'server' });
+        expect(JSON.stringify(flow.mock.calls)).not.toContain('04FF');
+      });
+
+      it('records a card answer that arrives after the session changed', () => {
+        const flow = vi.spyOn(TestBed.inject(KioskDiagnostics), 'flow');
+        const component = createPollingFixture().componentInstance;
+        localScanValue = { cardId: '04AB', scannedAt: new Date().toISOString(), consumed: false };
+        vi.advanceTimersByTime(1_000);
+        component.back();
+        flow.mockClear();
+
+        identifyResult.next({
+          eventId: 'ev-nfc-3', occurredAt: new Date().toISOString(), terminalId: 'term-1', cardId: '04AB',
+          employee: session.employee, status: status, message: '', success: true,
+        });
+
+        expect(flow).toHaveBeenCalledExactlyOnceWith('flow.discarded', { what: 'identify', employeeId: 'max' });
+      });
     });
 
     it('renders no hours card after an NFC login without pin and never calls the hours API', () => {

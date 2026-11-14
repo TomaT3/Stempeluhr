@@ -39,6 +39,33 @@ describe('KioskDiagnostics', () => {
     vi.useRealTimers();
   });
 
+  it('sends flow events with device time and without empty fields', () => {
+    service.flow('stamp.route', { route: 'direct', fallback: 404, eventId: 'ev1', employeeId: null, reason: undefined });
+    vi.advanceTimersByTime(15_000);
+    const request = http.expectOne(heartbeat);
+    const event = request.request.body.events.find((entry: { kind: string }) => entry.kind === 'flow');
+    expect(event).toMatchObject({ name: 'stamp.route', route: 'direct', fallback: 404, eventId: 'ev1' });
+    expect(event.at).toEqual(expect.any(String));
+    expect(event.seq).toEqual(expect.any(Number));
+    expect(event).not.toHaveProperty('employeeId');
+    expect(event).not.toHaveProperty('reason');
+    request.flush({ ok: true });
+  });
+
+  it('tracks a stamp through the agent like a direct one', () => {
+    TestBed.inject(HttpClient)
+      .post('http://127.0.0.1:8737/terminal/clock', { eventId: 'ev1', pin: 'SECRET' })
+      .subscribe({ error: () => undefined });
+    http.expectOne('http://127.0.0.1:8737/terminal/clock').flush({}, { status: 404, statusText: 'Not Found' });
+    vi.advanceTimersByTime(15_000);
+    const request = http.expectOne(heartbeat);
+    expect(request.request.body.events).toContainEqual(
+      expect.objectContaining({ kind: 'http', operation: 'clock', status: 404, eventId: 'ev1' }),
+    );
+    expect(JSON.stringify(request.request.body)).not.toContain('SECRET');
+    request.flush({ ok: true });
+  });
+
   it('records blocked state and request errors without credentials or error bodies', () => {
     TestBed.inject(HttpClient)
       .post('/api/kiosk/clock', { eventId: 'event-123', pin: 'SECRET', nfcCardId: 'SECRET' })

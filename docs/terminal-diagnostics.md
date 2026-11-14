@@ -60,6 +60,19 @@ Bestehende `config.json`-Dateien bleiben gültig.
   Außerdem werden begrenzt Anfragezeiten/-status und generische
   JavaScript-/Promise-/Speicherfehler erfasst. Fehlermeldungen und Stacks
   werden bewusst nicht übernommen, da sie Eingabewerte enthalten können.
+- Außerdem meldet die App den Ablauf als Ereignisse der Art `flow`, jeweils mit
+  Gerätezeit (`at`) und Reihenfolge (`seq`):
+
+  | Ereignis | Felder | Bedeutung |
+  |---|---|---|
+  | `session.open` | `employeeId`, `method` (`card`, `pin`, `pin-offline`) | Sitzung geöffnet |
+  | `session.end` | `employeeId`, `reason` | Sitzung beendet: `user` (Zurück), `idle` (Timeout), `done` (nach der Aktion), `recovered` (nach Offline), `flow-timeout` (Antrag), `replaced` (andere Karte), `status` (Identität nicht bestätigt) |
+  | `scan.identified` | `employeeId`, `via` (`cache`, `server`) | Karte erkannt. Der Scan öffnet die Sitzung, bucht aber nichts |
+  | `scan.unknown` | `via` (`server`, `offline`, `error`) | Karte nicht zugeordnet |
+  | `stamp.route` | `eventId`, `employeeId`, `action`, `route`, `fallback`, `reason` | Weg eines Stempels: `agent`, `direct` oder `queue`. `fallback` nennt den Status, der den Wechsel erzwungen hat, etwa 404 bei einem älteren Agenten |
+  | `flow.discarded` | `what`, `eventId`, `employeeId` | Verspätete Antwort nach einem Identitätswechsel verworfen (`clock`, `identify`, `hours`, `hints`, `status`) |
+
+  Ein älterer Agent verwirft diese Ereignisse, das Stempeln bleibt unberührt.
 - Der Agent speichert diese Daten in
   `/var/lib/stempeluhr-nfc-agent/diagnostics.jsonl`, mit zwei Rotationen zu
   je maximal etwa 2 MiB. Die Größe, nicht eine feste Aufbewahrungsdauer, ist
@@ -74,7 +87,9 @@ Bestehende `config.json`-Dateien bleiben gültig.
   lautet der Zustand `missing`; vor dem ersten Empfang `not-seen`.
 - Mit Terminal-Token sendet der Agent den jüngsten Zustand jede Minute an
   `/api/kiosk/diagnostics`. Die API prüft Token und Terminal-ID, begrenzt
-  Anfragen und protokolliert nur erlaubte technische Felder. Die vollständige
+  Anfragen und protokolliert nur erlaubte technische Felder: den Zustand als
+  eine Zeile und jedes Ereignis als eigenen Eintrag, siehe
+  [Logs und Traces](observability.md#ereignisse-der-terminals). Die vollständige
   Ereignishistorie liegt auf dem Pi; der Server bekommt Stichproben.
   Zwischen den Sendeläufen sammelt der Agent bis zu 80 Ereignisse und
   bestätigt sie erst nach erfolgreicher Übertragung. Ältere Ereignisse
@@ -96,9 +111,11 @@ Bestehende `config.json`-Dateien bleiben gültig.
   Ein abruptes Abschalten kann die allerletzten noch nicht geschriebenen
   Journaleinträge verlieren.
 
-Die Diagnose erfasst keine Namen, Mitarbeiter-IDs, PINs, Karten-IDs,
-Eingabeinhalte, Request-/Response-Bodies oder Tokens. Nur die Event-ID einer
-Live-Buchung erlaubt die Zuordnung zum vorhandenen Ablehnungsjournal.
+Die Diagnose erfasst keine Namen, PINs, Karten-IDs, Eingabeinhalte,
+Request-/Response-Bodies oder Tokens. Die `flow`-Ereignisse nennen die interne
+Mitarbeiter-ID, damit sich ein Ablauf einer Person zuordnen lässt; den Namen
+ergänzt erst der Server beim Export. Die Event-ID einer Live-Buchung erlaubt
+außerdem die Zuordnung zum vorhandenen Ablehnungsjournal.
 Das normale NFC-Journal älterer Agenten enthält weiterhin Karten-IDs;
 Logexporte daher vertraulich behandeln und nicht in Git committen.
 Die Diagnose startet keinen Browser neu und führt keine Buchung aus.

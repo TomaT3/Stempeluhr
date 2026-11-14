@@ -145,4 +145,53 @@ public sealed partial class OfflineClockServiceTests
         Assert.Equal("locked", ApplySpan(spans, "max-start").GetTagItem("stempeluhr.outcome"));
         Assert.Equal("locked", SkipSpan(spans, "max-stop").GetTagItem("stempeluhr.outcome"));
     }
+
+    /// <summary>Der Speicher der Event-IDs fällt aus: ein Fehler außerhalb der Ereignis-Behandlung.</summary>
+    private sealed class BrokenEventIdStore : IOfflineEventIdStore
+    {
+        public bool Broken { get; set; }
+
+        public bool TryRegister(string eventId) => Broken ? throw new IOException("disk full") : true;
+
+        public void Remove(string eventId)
+        {
+        }
+    }
+
+    private static (OfflineClockService Service, FakeKimaiClient Kimai) CreateServiceWith(IOfflineEventIdStore eventIds)
+    {
+        var (service, _, _, kimai) = CreateServiceWithTelegramAndKimai(enabled: false, eventIds: eventIds);
+        return (service, kimai);
+    }
+
+    [Fact]
+    public async Task OfflineSync_ThatAborts_CarriesAnErrorStatus()
+    {
+        var eventIds = new BrokenEventIdStore { Broken = true };
+        var (service, _) = CreateServiceWith(eventIds);
+
+        var spans = await SpanCapture.InTraceAsync(() =>
+            Assert.ThrowsAsync<IOException>(() => service.SyncKioskAsync([Kiosk("broken", "start", T08)])));
+
+        var sync = spans.Single(span => span.OperationName == "offline.sync");
+        Assert.Equal("failed", sync.GetTagItem("stempeluhr.outcome"));
+        Assert.Equal(ActivityStatusCode.Error, sync.Status);
+    }
+
+    [Fact]
+    public async Task OutboxFlush_ThatAborts_CarriesAnErrorStatus()
+    {
+        var eventIds = new BrokenEventIdStore();
+        var (service, kimai) = CreateServiceWith(eventIds);
+        kimai.FailNextStatusCalls = 2;
+        await service.SyncKioskAsync([Kiosk("waiting", "start", T08)]);
+        eventIds.Broken = true;
+
+        var spans = await SpanCapture.InTraceAsync(() =>
+            Assert.ThrowsAsync<IOException>(() => service.FlushOutboxAsync()));
+
+        var flush = spans.Single(span => span.OperationName == "outbox.flush");
+        Assert.Equal("failed", flush.GetTagItem("stempeluhr.outcome"));
+        Assert.Equal(ActivityStatusCode.Error, flush.Status);
+    }
 }

@@ -259,6 +259,11 @@ public sealed class OfflineClockService(
 
             await FlushOutboxCoreAsync(cancellationToken);
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            StempeluhrTelemetry.TagFailure(activity, "failed", ex);
+            throw;
+        }
         finally
         {
             ReleaseSyncLock();
@@ -1152,11 +1157,24 @@ public sealed class OfflineClockService(
     /// </summary>
     private async Task<bool> FlushOutboxCoreAsync(CancellationToken cancellationToken)
     {
-        var interrupted = false;
-        var drained = 0;
         // Nicht bei leerer Outbox: der Dienst ruft alle 15 s auf.
         using var activity = _kioskOutbox.Count > 0 ? StempeluhrTelemetry.Source.StartActivity("outbox.flush") : null;
         activity?.SetTag("stempeluhr.outbox_size", _kioskOutbox.Count);
+        try
+        {
+            return await DrainOutboxAsync(activity, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            StempeluhrTelemetry.TagFailure(activity, "failed", ex);
+            throw;
+        }
+    }
+
+    private async Task<bool> DrainOutboxAsync(System.Diagnostics.Activity? activity, CancellationToken cancellationToken)
+    {
+        var interrupted = false;
+        var drained = 0;
         SortChronologically(_kioskOutbox, entry => entry.PerformedAt);
 
         // Events of an employee whose PIN is locked (issue #8) stay in place,

@@ -94,20 +94,37 @@ public sealed class ClockService(
 
     public async Task<ClockActionResponse> ClockAsync(KioskClockRequest request, CancellationToken cancellationToken = default)
     {
-        var context = FindEmployeeForClockAction(request);
+        // Vor der Anmeldung: Auch eine falsche PIN oder eine Sperre muss über die
+        // Event-ID auffindbar sein. Den Namen gibt es erst danach.
+        var eventId = EventIdOf(request);
+        using var activity = StempeluhrTelemetry.StartStamp("kiosk.clock", eventId, request.Action, request.EmployeeId, null);
+        activity?.SetTag("stempeluhr.terminal_id", request.AuthenticatedTerminalId);
+        EmployeeContext? context;
+        try
+        {
+            context = FindEmployeeForClockAction(request);
+        }
+        catch (PinLockedException ex)
+        {
+            StempeluhrTelemetry.TagFailure(activity, "locked", ex, isError: false);
+            throw;
+        }
+
         if (context is null)
         {
+            StempeluhrTelemetry.TagOutcome(activity, "unauthorized");
             return new ClockActionResponse(ClockActionResult.Unauthorized, null);
         }
+
+        activity?.SetTag("stempeluhr.employee_id", context.Employee.Id);
+        activity?.SetTag("stempeluhr.employee_name", context.Employee.DisplayName);
+        StempeluhrTelemetry.TagOrigin(activity, context.Origin);
 
         // Until this request is done, a replay of the same event waits for it
         // (issue #67): the kiosk queues the action after 8 s while Kimai may
         // still be working on it here.
-        var eventId = EventIdOf(request);
         using var live = eventId is null ? null : kioskEvents?.BeginLive(eventId);
 
-        using var activity = StempeluhrTelemetry.StartStamp("kiosk.clock", eventId, request.Action, context.Employee.Id, context.Employee.DisplayName);
-        StempeluhrTelemetry.TagOrigin(activity, context.Origin);
         ClockActionResponse response;
         try
         {

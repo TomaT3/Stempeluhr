@@ -4,6 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { Observable, TimeoutError } from 'rxjs';
 
 import { KioskApi, REQUEST_TIMEOUT_MS, isTransientHttpStatus } from './kiosk-api';
+import { KioskDiagnostics } from './kiosk-diagnostics';
 
 describe('KioskApi', () => {
   let api: KioskApi;
@@ -58,6 +59,41 @@ describe('KioskApi', () => {
 
   describe('source of a live stamp (issue #146)', () => {
     const agentClock = 'http://127.0.0.1:8737/terminal/clock';
+
+    function spyOnFlow() {
+      return vi.spyOn(TestBed.inject(KioskDiagnostics), 'flow');
+    }
+
+    it('records the route of a stamp without the credentials', () => {
+      const flow = spyOnFlow();
+      api.clock('max', '1234', 'stop', '04ABCD', null, 'ev1').subscribe();
+      http.expectOne('/api/kiosk/clock').flush({});
+
+      expect(flow).toHaveBeenCalledExactlyOnceWith('stamp.route', { eventId: 'ev1', employeeId: 'max', action: 'stop', route: 'direct' });
+    });
+
+    it.each([0, 404, 503])('records the fallback to the direct call after status %i', status => {
+      const flow = spyOnFlow();
+      api.clock('max', '1234', 'stop', null, null, 'ev1', { viaAgent: true }).subscribe();
+
+      const agent = http.expectOne(agentClock);
+      if (status === 0) agent.error(new ProgressEvent('error'));
+      else agent.flush({}, { status, statusText: 'agent' });
+      http.expectOne('/api/kiosk/clock').flush({});
+
+      expect(flow.mock.calls.map(call => call[1])).toEqual([
+        { eventId: 'ev1', employeeId: 'max', action: 'stop', route: 'agent' },
+        { eventId: 'ev1', employeeId: 'max', action: 'stop', route: 'direct', fallback: status },
+      ]);
+    });
+
+    it('records no fallback when the agent passes a rejection on', () => {
+      const flow = spyOnFlow();
+      api.clock('max', '1234', 'stop', null, null, 'ev1', { viaAgent: true }).subscribe({ error: () => undefined });
+      http.expectOne(agentClock).flush({}, { status: 401, statusText: 'x' });
+
+      expect(flow.mock.calls.map(call => call[1]?.route)).toEqual(['agent']);
+    });
 
     it('posts through the agent, which adds the terminal token, with the credentials unchanged', () => {
       let result: unknown;
