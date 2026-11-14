@@ -146,3 +146,86 @@ SELECT * FROM "stempeluhr" WHERE stempeluhr_outcome IN ('failed', 'rejected')
 OpenObserve bietet unter `/api/default/mcp` einen MCP-Server (u. a.
 `SearchSQL`, `GetLatestTraces`). Nur im LAN bzw. per VPN erreichbar machen,
 nie über den Cloudflare-Tunnel.
+
+## Fehlersuche ohne SSH
+
+Die meisten Meldungen lassen sich ohne Zugang zum Pi klären: mit OpenObserve,
+**Admin → Terminalstatus** und **Admin → Abgelehnte Offline-Stempel**.
+
+### „Mein Stempel fehlt“ oder „steht falsch in Kimai“
+
+1. Den Stempel finden, nach Name und ungefährer Zeit:
+
+   ```sql
+   SELECT _timestamp, operation_name, stempeluhr_action, stempeluhr_outcome, stempeluhr_source,
+          stempeluhr_terminal_id, stempeluhr_event_id
+   FROM "stempeluhr" WHERE stempeluhr_employee_name = 'Max Mustermann'
+   ORDER BY _timestamp DESC
+   ```
+
+   Im Zeitraum unter Traces suchen; die Kiosk-Ereignisse liegen unter Logs.
+   Gibt es keinen Span, aber `session.open` und `stamp.route`, kam der Stempel
+   nie bei der API an: `stamp.route` mit `route = queue` heißt, er liegt in der
+   Queue des Kiosks (weiter mit Schritt 3).
+2. Die Event-ID ist die Trace-ID. `WHERE trace_id = '<event-id>'` zeigt
+   Live-Versuch, Nachtrag und jeden Kimai-Aufruf mit Status. Das `outcome`
+   sagt, wie es weitergeht:
+
+   | `outcome` | Bedeutung | Weiter |
+   | --- | --- | --- |
+   | `booked`, `noop` | Kimai hat gebucht bzw. war schon im Zielzustand | Eintrag in Kimai prüfen, ggf. danach manuell geändert |
+   | `continued` | Wechsel abgelehnt, auf der vorherigen Tätigkeit weiter | Kimai-Aufrufe in der Trace zeigen den Grund |
+   | `retry` | Kiosk reiht ein | Nachtrag `offline.apply` in derselben Trace suchen |
+   | `buffered` | Kimai nicht erreichbar, die API hält den Stempel in ihrer Outbox | weiteres `offline.apply` in derselben Trace nach `outbox.flush` |
+   | `rejected` | Kimai lehnt endgültig ab | **Abgelehnte Offline-Stempel**, siehe [Terminal-Störungen](terminal-diagnostics.md#offline-stempel-mit-extra-fields) |
+   | `failed`, `unauthorized`, `locked` | Fehler, falsche PIN bzw. Sperre | `.error` und `error.type` am Span |
+
+   Abgelehnte Kimai-Aufrufe stehen außerdem als Warning
+   `Kimai <Operation>: HTTP <Status> … unsupported fields: …` im Log derselben
+   Trace.
+3. Fehlt der Nachtrag, liegt der Stempel noch auf dem Terminal. Die
+   Zustandszeile zeigt die Queue:
+
+   ```sql
+   SELECT _timestamp, body FROM "stempeluhr"
+   WHERE str_match(body, 'Terminal stempeluhr-01 diagnostics') ORDER BY _timestamp DESC
+   ```
+
+   `pending` > 0 über längere Zeit meldet auch der Alarm „Offline-Stempel stauen
+   sich“. `rejected` zählt die Ablehnungen, die der Kiosk kennt.
+
+### Terminal hängt oder meldet sich nicht
+
+1. **Admin → Terminalstatus** und die Telegram-Alarme zeigen, welche Bedingung
+   greift ([Überwachung](terminal-diagnostics.md#überwachung)).
+2. Die Zustandszeilen (Abfrage oben) zeigen den Verlauf pro Minute: `uiStatus`
+   und `heartbeatAgeSeconds` (Seite lebt), `screen`, `busy`, `blocked` und
+   `lastInputAgeMs` (Sitzung hängt), `lagMs` (Timer verzögert), dazu CPU, RAM,
+   Temperatur, `throttledFlags` und die pcscd-Werte.
+3. Die Ereignisse vor dem Hänger in Gerätereihenfolge:
+
+   ```sql
+   SELECT stempeluhr_device_time, stempeluhr_seq, stempeluhr_kiosk_event, stempeluhr_employee_name,
+          stempeluhr_reason, stempeluhr_route, stempeluhr_http_status
+   FROM "stempeluhr" WHERE stempeluhr_terminal_id = 'stempeluhr-01'
+   ORDER BY stempeluhr_device_time, stempeluhr_seq
+   ```
+
+   Ein `error.javascript`, `error.promise` oder `error.storage` kurz vorher
+   spricht für die Seite, ein letzter `http.*` ohne Antwort für Netz oder API.
+4. Kommt gar nichts mehr an, ist das Terminal vom Server aus nicht von einem
+   Netzausfall zu unterscheiden. Dann bleibt der Pi selbst.
+
+### Wann doch SSH
+
+Nur auf dem Pi liegen:
+
+- das Journal von NFC-Agent, Agent-Update, WLAN-Wiederherstellung und Kernel
+  (Kartenleser, USB, Unterspannung, Neustarts),
+- die vollständige Ereignishistorie `diagnostics.jsonl`. Die API bekommt pro
+  Minute höchstens 80 Ereignisse; bei längerem Netzausfall fallen ältere aus
+  dem Puffer,
+- alles aus der Zeit, in der der Pi die API nicht erreicht hat.
+
+Dafür einmal `tools/deploy/collect-diagnostics.sh` laufen lassen, siehe
+[Beim nächsten Hänger](terminal-diagnostics.md#beim-nächsten-hänger).
