@@ -208,16 +208,26 @@ describe('KioskApi', () => {
 
       stampViaAgent();
       http.expectOne(agentClock).error(new ProgressEvent('error'));
-      // Einmal ohne Header über den Agenten, dann direkt.
-      const retry = http.expectOne(agentClock);
-      expect(retry.request.headers.has('traceparent')).toBe(false);
-      http.expectNone('/api/kiosk/clock');
-      retry.error(new ProgressEvent('error'));
+      // Ein gestoppter Agent antwortet auch auf /health nicht: kein zweiter Stempel-Versuch.
+      http.expectOne(agentHealth).error(new ProgressEvent('error'));
+      http.expectNone(agentClock);
       expect(http.expectOne('/api/kiosk/clock').request.headers.get('traceparent')).toMatch(traceOf(eventId));
 
       stampViaAgent();
       expect(http.expectOne(agentClock).request.headers.has('traceparent')).toBe(false);
       http.expectOne(agentHealth);
+    });
+
+    it('goes direct without a second agent attempt when the agent still names the feature', () => {
+      stampViaAgent();
+      http.expectOne(agentClock);
+      http.expectOne(agentHealth).flush({ ok: true, features: ['traceparent'] });
+
+      stampViaAgent();
+      http.expectOne(agentClock).error(new ProgressEvent('error'));
+      http.expectOne(agentHealth).flush({ ok: true, features: ['traceparent'] });
+      http.expectNone(agentClock);
+      http.expectOne('/api/kiosk/clock');
     });
 
     it('retries via the agent without the header when a rolled-back agent rejects it, keeping the terminal', () => {
@@ -230,6 +240,7 @@ describe('KioskApi', () => {
       const traced = http.expectOne(agentClock);
       expect(traced.request.headers.has('traceparent')).toBe(true);
       traced.error(new ProgressEvent('error'));
+      http.expectOne(agentHealth).flush({ ok: true, version: '0.9.0' });
 
       const retry = http.expectOne(agentClock);
       expect(retry.request.headers.has('traceparent')).toBe(false);
@@ -238,7 +249,7 @@ describe('KioskApi', () => {
       expect(status).toEqual({ ok: true });
     });
 
-    it.each([404, 503])('asks again after the agent answered %i', status => {
+    it.each([404, 503])('keeps the cached answer after the agent answered %i, so the TTL holds', status => {
       stampViaAgent();
       http.expectOne(agentClock);
       http.expectOne(agentHealth).flush({ ok: true, features: ['traceparent'] });
@@ -248,8 +259,8 @@ describe('KioskApi', () => {
       http.expectOne('/api/kiosk/clock');
 
       stampViaAgent();
-      expect(http.expectOne(agentClock).request.headers.has('traceparent')).toBe(false);
-      http.expectOne(agentHealth);
+      expect(http.expectOne(agentClock).request.headers.get('traceparent')).toMatch(traceOf(eventId));
+      http.expectNone(agentHealth);
     });
   });
 

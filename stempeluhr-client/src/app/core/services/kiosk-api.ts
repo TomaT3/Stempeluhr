@@ -1,6 +1,6 @@
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
-import { catchError, finalize, throwError, timeout } from 'rxjs';
+import { Observable, catchError, finalize, map, of, switchMap, throwError, timeout } from 'rxjs';
 
 import { Absence, KioskAbsenceOverview, SubmitAbsence } from '../models/absence.models';
 import {
@@ -106,9 +106,9 @@ export class KioskApi {
     this.diagnostics.flow('stamp.route', { ...route, route: 'agent' });
     // Ein älterer Agent lässt den Header im Preflight nicht zu; der Browser
     // meldete dann Status 0, und der Stempel liefe ohne Terminal direkt.
-    const viaAgent = this.agentAcceptsTraceparent() ? traced : {};
-    const agentClock = (options: object) => this.http
-      .post<ClockStatus>(`http://127.0.0.1:${this.agentPort}/terminal/clock`, body, options)
+    const headerToAgent = !!traceparent && this.agentAcceptsTraceparent();
+    const agentClock = (withHeader: boolean) => this.http
+      .post<ClockStatus>(`http://127.0.0.1:${this.agentPort}/terminal/clock`, body, withHeader ? traced : {})
       .pipe(timeout(REQUEST_TIMEOUT_MS));
     // Über den Agenten erfährt der Server das Terminal (Issue #146). Ein
     // älterer Agent kennt die Route nicht (404), einer ohne Token antwortet
@@ -124,19 +124,25 @@ export class KioskApi {
       this.diagnostics.flow('stamp.route', { ...route, route: 'direct', fallback: error.status });
       return direct;
     };
-    return agentClock(viaAgent).pipe(
+    return agentClock(headerToAgent).pipe(
       catchError(error => {
         if (!isFallback(error)) return throwError(() => error);
-        // Vielleicht ein anderer Agent als beim letzten Mal: neu fragen.
+        // 404/503 kommen vom selben Agenten wie sein /health: der Cache
+        // stimmt. Status 0 kann ein Neustart mit anderer Version sein.
+        if (error.status !== 0) return toDirect(error);
         this.agentTracing = null;
-        // Status 0 mit Header kann ein inzwischen älterer Agent sein, dessen
-        // Preflight den Header ablehnt (Rückrollen ohne Neuladen des Kiosks):
-        // einmal ohne Header über den Agenten, sonst fehlte das Terminal.
-        if (error.status === 0 && traceparent && viaAgent === traced) {
-          this.diagnostics.flow('stamp.route', { ...route, route: 'agent', fallback: 0 });
-          return agentClock({}).pipe(catchError(toDirect));
-        }
-        return toDirect(error);
+        if (!headerToAgent) return toDirect(error);
+        // Mit Header: Lehnt ein inzwischen zurückgerollter Agent ihn im
+        // Preflight ab, nennt sein /health die Fähigkeit nicht mehr. Nur
+        // dann einmal ohne Header über den Agenten, sonst fehlte das
+        // Terminal. Ein gestoppter Agent antwortet auch auf /health nicht.
+        return this.probeAgent().pipe(
+          switchMap(supported => {
+            if (supported !== false) return toDirect(error);
+            this.diagnostics.flow('stamp.route', { ...route, route: 'agent', fallback: 0 });
+            return agentClock(false).pipe(catchError(toDirect));
+          }),
+        );
       }),
     );
   }
@@ -150,20 +156,26 @@ export class KioskApi {
     const known = this.agentTracing;
     if ((!known || Date.now() >= known.until) && !this.probingAgent) {
       this.probingAgent = true;
-      this.http
-        .get<{ features?: unknown }>(`http://127.0.0.1:${this.agentPort}/health`)
-        .pipe(timeout(3_000), finalize(() => (this.probingAgent = false)))
-        .subscribe({
-          next: health => {
-            const supported = Array.isArray(health?.features) && health.features.includes('traceparent');
-            const ttl = supported ? AGENT_FEATURES_TTL_MS.supported : AGENT_FEATURES_TTL_MS.missing;
-            this.agentTracing = { supported, until: Date.now() + ttl };
-          },
-          // Nicht erreichbar: beim nächsten Stempel wieder fragen.
-          error: () => undefined,
-        });
+      this.probeAgent().pipe(finalize(() => (this.probingAgent = false))).subscribe();
     }
     return known?.supported ?? false;
+  }
+
+  /**
+   * Fragt `/health` des Agenten und merkt sich die Antwort. null: nicht
+   * erreichbar, dann beim nächsten Stempel wieder fragen.
+   */
+  private probeAgent(): Observable<boolean | null> {
+    return this.http.get<{ features?: unknown }>(`http://127.0.0.1:${this.agentPort}/health`).pipe(
+      timeout(3_000),
+      map(health => {
+        const supported = Array.isArray(health?.features) && health.features.includes('traceparent');
+        const ttl = supported ? AGENT_FEATURES_TTL_MS.supported : AGENT_FEATURES_TTL_MS.missing;
+        this.agentTracing = { supported, until: Date.now() + ttl };
+        return supported;
+      }),
+      catchError(() => of(null)),
+    );
   }
 
   /**

@@ -192,7 +192,7 @@ public sealed partial class OfflineClockServiceTests
     }
 
     [Fact]
-    public async Task OfflineSkip_JoinsTheTraceOfTheFirstAttempt_AndLaterEventsStayInTheBatch()
+    public async Task OfflineSkip_StaysInTheBatch_AndLinksTheTraceOfTheFirstAttempt()
     {
         var (service, _) = CreateService();
         var kiosk = KioskTrace();
@@ -203,10 +203,31 @@ public sealed partial class OfflineClockServiceTests
             kiosk.TraceId);
 
         var skip = SkipSpan(spans, "once");
-        Assert.Equal(kiosk.TraceId, skip.TraceId);
-        Assert.Equal("duplicate", skip.GetTagItem("stempeluhr.outcome"));
         var sync = spans.Single(span => span.OperationName == "offline.sync");
+        Assert.Equal(sync.TraceId, skip.TraceId);
+        Assert.Equal(sync.Context.SpanId, skip.ParentSpanId);
+        var link = Assert.Single(skip.Links).Context;
+        Assert.Equal(kiosk.TraceId, link.TraceId);
+        Assert.Equal(kiosk.SpanId, link.SpanId);
+        Assert.Equal("duplicate", skip.GetTagItem("stempeluhr.outcome"));
         Assert.Equal(sync.Context.SpanId, ApplySpan(spans, "next").ParentSpanId);
+    }
+
+    /// <summary>Kimai-Ausfall: Jeder Neuversand des Kiosks wäre sonst ein weiterer Span in der Trace des Stempels.</summary>
+    [Fact]
+    public async Task ResentBufferedEvent_StaysOutOfTheTraceOfTheStamp()
+    {
+        var (service, kimai) = CreateService();
+        var kiosk = KioskTrace();
+        kimai.FailNextStatusCalls = 10;
+        var entry = Kiosk("waiting", "start", T08) with { Traceparent = kiosk.Traceparent };
+        await service.SyncKioskAsync([entry]);
+
+        var spans = await SpanCapture.InTraceAsync(() => service.SyncKioskAsync([entry]), kiosk.TraceId);
+
+        var skip = SkipSpan(spans, "waiting");
+        Assert.Equal("buffered", skip.GetTagItem("stempeluhr.outcome"));
+        Assert.NotEqual(kiosk.TraceId, skip.TraceId);
     }
 
     /// <summary>

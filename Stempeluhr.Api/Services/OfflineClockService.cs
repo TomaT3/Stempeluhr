@@ -393,7 +393,7 @@ public sealed class OfflineClockService(
     /// </summary>
     private static void TraceNotApplied(OfflineKioskClockEventDto entry, string outcome)
     {
-        using var activity = StempeluhrTelemetry.StartReplay("offline.skip", entry.Traceparent, entry.EventId, entry.Action, entry.EmployeeId);
+        using var activity = StempeluhrTelemetry.StartSkip("offline.skip", entry.Traceparent, entry.EventId, entry.Action, entry.EmployeeId);
         activity?.SetTag("stempeluhr.performed_at", entry.PerformedAt.ToString("O"));
         StempeluhrTelemetry.TagOutcome(activity, outcome);
     }

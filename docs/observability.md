@@ -80,11 +80,15 @@ links mit Nullen auf 32 Zeichen aufgefüllt. In derselben Trace liegen:
 
 - der Live-Versuch: `POST /api/kiosk/clock`, `kiosk.clock` und die Kimai-Aufrufe,
   direkt oder über den Agenten,
-- der Nachtrag aus der Queue: `offline.apply` bzw. `offline.skip` samt
-  Kimai-Aufrufen, auch wenn er erst später aus der Outbox der API kommt
-  (`outbox.flush`). Der Nachtrag verweist per Span-Link auf `offline.sync` bzw.
-  `outbox.flush`. Der Batch selbst bleibt eine eigene Trace, weil er Stempel
-  mehrerer Traces enthält.
+- der Nachtrag aus der Queue: `offline.apply` samt Kimai-Aufrufen, auch wenn
+  er erst später aus der Outbox der API kommt (`outbox.flush`). Der Nachtrag
+  verweist per Span-Link auf `offline.sync` bzw. `outbox.flush`. Der Batch
+  selbst bleibt eine eigene Trace, weil er Stempel mehrerer Traces enthält.
+
+`offline.skip` (gepuffert, Duplikat, gesperrt, übersprungen) bleibt unter dem
+Batch und verweist nur per Span-Link auf die Trace des Stempels: Während eines
+Kimai-Ausfalls sendet der Kiosk gepufferte Ereignisse jede Minute neu. Gefunden
+wird es über `stempeluhr_event_id`.
 
 In der Queue steht das `traceparent` pro Ereignis im Body, nicht als Header.
 Auch Ereignisse, die eine ältere Kiosk-Version eingereiht hat, bekommen es so
@@ -99,9 +103,9 @@ CORS-Preflight nicht zu; der Stempel liefe dann ohne Terminal direkt. Der Kiosk
 fragt `/health` im Hintergrund ab. Der erste Stempel nach dem Laden geht deshalb
 ohne Header über den Agenten und beginnt dort eine eigene Trace, der Nachtrag
 landet trotzdem in der Trace der Event-ID. Scheitert ein Stempel mit Header an
-Status 0 (etwa ein zurückgerollter Agent), versucht der Kiosk es einmal ohne
-Header über den Agenten, erst dann direkt. Nach jedem Rückfall (0, 404, 503)
-fragt er `/health` neu ab.
+Status 0, fragt der Kiosk `/health` neu ab. Nennt ein erreichbarer Agent die
+Fähigkeit nicht mehr (zurückgerollt), geht der Stempel einmal ohne Header über
+den Agenten, sonst direkt. 404 und 503 lassen die gemerkte Antwort stehen.
 
 Der Kiosk zeichnet selbst keine Spans auf. Der oberste Span einer Trace zeigt
 deshalb auf einen Eltern-Span, den es im Backend nicht gibt.

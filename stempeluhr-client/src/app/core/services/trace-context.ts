@@ -31,11 +31,18 @@ export function traceparentFor(eventId: string | null | undefined): string | nul
   return traceId ? `00-${traceId}-${randomHex(8)}-01` : null;
 }
 
-/** Zufällige Bytes als Hex, nie nur Nullen (in W3C ungültig). */
+/**
+ * Zufällige Bytes als Hex, nie nur Nullen (in W3C ungültig). Ohne `crypto`
+ * (sehr alte WebView) mit `Math.random`: Ein Stempel darf daran nie scheitern.
+ */
 function randomHex(length: number): string {
   const bytes = new Uint8Array(length);
   do {
-    crypto.getRandomValues(bytes);
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
   } while (bytes.every(byte => byte === 0));
   return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
 }

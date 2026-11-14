@@ -43,6 +43,22 @@ public static class StempeluhrTelemetry
         return TagStamp(Source.StartActivity(name, ActivityKind.Internal, parent, links: links), eventId, action, employeeId, null);
     }
 
+    /// <summary>
+    /// Ein nicht angewendetes Ereignis (gepuffert, Duplikat, gesperrt): Es bleibt
+    /// unter dem laufenden Span (Batch oder Outbox) und verweist nur per Link auf
+    /// die Trace des Stempels. Der Kiosk sendet gepufferte Ereignisse während
+    /// eines Kimai-Ausfalls jede Minute neu; als Kinder würden diese Spans die
+    /// Trace des Stempels überschwemmen.
+    /// </summary>
+    public static Activity? StartSkip(string name, string? traceparent, string? eventId, string? action, string? employeeId)
+    {
+        var links = ActivityContext.TryParse(traceparent, null, isRemote: true, out var stamp)
+            ? new[] { new ActivityLink(stamp) }
+            : null;
+        return TagStamp(Source.StartActivity(name, ActivityKind.Internal, default(ActivityContext), links: links),
+            eventId, action, employeeId, null);
+    }
+
     private static Activity? TagStamp(Activity? activity, string? eventId, string? action, string? employeeId, string? employeeName)
     {
         if (activity is null) return null;
