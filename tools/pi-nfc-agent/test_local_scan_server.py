@@ -47,6 +47,7 @@ from stempeluhr_nfc_agent import (  # noqa: E402
     LocalScanServer,
     origin_of,
     upstream_request,
+    valid_traceparent,
 )
 
 KIOSK = "https://stempeluhr.example.com"
@@ -336,7 +337,78 @@ def test_terminal_clock_proxy() -> None:
         upstream.server_close()
 
 
+TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+
+def test_valid_traceparent() -> None:
+    assert valid_traceparent(TRACEPARENT) == TRACEPARENT
+    for invalid in (None, "", "garbage", TRACEPARENT.upper(), TRACEPARENT + "-extra",
+                    "01" + TRACEPARENT[2:], "00-" + "0" * 32 + "-00f067aa0ba902b7-01",
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-" + "0" * 16 + "-01",
+                    TRACEPARENT + "\r\nX-Injected: 1"):
+        assert valid_traceparent(invalid) is None, invalid
+
+
+def test_traceparent_forwarding() -> None:
+    """Issue #148: the API continues the kiosk's trace; the kiosk learns it via /health."""
+    import http.server
+    seen = []
+    class Upstream(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            seen.append((self.path, self.headers.get("traceparent")))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"results":[]}')
+        def log_message(self, *args):
+            pass
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    threading.Thread(target=upstream.serve_forever, daemon=True).start()
+    config = AgentConfig(api_base_url=f"http://127.0.0.1:{upstream.server_port}",
+                         terminal_id="pi-1", terminal_token="private-terminal-token",
+                         debounce_seconds=3, reader_name_contains=None)
+    agent = LocalScanServer(port=0, allowed_origin=KIOSK, config=config)
+    agent.start_background()
+
+    def send(path, payload, traceparent):
+        req = urllib.request.Request(agent.url + path, data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json", "Origin": KIOSK})
+        if traceparent is not None:
+            req.add_header("traceparent", traceparent)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            response.read()
+            return response.status
+
+    try:
+        status, body = get_json(agent.url + "/health")
+        assert status == 200 and "traceparent" in body["features"], body
+        preflight = urllib.request.Request(agent.url + "/terminal/clock", method="OPTIONS",
+                                           headers={"Origin": KIOSK, "Access-Control-Request-Headers": "content-type,traceparent"})
+        with urllib.request.urlopen(preflight, timeout=5) as response:
+            allowed = [name.strip().lower() for name in response.headers["Access-Control-Allow-Headers"].split(",")]
+            assert "traceparent" in allowed, allowed
+
+        clock = {"employeeId": "max", "pin": "", "action": "start", "eventId": "e1"}
+        sync = {"events": [{"eventId": "e1", "traceparent": TRACEPARENT}]}
+        assert send("/terminal/clock", clock, TRACEPARENT) == 200
+        assert seen[-1] == ("/api/kiosk/clock", TRACEPARENT), seen[-1]
+        # A batch holds several traces: the header never applies to it.
+        assert send("/terminal/sync", sync, TRACEPARENT) == 200
+        assert seen[-1] == ("/api/kiosk/clock/sync", None), seen[-1]
+        # Invalid or missing: the request still goes through, without the header.
+        assert send("/terminal/clock", clock, "garbage") == 200
+        assert seen[-1] == ("/api/kiosk/clock", None), seen[-1]
+        assert send("/terminal/sync", sync, None) == 200
+        assert seen[-1] == ("/api/kiosk/clock/sync", None), seen[-1]
+    finally:
+        agent.shutdown()
+        agent.server_close()
+        upstream.shutdown()
+        upstream.server_close()
+
+
 def main() -> int:
+    test_valid_traceparent()
     test_origin_of()
     test_config_origin()
     test_origin_restriction()
@@ -439,6 +511,7 @@ def main() -> int:
 
     test_terminal_proxy()
     test_terminal_clock_proxy()
+    test_traceparent_forwarding()
     print("LocalScanServer: all tests passed")
     return 0
 

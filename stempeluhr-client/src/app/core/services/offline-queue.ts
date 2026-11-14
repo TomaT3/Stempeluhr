@@ -5,6 +5,7 @@ import { catchError } from 'rxjs/operators';
 import { confirmSyncedStatus } from './offline-cache';
 import { LOCAL_NFC_SCAN_PORT } from './local-nfc-scan.service';
 import { KioskDiagnostics } from './kiosk-diagnostics';
+import { traceparentFor } from './trace-context';
 
 import {
   OfflineKioskClockEvent,
@@ -55,6 +56,16 @@ function syncRequestTimeoutMs(chunkSize: number): number {
 }
 
 const SYNC_ENDPOINT = '/api/kiosk/clock/sync';
+
+/**
+ * In the body, not as a header: a batch holds stamps of several traces, and
+ * every agent passes unknown event fields on. Also covers events queued by
+ * an older kiosk version.
+ */
+function withTraceparent(event: OfflineKioskClockEvent): OfflineKioskClockEvent {
+  const traceparent = traceparentFor(event.eventId);
+  return traceparent ? { ...event, traceparent } : event;
+}
 
 /** Storage format; `kind` stays for compatibility with queues already on devices. */
 interface StoredOfflineEvent {
@@ -256,7 +267,7 @@ export class OfflineQueueService {
       try {
         result = await firstValueFrom(
           this.http.post<OfflineSyncResult>(terminalId
-            ? `http://127.0.0.1:${this.agentPort}/terminal/sync` : SYNC_ENDPOINT, { events: chunk })
+            ? `http://127.0.0.1:${this.agentPort}/terminal/sync` : SYNC_ENDPOINT, { events: chunk.map(withTraceparent) })
             .pipe(timeout(syncRequestTimeoutMs(chunk.length))),
         );
       } catch {

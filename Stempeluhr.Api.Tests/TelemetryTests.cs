@@ -262,11 +262,12 @@ public sealed class TelemetryTests
 
 /// <summary>
 /// Sammelt Stempel-Spans einer Trace, wie unter einem eingehenden
-/// <c>traceparent</c>. Nur diese Trace: andere Testklassen laufen parallel.
+/// <c>traceparent</c>. Nur diese Trace und die in <paramref name="alsoIn"/>
+/// genannten: andere Testklassen laufen parallel.
 /// </summary>
 internal static class SpanCapture
 {
-    public static async Task<List<Activity>> InTraceAsync(Func<Task> act)
+    public static async Task<List<Activity>> InTraceAsync(Func<Task> act, params ActivityTraceId[] alsoIn)
     {
         var traceId = ActivityTraceId.CreateRandom();
         var spans = new List<Activity>();
@@ -276,7 +277,7 @@ internal static class SpanCapture
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
             ActivityStopped = activity =>
             {
-                if (activity.TraceId != traceId) return;
+                if (activity.TraceId != traceId && !alsoIn.Contains(activity.TraceId)) return;
                 lock (spans) spans.Add(activity);
             },
         };

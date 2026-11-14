@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using OpenTelemetry;
+using OpenTelemetry.Trace;
 using Stempeluhr.Api.Models;
 using Stempeluhr.Api.Services;
 using Xunit;
@@ -144,6 +146,130 @@ public sealed partial class OfflineClockServiceTests
 
         Assert.Equal("locked", ApplySpan(spans, "max-start").GetTagItem("stempeluhr.outcome"));
         Assert.Equal("locked", SkipSpan(spans, "max-stop").GetTagItem("stempeluhr.outcome"));
+    }
+
+    /// <summary>Kontext des ersten Versuchs am Kiosk.</summary>
+    private static (string Traceparent, ActivityTraceId TraceId, ActivitySpanId SpanId) KioskTrace()
+    {
+        var traceId = ActivityTraceId.CreateRandom();
+        var spanId = ActivitySpanId.CreateRandom();
+        return ($"00-{traceId}-{spanId}-01", traceId, spanId);
+    }
+
+    [Fact]
+    public async Task OfflineApply_JoinsTheTraceOfTheFirstAttempt_AndLinksTheBatch()
+    {
+        var (service, _) = CreateService();
+        var kiosk = KioskTrace();
+
+        var spans = await SpanCapture.InTraceAsync(
+            () => service.SyncKioskAsync([Kiosk("joined", "start", T08) with { Traceparent = kiosk.Traceparent }]),
+            kiosk.TraceId);
+
+        var apply = ApplySpan(spans, "joined");
+        Assert.Equal(kiosk.TraceId, apply.TraceId);
+        Assert.Equal(kiosk.SpanId, apply.ParentSpanId);
+        Assert.Equal("booked", apply.GetTagItem("stempeluhr.outcome"));
+        var sync = spans.Single(span => span.OperationName == "offline.sync");
+        Assert.Equal(sync.Context.SpanId, Assert.Single(apply.Links).Context.SpanId);
+    }
+
+    [Fact]
+    public async Task OfflineApply_FromTheOutbox_StaysInTheTraceOfTheFirstAttempt()
+    {
+        var (service, kimai) = CreateService();
+        var kiosk = KioskTrace();
+        kimai.FailNextStatusCalls = 2;
+        await service.SyncKioskAsync([Kiosk("later", "start", T08) with { Traceparent = kiosk.Traceparent }]);
+
+        var spans = await SpanCapture.InTraceAsync(() => service.FlushOutboxAsync(), kiosk.TraceId);
+
+        var apply = ApplySpan(spans, "later");
+        Assert.Equal(kiosk.TraceId, apply.TraceId);
+        Assert.Equal("booked", apply.GetTagItem("stempeluhr.outcome"));
+        var flush = spans.Single(span => span.OperationName == "outbox.flush");
+        Assert.Equal(flush.Context.SpanId, Assert.Single(apply.Links).Context.SpanId);
+    }
+
+    [Fact]
+    public async Task OfflineSkip_StaysInTheBatch_AndLinksTheTraceOfTheFirstAttempt()
+    {
+        var (service, _) = CreateService();
+        var kiosk = KioskTrace();
+        await service.SyncKioskAsync([Kiosk("once", "start", T08)]);
+
+        var spans = await SpanCapture.InTraceAsync(() => service.SyncKioskAsync(
+            [Kiosk("once", "start", T08) with { Traceparent = kiosk.Traceparent }, Kiosk("next", "stop", T10)]),
+            kiosk.TraceId);
+
+        var skip = SkipSpan(spans, "once");
+        var sync = spans.Single(span => span.OperationName == "offline.sync");
+        Assert.Equal(sync.TraceId, skip.TraceId);
+        Assert.Equal(sync.Context.SpanId, skip.ParentSpanId);
+        var link = Assert.Single(skip.Links).Context;
+        Assert.Equal(kiosk.TraceId, link.TraceId);
+        Assert.Equal(kiosk.SpanId, link.SpanId);
+        Assert.Equal("duplicate", skip.GetTagItem("stempeluhr.outcome"));
+        Assert.Equal(sync.Context.SpanId, ApplySpan(spans, "next").ParentSpanId);
+    }
+
+    /// <summary>Kimai-Ausfall: Jeder Neuversand des Kiosks wäre sonst ein weiterer Span in der Trace des Stempels.</summary>
+    [Fact]
+    public async Task ResentBufferedEvent_StaysOutOfTheTraceOfTheStamp()
+    {
+        var (service, kimai) = CreateService();
+        var kiosk = KioskTrace();
+        kimai.FailNextStatusCalls = 10;
+        var entry = Kiosk("waiting", "start", T08) with { Traceparent = kiosk.Traceparent };
+        await service.SyncKioskAsync([entry]);
+
+        var spans = await SpanCapture.InTraceAsync(() => service.SyncKioskAsync([entry]), kiosk.TraceId);
+
+        var skip = SkipSpan(spans, "waiting");
+        Assert.Equal("buffered", skip.GetTagItem("stempeluhr.outcome"));
+        Assert.NotEqual(kiosk.TraceId, skip.TraceId);
+    }
+
+    /// <summary>
+    /// Wie im Betrieb: ParentBased-Sampler und Exporter. Ein Client mit
+    /// Flags <c>00</c> darf den Nachtrag nicht unsichtbar machen.
+    /// </summary>
+    [Fact]
+    public async Task OfflineApply_WithAnUnsampledTraceparent_IsStillRecorded()
+    {
+        var (service, _) = CreateService();
+        var traceId = ActivityTraceId.CreateRandom();
+        var exported = new List<Activity>();
+        using (var provider = Sdk.CreateTracerProviderBuilder()
+            .AddSource(StempeluhrTelemetry.SourceName)
+            .SetSampler(new ParentBasedSampler(new AlwaysOnSampler()))
+            .AddInMemoryExporter(exported)
+            .Build())
+        {
+            await service.SyncKioskAsync(
+                [Kiosk("unsampled", "start", T08) with { Traceparent = $"00-{traceId}-{ActivitySpanId.CreateRandom()}-00" }]);
+            provider!.ForceFlush();
+        }
+
+        var apply = ApplySpan(exported, "unsampled");
+        Assert.Equal(traceId, apply.TraceId);
+        Assert.Equal("booked", apply.GetTagItem("stempeluhr.outcome"));
+    }
+
+    [Theory]
+    [InlineData("garbage")]
+    [InlineData("00-00000000000000000000000000000000-00f067aa0ba902b7-01")]
+    public async Task OfflineApply_WithAnInvalidTraceparent_StaysInTheBatch(string traceparent)
+    {
+        var (service, _) = CreateService();
+
+        var spans = await SpanCapture.InTraceAsync(
+            () => service.SyncKioskAsync([Kiosk("invalid", "start", T08) with { Traceparent = traceparent }]));
+
+        var sync = spans.Single(span => span.OperationName == "offline.sync");
+        var apply = ApplySpan(spans, "invalid");
+        Assert.Equal(sync.Context.SpanId, apply.ParentSpanId);
+        Assert.Empty(apply.Links);
     }
 
     /// <summary>Der Speicher der Event-IDs fällt aus: ein Fehler außerhalb der Ereignis-Behandlung.</summary>

@@ -14,6 +14,7 @@ import argparse
 import http.server
 import json
 import logging
+import re
 import signal
 import sys
 import threading
@@ -120,20 +121,40 @@ class AgentConfig:
         )
 
 
+# What the kiosk may rely on beyond the routes themselves, via GET /health.
+# "traceparent": the terminal routes accept and forward that header (issue
+# #148). An older agent rejects it in the CORS preflight, so the kiosk sends it
+# only to an agent that names it here.
+AGENT_FEATURES = ("traceparent",)
+
+# W3C Trace Context, version 00, lowercase hex. All-zero ids are invalid.
+_TRACEPARENT = re.compile(r"00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}")
+
+
+def valid_traceparent(value: str | None) -> str | None:
+    """The header if it is a valid traceparent, else None (never forwarded)."""
+    return value if value is not None and _TRACEPARENT.fullmatch(value) else None
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
 
-def upstream_request(config: AgentConfig, path: str, body: bytes | None = None, timeout: int = 15):
+def upstream_request(config: AgentConfig, path: str, body: bytes | None = None, timeout: int = 15,
+                     traceparent: str | None = None):
     """Shared authenticated transport. Never forward credentials on redirects."""
-    request = urllib.request.Request(config.api_base_url + path, data=body, headers={
+    headers = {
         "Authorization": "Bearer " + config.terminal_token,
         "X-Terminal-Id": config.terminal_id,
         "Content-Type": "application/json",
         # Avoid bot filters rejecting urllib's default User-Agent.
         "User-Agent": f"Stempeluhr-NFC-Agent/{AGENT_VERSION}",
-    })
+    }
+    if traceparent:
+        # The API continues the kiosk's trace instead of starting its own.
+        headers["traceparent"] = traceparent
+    request = urllib.request.Request(config.api_base_url + path, data=body, headers=headers)
     return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
 
 
@@ -164,7 +185,7 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         if self.path == "/health":
             # Open to everyone: the updater calls it without an Origin. A
             # foreign page gets no CORS header and cannot read it anyway.
-            self._send_json(200, {"ok": True, "version": AGENT_VERSION})
+            self._send_json(200, {"ok": True, "version": AGENT_VERSION, "features": list(AGENT_FEATURES)})
             return
 
         if self.path == "/terminal/catalog":
@@ -271,6 +292,8 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             except (ValueError, KeyError, TypeError):
                 self._send_json(400, {"error": "invalid sync batch"})
                 return
+        # No traceparent header here: a sync batch holds stamps of several
+        # traces, each event carries its own in the body.
         try:
             with upstream_request(config, path, body, timeout=270 if post else 15) as response:
                 result = json.load(response)
@@ -314,7 +337,8 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             return
         body = json.dumps(payload).encode("utf-8")
         try:
-            with upstream_request(config, "/api/kiosk/clock", body, timeout=10) as response:
+            with upstream_request(config, "/api/kiosk/clock", body, timeout=10,
+                                  traceparent=valid_traceparent(self.headers.get("traceparent"))) as response:
                 result = json.load(response)
             self._send_json(200, result)
         except urllib.error.HTTPError as error:
@@ -374,7 +398,9 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(204)
         self._send_allow_origin()
         self.send_header("Access-Control-Allow-Methods", "GET, POST")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # traceparent: see AGENT_FEATURES. Without it in this list the browser
+        # refuses every terminal request that carries the header.
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, traceparent")
         # Chrome's Private Network Access: a request from a PUBLIC site
         # (e.g. https://...cloudflare...) to a LOCAL address (127.0.0.1)
         # gets an extended preflight asking for this header - without it
