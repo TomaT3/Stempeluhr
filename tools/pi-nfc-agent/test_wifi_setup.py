@@ -338,6 +338,12 @@ class ConnectTest(SetupTest):
         self.assertIn("hidden=true", (self.dir / file_name).read_text())
         self.assertFalse(any(call[:3] == ["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY"] for call in self.nmcli.calls))
 
+    def test_connect_finds_a_network_beyond_the_listed_ones(self):
+        many = "".join(f":Nachbar{i}:{90 - i}:WPA2\n" for i in range(wifi_setup.MAX_NETWORKS))
+        self.nmcli.scan = many + ":Kunde:5:WPA2\n"  # the weakest, past the list
+        self.assertNotIn("Kunde", [n["ssid"] for n in self.manager.scan()])
+        self.assertIsNotNone(self.manager.connect("Kunde", SECRET))
+
     def test_wpa3_and_open_networks(self):
         self.manager.connect("Neu3", "passwort1")
         self.assertIn("key-mgmt=sae", (self.dir / self.files()[0]).read_text())

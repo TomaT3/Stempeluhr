@@ -148,6 +148,10 @@
             <p>{{ outcome.text }}</p>
             <div class="entry-actions">
               @if (outcome.ok) {
+                @if (earlierAttempt()) {
+                  <!-- Die eigene Wahl wurde nicht verwendet: ohne neue PIN weiter wählen. -->
+                  <button type="button" class="secondary" (click)="backToOverview(); refresh()">WLAN-Liste</button>
+                }
                 <button type="button" class="primary" (click)="finish()">Fertig</button>
               } @else {
                 <button type="button" class="secondary" (click)="backToOverview(); refresh()">WLAN-Liste</button>

@@ -364,6 +364,59 @@ describe('TerminalMaintenance', () => {
     expect(text()).toContain('Früherer Versuch: Verbunden mit „Kunde“');
   });
 
+  it('offers the WLAN list after an earlier attempt succeeded', () => {
+    unlocked();
+    component.choose(NETWORKS[1]);
+    component.password.set('richtig-pw');
+    component.connect();
+    http.expectOne(`${AGENT}/wifi/connect`)
+      .flush({ error: 'connect already running', ssid: 'Alt' }, { status: 409, statusText: 'Conflict' });
+    pollStatus({ state: 'connected', ssid: 'Alt' });
+
+    const list = [...fixture.nativeElement.querySelectorAll('button')]
+      .find(button => (button as HTMLElement).textContent?.includes('WLAN-Liste')) as HTMLButtonElement | undefined;
+    expect(list).toBeDefined();
+    list!.click();
+
+    // Same session, no new PIN: the own choice can be made now.
+    expect(component.step()).toBe('overview');
+    http.expectOne(`${AGENT}/wifi/status`).flush({ status: CONNECTED, job: { state: 'connected', ssid: 'Alt' } });
+    http.expectOne(`${AGENT}/wifi/networks`).flush({ networks: NETWORKS });
+    expect(closed).toBe(0);
+  });
+
+  it('offers only Fertig after an own attempt succeeded', () => {
+    unlocked();
+    component.choose(NETWORKS[1]);
+    component.password.set('kunden-pass');
+    component.connect();
+    http.expectOne(`${AGENT}/wifi/connect`).flush({ ok: true }, { status: 202, statusText: 'Accepted' });
+    pollStatus({ state: 'connected', ssid: 'Kunde' });
+
+    expect(text()).not.toContain('WLAN-Liste');
+  });
+
+  it('unlocks the PIN entry again when the session expires while waiting', () => {
+    // A job is running on open; the WLAN list request comes back 401 meanwhile.
+    enterPin('482915');
+    http.expectOne(`${AGENT}/maintenance/unlock`).flush({ session: 's1' });
+    http.expectOne(`${AGENT}/wifi/status`).flush({ status: CONNECTED, job: { state: 'running', ssid: 'Kunde' } });
+    expect(component.step()).toBe('connecting');
+    http.expectOne(`${AGENT}/wifi/networks`).flush({ error: 'session' }, { status: 401, statusText: 'Unauthorized' });
+    fixture.detectChanges();
+
+    expect(component.step()).toBe('pin');
+    expect(component.busy()).toBe(false);
+    vi.advanceTimersByTime(CONNECT_POLL_MS);
+    http.expectNone(`${AGENT}/wifi/status`);
+    enterPin('482915');
+    http.expectOne(`${AGENT}/maintenance/unlock`).flush({ session: 's1' });
+    // A new refresh follows the still running job again.
+    http.expectOne(`${AGENT}/wifi/status`).flush({ status: CONNECTED, job: { state: 'running', ssid: 'Kunde' } });
+    http.expectOne(`${AGENT}/wifi/networks`).flush({ networks: NETWORKS });
+    expect(component.step()).toBe('connecting');
+  });
+
   it('retries an OWE network without asking for a password', () => {
     unlocked();
     component.choose({ ssid: 'Enhanced', signal: 60, security: 'OWE', inUse: false });

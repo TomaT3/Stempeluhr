@@ -346,7 +346,11 @@ export class TerminalMaintenance {
   private handleError(error: unknown): void {
     if (error instanceof HttpErrorResponse && error.status === 401) {
       this.session = null;
+      // Auch wenn der 401 aus einer anderen Anfrage kommt, während auf einen
+      // Versuch gewartet wird: sonst hinge die PIN-Eingabe auf „Prüfe …“.
       this.poll?.unsubscribe();
+      this.poll = null;
+      this.busy.set(false);
       this.step.set('pin');
       this.message.set('Sitzung abgelaufen. Bitte die Wartungs-PIN erneut eingeben.');
       return;

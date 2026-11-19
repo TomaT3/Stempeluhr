@@ -260,7 +260,9 @@ class NetworkManager:
                 "connection": device["connection"], "serviceWifi": device["connection"] == SERVICE_ID,
                 "ethernet": device["ethernet"]}
 
-    def scan(self) -> List[dict]:
+    def scan(self, limit: Optional[int] = MAX_NETWORKS) -> List[dict]:
+        """Networks in range, strongest first; `limit` only shortens the list
+        for the kiosk (None: all, for looking up the network of a connect)."""
         fields = ["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan"]
         result = self.run(fields + ["yes"], SCAN_TIMEOUT_SECONDS)
         if result.returncode != 0:
@@ -283,7 +285,7 @@ class NetworkManager:
             elif in_use:
                 known["inUse"] = True
         ordered = sorted(networks.values(), key=lambda entry: (not entry["inUse"], -entry["signal"], entry["ssid"]))
-        return ordered[:MAX_NETWORKS]
+        return ordered if limit is None else ordered[:limit]
 
     def connect(self, ssid: str, psk: str, hidden: bool = False, security: Optional[str] = None,
                 on_connected: Callable[[str], None] = lambda _uuid: None) -> Optional[dict]:
@@ -299,7 +301,9 @@ class NetworkManager:
         if hidden:
             security = ("WPA2" if psk else "") if security is None else security
         else:
-            match = next((network for network in self.scan() if network["ssid"] == ssid), None)
+            # The whole scan: a weak network the kiosk listed may rank past
+            # MAX_NETWORKS in this new scan.
+            match = next((network for network in self.scan(limit=None) if network["ssid"] == ssid), None)
             if match is None:
                 raise SetupError("WLAN nicht gefunden. Ist es in Reichweite?")
             security = match["security"]
