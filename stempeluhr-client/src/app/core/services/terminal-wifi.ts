@@ -37,10 +37,10 @@ export type HiddenSecurity = 'WPA2' | 'WPA3' | '';
 /**
  * Der Agent antwortet auf Status und Login schneller (Status-Abfrage beim
  * Helfer: höchstens 8 s); Verbinden kehrt sofort zurück (202), das Ergebnis
- * kommt per Status. Die Suche wartet im Agenten bis zu 40 s.
+ * kommt per Status. Die Suche wartet im Agenten bis zu 44 s.
  */
 const AGENT_TIMEOUT_MS = 15_000;
-const SCAN_TIMEOUT_MS = 45_000;
+const SCAN_TIMEOUT_MS = 50_000;
 
 /**
  * WLAN-Einstellung am Display über den lokalen Agenten. Erst die

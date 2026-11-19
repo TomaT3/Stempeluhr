@@ -304,6 +304,79 @@ describe('TerminalMaintenance', () => {
     expect(text()).toContain('Keine Rückmeldung vom Terminal');
   });
 
+  it('keeps waiting when the wall clock jumps ahead on connecting', () => {
+    unlocked();
+    component.choose(NETWORKS[1]);
+    component.password.set('kunden-pass');
+    component.connect();
+    http.expectOne(`${AGENT}/wifi/connect`).flush({ ok: true }, { status: 202, statusText: 'Accepted' });
+
+    // A Pi without RTC: timesyncd sets the clock hours ahead once the new WLAN is up.
+    vi.setSystemTime(Date.now() + 5 * 60 * 60_000);
+    pollStatus({ state: 'connected', ssid: 'Kunde' });
+
+    expect(text()).toContain('Verbunden mit „Kunde“');
+  });
+
+  it('does not show another running attempt as the outcome of a new choice', () => {
+    unlocked();
+    component.choose(NETWORKS[1]);
+    component.password.set('kunden-pass');
+    component.connect();
+    http.expectOne(`${AGENT}/wifi/connect`)
+      .flush({ error: 'connect already running', ssid: 'Alt' }, { status: 409, statusText: 'Conflict' });
+    fixture.detectChanges();
+
+    expect(component.step()).toBe('password');
+    expect(text()).toContain('Eine WLAN-Umstellung zu „Alt“ läuft noch.');
+    vi.advanceTimersByTime(CONNECT_POLL_MS);
+    http.expectNone(`${AGENT}/wifi/status`);
+  });
+
+  it('waits for a running attempt to the same network', () => {
+    unlocked();
+    component.choose(NETWORKS[1]);
+    component.password.set('kunden-pass');
+    component.connect();
+    http.expectOne(`${AGENT}/wifi/connect`)
+      .flush({ error: 'connect already running', ssid: 'Kunde' }, { status: 409, statusText: 'Conflict' });
+
+    pollStatus({ state: 'connected', ssid: 'Kunde' });
+    expect(text()).toContain('Verbunden mit „Kunde“');
+  });
+
+  it('keeps spaces at the edges of a hidden SSID', () => {
+    unlocked();
+    component.openHidden();
+    component.hiddenSsid.set(' ');
+    component.confirmHidden();
+    expect(component.message()).toBe('Bitte den WLAN-Namen eingeben.');
+
+    component.hiddenSsid.set('Kunde ');
+    component.hiddenSecurity.set('');
+    component.confirmHidden();
+    expect(http.expectOne(`${AGENT}/wifi/connect`).request.body).toMatchObject({ ssid: 'Kunde ' });
+  });
+
+  it('connects to an OWE network without asking for a password', () => {
+    unlocked();
+    component.choose({ ssid: 'Enhanced', signal: 60, security: 'OWE', inUse: false });
+
+    expect(http.expectOne(`${AGENT}/wifi/connect`).request.body)
+      .toEqual({ session: 's1', ssid: 'Enhanced', psk: '', hidden: false });
+  });
+
+  it('accepts a 64-digit hex key on the keyboard', () => {
+    unlocked();
+    component.choose(NETWORKS[1]);
+    fixture.detectChanges();
+
+    const keyboard = fixture.nativeElement.querySelector('app-onscreen-keyboard');
+    expect(keyboard).not.toBeNull();
+    expect(fixture.debugElement.query(element => element.nativeElement === keyboard).componentInstance.maxLength())
+      .toBe(64);
+  });
+
   it('asks for the PIN again when the session expired', () => {
     unlocked();
     component.refresh();

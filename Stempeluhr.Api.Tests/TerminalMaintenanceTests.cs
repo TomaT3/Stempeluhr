@@ -125,7 +125,7 @@ public sealed class TerminalMaintenanceTests
 
             Assert.Equal(("Stempeluhr-Service", "hotspot-secret", Current.MaintenancePinHash),
                 (result.ServiceWifiSsid, result.ServiceWifiPsk, result.MaintenancePinHash));
-            Assert.Null(update.ValidateMaintenance(result));
+            Assert.Null(update.ValidateMaintenance(result, NewCache()));
         }
     }
 
@@ -144,7 +144,7 @@ public sealed class TerminalMaintenanceTests
         var update = Update(pin: " 739104 ");
         var result = update.ToSettings(Current);
 
-        Assert.Null(update.ValidateMaintenance(result));
+        Assert.Null(update.ValidateMaintenance(result, NewCache()));
         Assert.DoesNotContain("739104", result.MaintenancePinHash);
         Assert.True(TerminalMaintenance.VerifyPin("739104", result.MaintenancePinHash));
         Assert.False(TerminalMaintenance.VerifyPin("482915", result.MaintenancePinHash));
@@ -183,9 +183,9 @@ public sealed class TerminalMaintenanceTests
         var update = Update() with { Employees = [Employee("482915")] };
         Assert.Null(update.ValidateMaintenancePin());
 
-        Assert.Contains("Mitarbeiter-PIN entspricht der Wartungs-PIN", update.ValidateMaintenance(update.ToSettings(Current)));
+        Assert.Contains("Mitarbeiter-PIN entspricht der Wartungs-PIN", update.ValidateMaintenance(update.ToSettings(Current), NewCache()));
         var other = Update() with { Employees = [Employee("482916")] };
-        Assert.Null(other.ValidateMaintenance(other.ToSettings(Current)));
+        Assert.Null(other.ValidateMaintenance(other.ToSettings(Current), NewCache()));
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public sealed class TerminalMaintenanceTests
         var result = update.ToSettings(Current);
 
         Assert.Null(result.ServiceWifiPsk);
-        Assert.Contains("fehlt das Passwort", update.ValidateMaintenance(result));
+        Assert.Contains("fehlt das Passwort", update.ValidateMaintenance(result, NewCache()));
         Assert.Equal("neues-geheim", Update(ssid: "Handy-B", psk: "neues-geheim").ToSettings(Current).ServiceWifiPsk);
     }
 
@@ -246,13 +246,35 @@ public sealed class TerminalMaintenanceTests
     {
         var update = Update(ssid: ssid, psk: psk);
 
-        Assert.Contains(message, update.ValidateMaintenance(update.ToSettings(new RuntimeSettings())));
+        Assert.Contains(message, update.ValidateMaintenance(update.ToSettings(new RuntimeSettings()), NewCache()));
     }
+
+    private static PinMatchCache NewCache() => new(TerminalMaintenance.VerifyPin);
 
     [Fact]
     public void VerifyPin_RejectsMalformedHashes()
     {
-        foreach (var stored in new[] { null, "", "plain", "pbkdf2-sha256$0$00$00", "pbkdf2-sha256$1000$zz$00", "md5$1$00$00" })
+        var salt = new string('a', 32);
+        foreach (var stored in new[]
+                 {
+                     null, "", "plain", "pbkdf2-sha256$0$00$00", "pbkdf2-sha256$1000$zz$00", "md5$1$00$00",
+                     // Empty hash part: Pbkdf2 with length 0 would throw.
+                     $"pbkdf2-sha256$200000${salt}$",
+                     // Would block a save for minutes.
+                     $"pbkdf2-sha256$2000000000${salt}${new string('c', 64)}",
+                     $"pbkdf2-sha256$9999999${salt}${new string('c', 64)}",
+                     // Odd number of hex digits.
+                     $"pbkdf2-sha256$1000${salt}a${new string('c', 64)}",
+                 })
             Assert.False(TerminalMaintenance.VerifyPin("482915", stored));
+    }
+
+    [Fact]
+    public void Save_WithBrokenStoredHash_StillWorks()
+    {
+        var broken = new RuntimeSettings { MaintenancePinHash = "pbkdf2-sha256$200000$" + new string('a', 32) + "$" };
+        var update = Update() with { Employees = [Employee("482915")] };
+
+        Assert.Null(update.ValidateMaintenance(update.ToSettings(broken), NewCache()));
     }
 }

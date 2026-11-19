@@ -308,7 +308,7 @@ public sealed record AdminSettingsUpdateDto(
     }
 
     /// <summary>Prüft Wartungs-WLAN und -PIN; <paramref name="result"/> ist das Ergebnis von <see cref="ToSettings"/>.</summary>
-    public string? ValidateMaintenance(RuntimeSettings result, PinMatchCache? cache = null)
+    public string? ValidateMaintenance(RuntimeSettings result, PinMatchCache cache)
     {
         if (TerminalMaintenance.ValidateServiceWifi(result.ServiceWifiSsid, result.ServiceWifiPsk) is { } wifiError)
             return wifiError;
@@ -317,9 +317,9 @@ public sealed record AdminSettingsUpdateDto(
         // Mitarbeiter-PIN darf ihm entsprechen - auch keine, die später, von
         // Hand in settings.json oder per Restore dazukam. Geprüft wird deshalb
         // jede PIN im Format der Wartungs-PIN; der Cache rechnet PBKDF2 pro
-        // Hash und PIN nur einmal, ein Save ohne neue PIN kostet so nichts.
+        // Hash und PIN nur einmal. Der erste Save nach dem Start bzw. nach
+        // einer neuen Wartungs-PIN kostet so je Kandidat einmal ~100 ms.
         if (NewMaintenancePin is not null || result.MaintenancePinHash is not { } stored) return null;
-        cache ??= PinMatchCache.Shared;
         return result.Employees.Any(employee => employee.Pin is { } pin
                 && TerminalMaintenance.ValidatePin(pin) is null && cache.Matches(pin, stored))
             ? "Eine Mitarbeiter-PIN entspricht der Wartungs-PIN. Bitte eine andere Wartungs-PIN setzen."

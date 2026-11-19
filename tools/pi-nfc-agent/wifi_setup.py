@@ -38,7 +38,7 @@ import urllib.error
 import urllib.request
 import uuid as uuidlib
 
-from maintenance_access import HIDDEN_SECURITY
+from maintenance_access import HIDDEN_SECURITY, STARTED_LINE
 from wifi_recovery import STATE_DIR, CommandResult, Runner, device_category, run_nmcli, short_error, split_terse
 
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
@@ -98,15 +98,28 @@ def validate_psk(psk: object) -> str:
 
 
 def key_management(security: str, psk: str) -> Optional[str]:
-    """NetworkManager key-mgmt for a scanned network; None for an open one."""
-    words = security.upper().split()
+    """NetworkManager key-mgmt for a network; None for an open one.
+
+    Checks the password against the encryption for every network, scanned or
+    hidden: a wrong combination would give a profile that never connects.
+    """
+    words = set(security.upper().split())
     if "802.1X" in words:
         raise SetupError("WLANs mit Benutzername (802.1X) werden nicht unterstützt.")
-    if not psk:
-        if words:
-            raise SetupError("Für dieses WLAN fehlt das Passwort.")
+    if "WEP" in words:
+        raise SetupError("WEP-verschlüsselte WLANs werden nicht unterstützt.")
+    if words == {"OWE"}:
+        # Enhanced Open: encrypted, but without a password.
+        if psk:
+            raise SetupError("Dieses WLAN hat kein Passwort.")
+        return "owe"
+    if not words:
+        if psk:
+            raise SetupError("Ein offenes WLAN hat kein Passwort.")
         return None
-    if "WPA3" in words and not {"WPA1", "WPA2"} & set(words):
+    if not psk:
+        raise SetupError("Für dieses WLAN fehlt das Passwort.")
+    if "WPA3" in words and not {"WPA1", "WPA2"} & words:
         return "sae"
     return "wpa-psk"
 
@@ -130,7 +143,10 @@ def keyfile(connection_id: str, connection_uuid: str, ssid: str, psk: str, key_m
         lines.append("hidden=true")
     lines.append("")
     if key_mgmt:
-        lines += ["[wifi-security]", f"key-mgmt={key_mgmt}", f"psk={escape_value(psk)}", ""]
+        lines += ["[wifi-security]", f"key-mgmt={key_mgmt}"]
+        if psk:
+            lines.append(f"psk={escape_value(psk)}")
+        lines.append("")
     lines += ["[ipv4]", "method=auto", "", "[ipv6]", "addr-gen-mode=default", "method=auto", ""]
     return "\n".join(lines)
 
@@ -271,16 +287,18 @@ class NetworkManager:
         ordered = sorted(networks.values(), key=lambda entry: (not entry["inUse"], -entry["signal"], entry["ssid"]))
         return ordered[:MAX_NETWORKS]
 
-    def connect(self, ssid: str, psk: str, hidden: bool = False, security: Optional[str] = None) -> dict:
-        """security: only for hidden networks ('WPA2', 'WPA3' or '' for open), else from the scan."""
+    def connect(self, ssid: str, psk: str, hidden: bool = False, security: Optional[str] = None,
+                on_connected: Callable[[str], None] = lambda _uuid: None) -> Optional[dict]:
+        """security: only for hidden networks ('WPA2', 'WPA3' or '' for open), else from the scan.
+
+        Returns the status after connecting; None if it cannot be read - the
+        connect itself succeeded then. on_connected gets the new profile's uuid.
+        """
         ssid, psk = validate_ssid(ssid), validate_psk(psk)
         device = self.wifi_device()
         if device is None:
             raise SetupError("Kein WLAN-Gerät gefunden.")
         if hidden:
-            if security == "" and psk:
-                # Otherwise the keyfile would get wpa-psk for an open network.
-                raise SetupError("Ein offenes WLAN hat kein Passwort.")
             security = ("WPA2" if psk else "") if security is None else security
         else:
             match = next((network for network in self.scan() if network["ssid"] == ssid), None)
@@ -309,7 +327,16 @@ class NetworkManager:
             if old_customer:
                 self.delete(*old_customer)
             self.log(f"WLAN-Einstellung: mit '{ssid}' verbunden.")
-            return self.status()
+            try:
+                on_connected(new_uuid)
+            except Exception as error:  # noqa: BLE001 - the connect itself succeeded
+                self.log(f"WARNUNG: Nacharbeit nach dem WLAN-Wechsel fehlgeschlagen: {type(error).__name__}")
+            try:
+                return self.status()
+            except SetupError:
+                # Connected and the old profiles are gone: reporting a failure
+                # now would be wrong. The kiosk reads the status again later.
+                return None
 
         message = connect_error(result)
         self.log(f"WLAN-Einstellung: Verbindung mit '{ssid}' fehlgeschlagen ({short_error(result)}).")
@@ -425,9 +452,36 @@ class ConnectLock:
             self.handle.close()
 
 
+def retarget_recovery(config_path: Path, connection_uuid: str, log: Callable[[str], None]) -> None:
+    """Points a configured wifi_recovery.connection_uuid at the new profile.
+
+    Otherwise the recovery would keep activating the old WLAN (or skip itself
+    when that profile was deleted). Without the key nothing changes: the
+    recovery then picks the profile with the highest priority, which is the
+    new stempeluhr-wlan anyway. Mode and owner of config.json are kept.
+    """
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    recovery = config.get("wifi_recovery") if isinstance(config, dict) else None
+    if not isinstance(recovery, dict) or not recovery.get("connection_uuid") \
+            or recovery["connection_uuid"] == connection_uuid:
+        return
+    recovery["connection_uuid"] = connection_uuid
+    info = config_path.stat()
+    write_private(config_path, json.dumps(config, indent=2) + "\n", info.st_mode & 0o777,
+                  info.st_gid if os.geteuid() == 0 else None)
+    log("WLAN-Recovery folgt jetzt dem neuen WLAN-Profil.")
+
+
 def handle_request(raw: bytes, manager: NetworkManager,
                    pause: Callable[[], RecoveryPause] = RecoveryPause,
-                   connect_lock: Callable[[], ConnectLock] = ConnectLock) -> dict:
+                   connect_lock: Callable[[], ConnectLock] = ConnectLock,
+                   on_start: Callable[[], None] = lambda: None,
+                   config_path: Optional[Path] = None) -> dict:
+    """on_start: called for a connect once it holds the lock, before anything
+    changes (serve() tells the agent with STARTED_LINE)."""
     try:
         request = json.loads(raw.decode("utf-8"))
         if not isinstance(request, dict):
@@ -445,9 +499,13 @@ def handle_request(raw: bytes, manager: NetworkManager,
             security = request.get("security")
             if security is not None and security not in HIDDEN_SECURITY:
                 return {"ok": False, "error": "Unbekannte Verschlüsselung."}
-            with connect_lock(), pause():
-                return {"ok": True, "status": manager.connect(request.get("ssid"), request.get("psk", ""), hidden,
-                                                              security if hidden else None)}
+            config = config_path or CONFIG
+            with connect_lock():
+                on_start()
+                with pause():
+                    return {"ok": True, "status": manager.connect(
+                        request.get("ssid"), request.get("psk", ""), hidden, security if hidden else None,
+                        on_connected=lambda uuid: retarget_recovery(config, uuid, manager.log))}
     except SetupError as error:
         return {"ok": False, "error": str(error)}
     return {"ok": False, "error": "Unbekannter Befehl."}
@@ -455,8 +513,13 @@ def handle_request(raw: bytes, manager: NetworkManager,
 
 def serve(stdin=sys.stdin.buffer, stdout=sys.stdout, manager: Optional[NetworkManager] = None) -> int:
     raw = stdin.readline(MAX_REQUEST_BYTES + 1)
+
+    def started() -> None:
+        stdout.write(STARTED_LINE.decode())
+        stdout.flush()
+
     answer = ({"ok": False, "error": "Anfrage zu groß."} if len(raw) > MAX_REQUEST_BYTES
-              else handle_request(raw, manager or NetworkManager()))
+              else handle_request(raw, manager or NetworkManager(), on_start=started))
     stdout.write(json.dumps(answer) + "\n")
     stdout.flush()
     return 0

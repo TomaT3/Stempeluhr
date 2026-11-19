@@ -14,7 +14,8 @@ import urllib.request
 from test_local_scan_server import FOREIGN, KIOSK  # noqa: F401
 import socket
 
-from maintenance_access import (FREE_ATTEMPTS, LOCK_BASE_SECONDS, SESSION_SECONDS, MaintenanceAccess, WifiJob,
+from maintenance_access import (FREE_ATTEMPTS, LOCK_BASE_SECONDS, MAX_RESULT_AGE_SECONDS, SESSION_SECONDS,
+                                MaintenanceAccess, SingleFlight, WifiJob,
                                 WifiSetupClient, WifiSetupError, WifiSetupTimeout, WifiSetupUnavailable, verify_pin)
 from stempeluhr_nfc_agent import LocalScanServer
 
@@ -47,7 +48,10 @@ class FakeHelper:
         # Cleared: the status query hangs, like nmcli with a busy NetworkManager.
         self.status_gate = threading.Event()
         self.status_gate.set()
+        self.scan_gate = threading.Event()
+        self.scan_gate.set()
         self.scan_error = None
+        self.connect_status = {"state": "connected", "ssid": "Neu", "ip": "192.168.5.7"}
 
     def request(self, payload, timeout=30):
         self.requests.append(payload)
@@ -57,6 +61,7 @@ class FakeHelper:
             self.status_gate.wait(5)
             return {"ok": True, "status": {"state": "connected", "ssid": "Kunde", "ip": "192.168.1.23"}}
         if payload["command"] == "scan":
+            self.scan_gate.wait(5)
             if self.scan_error:
                 raise self.scan_error
             return {"ok": True, "networks": [{"ssid": "Kunde", "signal": 80, "security": "WPA2", "inUse": True}]}
@@ -145,9 +150,145 @@ class ClientTest(unittest.TestCase):
         return job.snapshot()["message"]
 
     def test_job_reports_unclear_outcomes_as_such(self):
-        for error in (WifiSetupTimeout("timeout"), WifiSetupError("ConnectionResetError")):
+        # Only after the helper confirmed the start may the WLAN have changed.
+        for error in (WifiSetupTimeout("timeout", started=True), WifiSetupError("ConnectionResetError", started=True)):
             self.assertEqual(self.job_message(error), "Ergebnis unklar. Bitte den WLAN-Status prüfen.")
+        for error in (WifiSetupTimeout("timeout"), WifiSetupError("ValueError")):
+            self.assertIn("nicht gestartet", self.job_message(error))
         self.assertIn("nicht eingerichtet", self.job_message(WifiSetupUnavailable("FileNotFoundError")))
+        # An unexpected error must not leave the job "running" (every connect would get 409).
+        self.assertIn("unklar", self.job_message(RecursionError()))
+
+    def serve_once(self, answer: bytes):
+        """A helper that sends `answer` and closes."""
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(self.path))
+        listener.listen(1)
+
+        def reply():
+            connection, _ = listener.accept()
+            with connection, listener:
+                connection.recv(4096)
+                connection.sendall(answer)
+
+        threading.Thread(target=reply, daemon=True).start()
+
+    def test_started_line_tells_whether_a_connect_began(self):
+        self.serve_once(b'{"started": true}\n{"ok": true, "status": null}\n')
+        self.assertEqual(WifiSetupClient(self.path).request({"command": "connect"}, timeout=2),
+                         {"ok": True, "status": None})
+        self.path.unlink()
+        self.serve_once(b'{"started": true}\n')  # helper died after the start
+        with self.assertRaises(WifiSetupError) as caught:
+            WifiSetupClient(self.path).request({"command": "connect"}, timeout=2)
+        self.assertTrue(caught.exception.started)
+        self.path.unlink()
+        self.serve_once(b"")  # refused by systemd (MaxConnections) or skipped unit
+        with self.assertRaises(WifiSetupError) as caught:
+            WifiSetupClient(self.path).request({"command": "connect"}, timeout=2)
+        self.assertFalse(caught.exception.started)
+
+
+class SingleFlightTest(unittest.TestCase):
+    def setUp(self):
+        self.clock = Clock()
+        self.calls = 0
+        self.gate = threading.Event()
+        self.gate.set()
+        self.result: object = {"ok": True, "n": 0}
+
+    def query(self):
+        self.calls += 1
+        self.gate.wait(5)
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return {**self.result, "n": self.calls}
+
+    def test_falls_back_to_a_recent_result_only(self):
+        flight = SingleFlight(self.query, self.clock)
+        self.assertEqual(flight.get(1)["n"], 1)
+        self.gate.clear()
+        self.clock.now += 10
+        self.assertEqual(flight.get(0.05)["n"], 1)  # slow: the last result, 10 s old
+        self.clock.now += MAX_RESULT_AGE_SECONDS
+        with self.assertRaises(WifiSetupTimeout):
+            flight.get(0.05)  # too old to stand in
+        self.assertEqual(self.calls, 2)  # still the one running query
+        self.gate.set()
+
+    def test_ignores_results_from_before_a_change(self):
+        flight = SingleFlight(self.query, self.clock)
+        flight.get(1)  # n=1, started at 1000
+        self.gate.clear()
+        self.assertEqual(flight.get(0.01)["n"], 1)  # starts n=2 at 1000, falls back to n=1
+        # The connect job changes now; n=2 is still running and began before.
+        changed_at = self.clock.now + 1
+        self.clock.now += 2
+        threading.Timer(0.05, self.gate.set).start()
+        with self.assertRaises(WifiSetupTimeout):
+            flight.get(1, not_before=changed_at)  # n=2 finishes meanwhile: stale
+        # The next query starts after the change and counts.
+        self.assertEqual(flight.get(1, not_before=changed_at)["n"], 3)
+
+    def test_unexpected_errors_do_not_block_later_queries(self):
+        flight = SingleFlight(self.query, self.clock)
+        self.result = MemoryError()
+        with self.assertRaises(WifiSetupError):
+            flight.get(1)
+        self.result = {"ok": True}
+        self.assertEqual(flight.get(1)["n"], 2)
+
+    def test_stored_error_is_raised_as_a_fresh_copy(self):
+        flight = SingleFlight(self.query, self.clock)
+        self.result = WifiSetupError("broken")
+        raised = []
+        with self.assertRaises(WifiSetupError) as first:
+            flight.get(1)  # the failed run becomes the stored result
+        raised.append(first.exception)
+        self.gate.clear()  # from now on every caller gets the stored error
+        for _ in range(4):
+            with self.assertRaises(WifiSetupError) as again:
+                flight.get(0.01)
+            raised.append(again.exception)
+        self.gate.set()
+        self.assertEqual(len({id(error) for error in raised}), len(raised))
+        depths = []
+        for error in raised:
+            depth, tb = 0, error.__traceback__
+            while tb:
+                depth, tb = depth + 1, tb.tb_next
+            depths.append(depth)
+        self.assertEqual(len(set(depths)), 1, depths)  # does not grow with every raise
+
+    def test_scan_and_status_run_one_helper_each(self):
+        helper = FakeHelper()
+        helper.status_gate.clear()
+        helper.scan_gate.clear()
+        job = WifiJob(helper)
+        threads = [threading.Thread(target=lambda: self.swallow(job.status_query.get, 0.1)) for _ in range(3)]
+        threads += [threading.Thread(target=lambda: self.swallow(job.scan_query.get, 0.1)) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+        commands = sorted(r["command"] for r in helper.requests)
+        helper.status_gate.set()
+        helper.scan_gate.set()
+        self.assertEqual(commands, ["scan", "status"])
+
+    def test_queries_follow_a_replaced_client(self):
+        job = WifiJob(FakeHelper())
+        replacement = FakeHelper()
+        job.client = replacement
+        job.status_query.get(1)
+        self.assertEqual([r["command"] for r in replacement.requests], ["status"])
+
+    @staticmethod
+    def swallow(call, *args):
+        try:
+            call(*args)
+        except WifiSetupUnavailable:
+            pass
 
 
 class VerifyPinTest(unittest.TestCase):
@@ -170,6 +311,31 @@ class AccessTest(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_lockout_survives_a_restart(self):
+        state = Path(self.tmp.name) / "lockout.json"
+        access = MaintenanceAccess(self.file, self.clock, state)
+        for _ in range(FREE_ATTEMPTS):
+            access.unlock("000000")
+        # Reboot: new process, new monotonic clock - the lockout applies again.
+        restarted = MaintenanceAccess(self.file, Clock(), state)
+        self.assertEqual(restarted.unlock(PIN)[0], "locked")
+        # A correct PIN after the wait clears the stored count.
+        restarted.clock.now += LOCK_BASE_SECONDS
+        self.assertEqual(restarted.unlock(PIN)[0], "ok")
+        self.assertEqual(MaintenanceAccess(self.file, Clock(), state).unlock(PIN)[0], "ok")
+        # Unwritable or broken state never blocks.
+        state.write_text("kaputt")
+        self.assertEqual(MaintenanceAccess(self.file, Clock(), state).unlock(PIN)[0], "ok")
+
+    def test_session_ends_when_the_pin_is_removed_or_changed(self):
+        _, token = self.access.unlock(PIN)
+        self.assertTrue(self.access.check(token))
+        self.file.write_text(json.dumps({"maintenancePinHash": pin_hash("739104")}))
+        self.assertFalse(self.access.check(token))
+        _, token = self.access.unlock("739104")
+        self.file.unlink()
+        self.assertFalse(self.access.check(token))
 
     def test_disabled_without_hash_file(self):
         self.file.unlink()
@@ -365,6 +531,31 @@ class RoutesTest(unittest.TestCase):
             status, answer = self.post("/wifi/networks", {"session": session})
             self.assertEqual(status, 502)
             self.assertIn(message, answer["message"])
+
+    def test_running_attempt_names_its_ssid_on_409(self):
+        session = self.unlock()
+        self.helper.release.clear()
+        self.post("/wifi/connect", {"session": session, "ssid": "A", "psk": "passwort1"})
+        status, answer = self.post("/wifi/connect", {"session": session, "ssid": "B", "psk": "passwort1"})
+        self.helper.release.set()
+        self.assertEqual((status, answer["ssid"]), (409, "A"))
+
+    def test_status_of_the_connect_stands_in_for_a_slow_query(self):
+        import stempeluhr_nfc_agent
+        session = self.unlock()
+        self.helper.connect_answer = {"ok": True, "status": self.helper.connect_status}
+        self.post("/wifi/status", {"session": session})  # a status of the old WLAN is cached
+        self.post("/wifi/connect", {"session": session, "ssid": "Neu", "psk": "passwort1"})
+        for _ in range(50):
+            if self.server.wifi_job.snapshot()["state"] == "connected":
+                break
+            time.sleep(0.02)
+        self.helper.status_gate.clear()  # NetworkManager busy: the fresh query hangs
+        with patch.object(stempeluhr_nfc_agent, "STATUS_WAIT_SECONDS", 0.1):
+            answer = self.post("/wifi/status", {"session": session})[1]
+        self.helper.status_gate.set()
+        # Not the cached status of the old WLAN, but the one of the connect.
+        self.assertEqual((answer["job"]["state"], answer["status"]["ip"]), ("connected", "192.168.5.7"))
 
     def test_open_hidden_network_with_password_is_rejected(self):
         session = self.unlock()

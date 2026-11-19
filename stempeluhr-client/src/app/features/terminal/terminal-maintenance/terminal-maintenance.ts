@@ -20,6 +20,11 @@ export const CONNECT_POLL_MS = 2_000;
 export const CONNECT_GIVE_UP_MS = 345_000;
 const PIN_MAX_LENGTH = 12;
 
+/** OWE (Enhanced Open) ist verschlüsselt, hat aber kein Passwort. */
+function needsPassword(security: string): boolean {
+  return !!security && security.toUpperCase() !== 'OWE';
+}
+
 /**
  * WLAN am eingebauten Terminal ändern: versteckt hinter einer Geste auf der
  * Uhr und der Wartungs-PIN. Läuft vollständig über den lokalen Agenten, also
@@ -152,7 +157,7 @@ export class TerminalMaintenance {
   choose(network: WifiNetwork): void {
     this.target.set({ ssid: network.ssid, security: network.security, hidden: false });
     this.message.set('');
-    if (!network.security) {
+    if (!needsPassword(network.security)) {
       this.password.set('');
       this.connect();
       return;
@@ -168,8 +173,9 @@ export class TerminalMaintenance {
   }
 
   confirmHidden(): void {
-    const ssid = this.hiddenSsid().trim();
-    if (!ssid) {
+    // Kein Trim: Leerzeichen am Rand sind Teil einer SSID.
+    const ssid = this.hiddenSsid();
+    if (!ssid.trim()) {
       this.message.set('Bitte den WLAN-Namen eingeben.');
       return;
     }
@@ -204,7 +210,7 @@ export class TerminalMaintenance {
   }
 
   signalLabel(network: WifiNetwork): string {
-    return `${network.signal} %${network.security ? '' : ', offen'}`;
+    return `${network.signal} %${needsPassword(network.security) ? '' : ', offen'}`;
   }
 
   connect(): void {
@@ -212,8 +218,8 @@ export class TerminalMaintenance {
     const session = this.session;
     if (!target || !session || this.busy()) return;
     const password = this.password();
-    // Ein gesichertes WLAN braucht ein WPA-Passwort; ein verstecktes ohne Passwort gilt als offen.
-    if ((target.security || password) && password.length < 8) {
+    // Ein gesichertes WLAN braucht ein WPA-Passwort; ein offenes (auch OWE) hat keins.
+    if ((needsPassword(target.security) || password) && password.length < 8) {
       this.message.set('Das Passwort hat mindestens 8 Zeichen.');
       return;
     }
@@ -223,9 +229,17 @@ export class TerminalMaintenance {
     this.requests.add(this.api.connect(session, target.ssid, password, target.hidden, security).subscribe({
       next: () => this.waitForResult(session, target.ssid),
       error: (error: unknown) => {
-        // 409: Ein Versuch läuft bereits (z. B. Doppeltipp) - auf ihn warten.
+        // 409: Ein Versuch läuft bereits. Zum selben WLAN (z. B. Doppeltipp)
+        // auf ihn warten; zu einem anderen darf dessen Ergebnis nicht als das
+        // der neuen Wahl erscheinen.
         if (error instanceof HttpErrorResponse && error.status === 409) {
-          this.waitForResult(session, target.ssid);
+          const running: unknown = error.error?.ssid;
+          if (typeof running !== 'string' || running === target.ssid) {
+            this.waitForResult(session, target.ssid);
+            return;
+          }
+          this.busy.set(false);
+          this.message.set(`Eine WLAN-Umstellung zu „${running}“ läuft noch. Bitte warten und dann erneut versuchen.`);
           return;
         }
         this.busy.set(false);
@@ -263,7 +277,9 @@ export class TerminalMaintenance {
 
   private waitForResult(session: string, ssid: string): void {
     this.step.set('connecting');
-    const startedAt = Date.now();
+    // Monotone Uhr: Ein Pi ohne RTC stellt die Wanduhr genau dann um Stunden
+    // vor, wenn das neue WLAN verbindet - mit Date.now() gäbe das Warten auf.
+    const startedAt = performance.now();
     this.poll?.unsubscribe();
     this.poll = timer(CONNECT_POLL_MS, CONNECT_POLL_MS)
       .pipe(
@@ -272,7 +288,7 @@ export class TerminalMaintenance {
         // Subscription synchron, der Takt erreicht exhaustMap dann nicht mehr.
         tap(() => {
           this.touch();
-          if (Date.now() - startedAt > CONNECT_GIVE_UP_MS) {
+          if (performance.now() - startedAt > CONNECT_GIVE_UP_MS) {
             this.finishConnect({ ok: false, text: 'Keine Rückmeldung vom Terminal. Bitte den WLAN-Status prüfen.' });
           }
         }),

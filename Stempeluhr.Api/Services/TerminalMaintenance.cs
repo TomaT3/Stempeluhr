@@ -31,23 +31,25 @@ public static class TerminalMaintenance
             Convert.ToHexString(salt).ToLowerInvariant(), Convert.ToHexString(hash).ToLowerInvariant());
     }
 
+    // Gleiche Grenzen wie auf dem Pi (maintenance_access.PIN_HASH, MAX_ITERATIONS):
+    // ein kaputter oder manipulierter Hash in settings.json darf weder werfen
+    // noch einen Save minutenlang blockieren.
+    private const int MaxIterations = 2_000_000;
+    private static readonly System.Text.RegularExpressions.Regex StoredHash = new(
+        @"^pbkdf2-sha256\$([1-9][0-9]{0,6})\$([0-9a-f]{16,128})\$([0-9a-f]{32,128})$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     public static bool VerifyPin(string pin, string? stored)
     {
-        var parts = stored?.Split('$');
-        if (parts is not [HashScheme, var iterationText, var saltHex, var hashHex]
-            || !int.TryParse(iterationText, NumberStyles.None, CultureInfo.InvariantCulture, out var iterations)
-            || iterations <= 0) return false;
-        try
-        {
-            var expected = Convert.FromHexString(hashHex);
-            var actual = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(pin), Convert.FromHexString(saltHex),
-                iterations, HashAlgorithmName.SHA256, expected.Length);
-            return CryptographicOperations.FixedTimeEquals(actual, expected);
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
+        var match = StoredHash.Match(stored ?? string.Empty);
+        if (!match.Success
+            || !int.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var iterations)
+            || iterations > MaxIterations
+            || match.Groups[2].Length % 2 != 0 || match.Groups[3].Length % 2 != 0) return false;
+        var expected = Convert.FromHexString(match.Groups[3].Value);
+        var actual = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(pin), Convert.FromHexString(match.Groups[2].Value),
+            iterations, HashAlgorithmName.SHA256, expected.Length);
+        return CryptographicOperations.FixedTimeEquals(actual, expected);
     }
 
     public static string? ValidatePin(string pin) =>
@@ -77,23 +79,27 @@ public static class TerminalMaintenance
 }
 
 /// <summary>
-/// Ergebnisse von <see cref="TerminalMaintenance.VerifyPin"/> pro Hash und PIN.
-/// PBKDF2 kostet pro Prüfung um 100 ms; so prüft jeder Save alle
-/// Mitarbeiter-PINs gegen die Wartungs-PIN, rechnet aber nur neue Paare.
-/// Ein neuer Hash (neue Wartungs-PIN, neues Salt) hat eigene Einträge.
+/// Ergebnisse von <see cref="TerminalMaintenance.VerifyPin"/> pro Hash und PIN,
+/// als Singleton per DI. PBKDF2 kostet pro Prüfung um 100 ms; so prüft jeder
+/// Save alle Mitarbeiter-PINs gegen die Wartungs-PIN, rechnet aber nur neue
+/// Paare - einmal nach dem Start bzw. nach einer neuen Wartungs-PIN (neues
+/// Salt). Schlüssel ist ein SHA-256 von Hash und PIN: keine Klartext-PIN bleibt
+/// im Speicher, auch nicht die gelöschter Mitarbeiter oder abgelehnter Saves.
 /// </summary>
 public sealed class PinMatchCache(Func<string, string, bool> verify)
 {
     private const int MaxEntries = 10_000;
 
-    public static PinMatchCache Shared { get; } = new(TerminalMaintenance.VerifyPin);
-
-    private readonly ConcurrentDictionary<(string Hash, string Pin), bool> results = new();
+    private readonly ConcurrentDictionary<string, bool> results = new();
 
     public bool Matches(string pin, string stored)
     {
         if (results.Count >= MaxEntries) results.Clear();
-        return results.GetOrAdd((stored, pin), key => verify(key.Pin, key.Hash));
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{stored}\n{pin}")));
+        if (results.TryGetValue(key, out var known)) return known;
+        var matches = verify(pin, stored);
+        results[key] = matches;
+        return matches;
     }
 }
 

@@ -122,9 +122,17 @@ class KeyfileTest(unittest.TestCase):
         self.assertEqual(wifi_setup.key_management("WPA2 WPA3", "passwort1"), "wpa-psk")
         self.assertEqual(wifi_setup.key_management("WPA3", "passwort1"), "sae")
         self.assertIsNone(wifi_setup.key_management("", ""))
-        for security, psk in (("WPA2 802.1X", "passwort1"), ("WPA2", "")):
-            with self.assertRaises(SetupError):
+        self.assertEqual(wifi_setup.key_management("OWE", ""), "owe")
+        for security, psk, message in (("WPA2 802.1X", "passwort1", "802.1X"), ("WPA2", "", "fehlt das Passwort"),
+                                       ("", "passwort1", "offenes WLAN"), ("WEP", "passwort1", "WEP"),
+                                       ("OWE", "passwort1", "kein Passwort")):
+            with self.assertRaisesRegex(SetupError, message):
                 wifi_setup.key_management(security, psk)
+
+    def test_owe_profile_has_no_psk(self):
+        content = wifi_setup.keyfile("x", OLD, "Offen+", "", "owe", 10)
+        self.assertIn("key-mgmt=owe\n", content)
+        self.assertNotIn("psk=", content)
 
     def test_validation(self):
         for ssid in ("", "x" * 33, "a\nb", None):
@@ -143,6 +151,29 @@ class TimeoutsTest(unittest.TestCase):
         runtime_max = int(re.search(r"^RuntimeMaxSec=(\d+)min$", unit, re.M).group(1)) * 60
         self.assertLess(wifi_setup.CONNECT_WORST_CASE_SECONDS, maintenance_access.CONNECT_TIMEOUT_SECONDS)
         self.assertLess(maintenance_access.CONNECT_TIMEOUT_SECONDS, runtime_max)
+
+    def test_status_and_scan_wait_long_enough_and_answer_in_time(self):
+        """No orphaned helpers: the agent keeps a query open longer than the
+        helper needs; the kiosk waits longer than the agent answers."""
+        import maintenance_access as agent
+        kiosk = (Path(__file__).parents[2] / "stempeluhr-client/src/app/core/services/terminal-wifi.ts").read_text()
+        kiosk_ms = {name: int(value.replace("_", "")) for name, value in
+                    re.findall(r"const (AGENT_TIMEOUT_MS|SCAN_TIMEOUT_MS) = ([\d_]+);", kiosk)}
+        # Helper: status = device, IP and SSID query; scan = rescan plus fallback.
+        status_worst = 3 * wifi_setup.READ_TIMEOUT_SECONDS
+        scan_worst = wifi_setup.SCAN_TIMEOUT_SECONDS + wifi_setup.READ_TIMEOUT_SECONDS
+        startup = 3  # Python and nmcli start on the Pi
+        self.assertGreater(agent.STATUS_QUERY_TIMEOUT_SECONDS, status_worst + startup)
+        self.assertGreater(agent.SCAN_QUERY_TIMEOUT_SECONDS, scan_worst + startup)
+        self.assertGreater(agent.SCAN_WAIT_SECONDS, scan_worst + startup)
+        self.assertLess(agent.STATUS_WAIT_SECONDS * 1000, kiosk_ms["AGENT_TIMEOUT_MS"])
+        self.assertLess(agent.SCAN_WAIT_SECONDS * 1000, kiosk_ms["SCAN_TIMEOUT_MS"])
+
+    def test_helpers_fit_into_the_socket(self):
+        # Status, scan and connect: one helper each at a time (SingleFlight, WifiJob).
+        unit = (Path(__file__).parent / "stempeluhr-wifi-setup.socket").read_text()
+        max_connections = int(re.search(r"^MaxConnections=(\d+)$", unit, re.M).group(1))
+        self.assertLessEqual(3, max_connections - 1)
 
 
 class ConnectBoundTest(SetupTest):
@@ -175,6 +206,43 @@ class ConnectBoundTest(SetupTest):
 
 
 class ConnectTest(SetupTest):
+    def test_unreadable_status_after_success_is_still_a_success(self):
+        connected = []
+
+        def busy_after_up(args, timeout):
+            if connected and args[:3] == ["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION"]:
+                return CommandResult(None)  # NetworkManager still busy
+            result = self.nmcli(args, timeout)
+            if "up" in args:
+                connected.append(True)
+            return result
+
+        manager = NetworkManager(busy_after_up, self.dir, self.logs.append)
+        self.assertIsNone(manager.connect("Kunde", SECRET))
+        self.assertEqual([name for name, _ in self.nmcli.profiles].count("stempeluhr-wlan"), 1)
+
+    def test_visible_open_network_with_password_is_refused(self):
+        with self.assertRaisesRegex(SetupError, "offenes WLAN"):
+            self.manager.connect("Offen", "passwort1")
+        self.assertEqual(self.files(), [])
+
+    def test_recovery_follows_the_new_profile(self):
+        config = self.dir / "config.json"
+        config.write_text(json.dumps({"api_base_url": "x", "wifi_recovery": {"connection_uuid": OLD}}))
+        os.chmod(config, 0o640)
+        answer = wifi_setup.handle_request(b'{"command": "connect", "ssid": "Kunde", "psk": "passwort1"}',
+                                           self.manager, lambda: RecoveryPause(self.dir / "r", wait_seconds=0),
+                                           config_path=config)
+        self.assertTrue(answer["ok"], answer)
+        new_uuid = next(uuid for name, uuid in self.nmcli.profiles if name == "stempeluhr-wlan")
+        saved = json.loads(config.read_text())
+        self.assertEqual((saved["wifi_recovery"]["connection_uuid"], saved["api_base_url"]), (new_uuid, "x"))
+        self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o640)
+        # Without the key the recovery picks by priority: config stays untouched.
+        config.write_text('{"api_base_url": "x"}')
+        wifi_setup.retarget_recovery(config, new_uuid, self.logs.append)
+        self.assertEqual(config.read_text(), '{"api_base_url": "x"}')
+
     def test_all_old_profiles_go_in_one_call(self):
         olds = [f"0b9f6e4a-6666-4c2e-9a3f-00000000000{i}" for i in range(3)]
         self.nmcli.profiles += [("stempeluhr-wlan", uuid) for uuid in olds]
@@ -384,10 +452,24 @@ class SyncServiceTest(SetupTest):
 
 
 class ServeTest(SetupTest):
-    def call(self, raw: bytes):
+    def lines(self, raw: bytes):
         out = io.StringIO()
         wifi_setup.serve(io.BytesIO(raw), out, self.manager)
-        return json.loads(out.getvalue())
+        return out.getvalue().splitlines()
+
+    def call(self, raw: bytes):
+        return json.loads(self.lines(raw)[-1])
+
+    def test_connect_confirms_its_start_first(self):
+        lines = self.lines(b'{"command": "connect", "ssid": "Kunde", "psk": "passwort1"}\n')
+        self.assertEqual(lines[0] + "\n", wifi_setup.STARTED_LINE.decode())
+        self.assertTrue(json.loads(lines[1])["ok"])
+        # Other commands and a refused connect have no such line.
+        self.assertEqual(len(self.lines(b'{"command": "status"}\n')), 1)
+        with wifi_setup.ConnectLock():
+            refused = self.lines(b'{"command": "connect", "ssid": "Kunde", "psk": "passwort1"}\n')
+        self.assertEqual(len(refused), 1)
+        self.assertIn("läuft noch", json.loads(refused[0])["error"])
 
     def test_requests(self):
         self.assertEqual(self.call(b"kaputt\n")["ok"], False)
@@ -408,12 +490,12 @@ class ServeTest(SetupTest):
 
         original_connect = self.manager.connect
 
-        def connect(*args):
+        def connect(*args, **kwargs):
             # Another open file description, as wifi_recovery.py uses one.
             with (self.dir / "recovery" / "lock").open("a") as lock:
                 with self.assertRaises(BlockingIOError):
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return original_connect(*args)
+            return original_connect(*args, **kwargs)
 
         self.manager.connect = connect
         answer = wifi_setup.handle_request(b'{"command": "connect", "ssid": "Kunde", "psk": "passwort1"}',

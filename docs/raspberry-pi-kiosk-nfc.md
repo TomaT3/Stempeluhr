@@ -278,7 +278,9 @@ Terminal und wird einmalig aktiviert.
   WLAN-Funk, ein nicht verwaltetes Gerät, ein verbundenes Ethernet und ein
   weiteres verbundenes WLAN-Gerät (z. B. USB-Adapter).
 - Profil und Gerät ermittelt er selbst: das WLAN-Profil mit Autoconnect und der
-  höchsten Priorität, bei Gleichstand das zuletzt verbundene.
+  höchsten Priorität, bei Gleichstand das zuletzt verbundene. Ist
+  `connection_uuid` gesetzt, trägt ein WLAN-Wechsel am Display (Abschnitt 8)
+  dort das neue Profil `stempeluhr-wlan` ein.
 
 Optional in `config.json` (alle Schlüssel dürfen fehlen):
 
@@ -329,8 +331,17 @@ ist. Es legt dann an:
 - `/etc/stempeluhr-nfc-agent/maintenance.json` mit dem PIN-Hash
   (`root:stempeluhr`, `0640`).
 
-Ohne Token, offline oder bei einem Serverfehler bleibt alles, wie es ist. Ein
-leeres Feld auf der Admin-Seite entfernt Profil bzw. Hash beim nächsten Lauf.
+Ohne Token, offline oder bei einem Serverfehler bleibt alles, wie es ist.
+Abschalten auf der Admin-Seite, wirksam beim nächsten Lauf:
+
+- Wartungs-WLAN: das SSID-Feld leeren. Das Profil `stempeluhr-service` wird
+  gelöscht. Ein leeres Passwortfeld behält dagegen das gespeicherte Passwort,
+  solange die SSID gleich bleibt.
+- Wartungs-PIN: die Checkbox „Wartungs-PIN entfernen“ anhaken. Ein leeres
+  PIN-Feld behält die PIN. Ohne PIN wird `maintenance.json` gelöscht und ein
+  gerade offener Dialog am Display gesperrt. Das gilt ebenso, wenn eine neue
+  PIN gesetzt wird.
+
 Kontrolle: `nmcli connection show stempeluhr-service`.
 
 **Weg 1, Hotspot:** Hotspot mit genau diesen Daten einschalten. Findet der Pi
@@ -342,7 +353,9 @@ SSH/Tailscale weiter, oder direkt am Display (Weg 2) das WLAN vor Ort wählen.
 Passwort über die Bildschirmtastatur eingeben. Das klappt auch offline. Für
 ein verstecktes WLAN Namen und Verschlüsselung angeben (WPA2/WPA3, nur WPA3
 oder offen). Nach 5 falschen PINs ist die Eingabe gesperrt (60 s, dann doppelt
-so lang, höchstens 15 Minuten). Nach 3 Minuten ohne Berührung schließt der
+so lang, höchstens 15 Minuten). Die Zahl der Fehlversuche übersteht einen
+Neustart des Agents oder des Pis (`/var/lib/stempeluhr-nfc-agent`), die
+aktuelle Sperrzeit beginnt dann von vorn. Nach 3 Minuten ohne Berührung schließt der
 Dialog, nicht aber während ein Verbindungsversuch läuft.
 
 Ein Verbindungsversuch dauert meist unter einer Minute, im ungünstigsten Fall

@@ -426,7 +426,9 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid network"})
                 return
             if not job.start(ssid, psk, hidden, security):
-                self._send_json(409, {"error": "connect already running"})
+                # The kiosk compares the SSID: a different running attempt must
+                # not be shown as the outcome of the new choice.
+                self._send_json(409, {"error": "connect already running", "ssid": job.snapshot().get("ssid")})
                 return
             LOGGER.info("WLAN setup: connecting to %r", ssid)
             self._send_json(202, {"ok": True})
@@ -437,20 +439,28 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         # STATUS_WAIT_SECONDS (below the kiosk's 15 s), the job snapshot below
         # always with it, however slow nmcli is.
         query, wait = (job.status_query, STATUS_WAIT_SECONDS) if status else (job.scan_query, SCAN_WAIT_SECONDS)
+        # Snapshot first: a status started before this change of the job could
+        # show the WLAN before it (e.g. the old IP next to "connected").
+        snapshot, changed_at = job.snapshot(), job.changed_at
         unavailable: WifiSetupUnavailable | None = None
         try:
-            answer = query.get(wait)
+            answer = query.get(wait, not_before=changed_at if status else float("-inf"))
         except WifiSetupUnavailable as error:
             answer, unavailable = None, error
         if status:
             # The connect outcome comes from the agent itself: it must reach the
             # kiosk even when the helper's status query fails meanwhile (NM busy,
             # all socket slots taken). "helper" says why the status is missing.
+            # After a successful connect the helper's own status of that moment
+            # stands in for a missing fresh one.
+            if (answer is None or not answer.get("ok")) and snapshot["state"] == "connected" \
+                    and (connect_status := job.connect_status()) is not None:
+                answer, unavailable = {"ok": True, "status": connect_status}, None
             if answer is not None and answer.get("ok"):
-                self._send_json(200, {"status": answer.get("status"), "job": job.snapshot()})
+                self._send_json(200, {"status": answer.get("status"), "job": snapshot})
             else:
                 message = answer.get("error") if answer is not None else None
-                self._send_json(200, {"status": None, "job": job.snapshot(),
+                self._send_json(200, {"status": None, "job": snapshot,
                                       "helper": unavailable.reason if unavailable else "error",
                                       "message": message[:300] if isinstance(message, str)
                                       else "WLAN-Status gerade nicht verfügbar."})
@@ -693,7 +703,8 @@ def main() -> int:
         scan_server = LocalScanServer(
             port=config.local_port, allowed_origin=config.allowed_origin, config=config, diagnostics=diagnostics,
             # wifi_setup.py sync-service writes the PIN hash next to config.json.
-            maintenance=MaintenanceAccess(Path(args.config).parent / "maintenance.json"),
+            maintenance=MaintenanceAccess(Path(args.config).parent / "maintenance.json",
+                                        state_file=state_directory() / "maintenance-lockout.json"),
             wifi_setup=WifiSetupClient(),
         )
         scan_thread = scan_server.start_background()

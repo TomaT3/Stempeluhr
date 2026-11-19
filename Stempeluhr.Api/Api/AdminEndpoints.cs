@@ -140,6 +140,7 @@ public static class AdminEndpoints
             IRuntimeSettingsStore settingsStore,
             IAdminAuthorizationService authorization,
             IAdminService adminService,
+            PinMatchCache pinMatches,
             CancellationToken cancellationToken) =>
         {
             if (!authorization.IsAdmin(request) && !authorization.CanBootstrapFromLocalhost(request))
@@ -179,7 +180,7 @@ public static class AdminEndpoints
                 return Results.BadRequest(new { message = absenceError });
             }
 
-            if (update.ValidateMaintenance(settings) is { } maintenanceError)
+            if (update.ValidateMaintenance(settings, pinMatches) is { } maintenanceError)
             {
                 return Results.BadRequest(new { message = maintenanceError });
             }

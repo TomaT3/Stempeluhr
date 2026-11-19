@@ -40,7 +40,8 @@ export class TerminalPage extends ClockWorkflow {
    */
   maintenanceTap(): void {
     if (this.selectedEmployee()) return;
-    const now = Date.now();
+    // Monotone Uhr: Ein Pi ohne RTC stellt die Wanduhr nach dem Verbinden um Stunden.
+    const now = performance.now();
     this.maintenanceTaps = [...this.maintenanceTaps.filter(at => now - at < MAINTENANCE_TAP_WINDOW_MS), now];
     if (this.maintenanceTaps.length >= MAINTENANCE_TAPS) {
       this.maintenanceTaps = [];
