@@ -1,0 +1,146 @@
+<div class="backdrop">
+  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="maintenance-title">
+    <header class="dialog-head">
+      <h2 id="maintenance-title">WLAN-Einstellung</h2>
+      <button type="button" class="close" (click)="close()">Schließen</button>
+    </header>
+
+    @switch (step()) {
+      @case ('pin') {
+        <div class="pin-step">
+          <div class="pin-info">
+            <p>Wartungs-PIN eingeben</p>
+            <p class="pin-value" aria-live="polite" [attr.aria-label]="pin().length + ' Ziffern eingegeben'">
+              {{ maskedPin() }}
+            </p>
+            @if (message()) {
+              <p class="message" role="alert">{{ message() }}</p>
+            }
+          </div>
+          <div class="keypad">
+            @for (digit of ['1','2','3','4','5','6','7','8','9']; track digit) {
+              <button type="button" (click)="pressDigit(digit)">{{ digit }}</button>
+            }
+            <button type="button" class="key-muted" (click)="clearPin()">C</button>
+            <button type="button" (click)="pressDigit('0')">0</button>
+            <button type="button" class="key-muted" aria-label="Ziffer löschen" (click)="deleteDigit()">⌫</button>
+            <button type="button" class="key-ok" [disabled]="!pin() || busy()" (click)="submitPin()">
+              {{ busy() ? 'Prüfe …' : 'Entsperren' }}
+            </button>
+          </div>
+        </div>
+      }
+
+      @case ('overview') {
+        <div class="overview">
+          <div class="status-card" aria-live="polite">
+            @if (status(); as current) {
+              @if (current.state === 'connected') {
+                <p class="status-ok">Verbunden</p>
+                <p class="status-ssid">{{ current.ssid ?? current.connection }}</p>
+                @if (current.ip) {
+                  <p class="status-detail">IP {{ current.ip }}</p>
+                }
+                @if (current.serviceWifi) {
+                  <p class="status-hint">Über das Wartungs-WLAN. Jetzt das WLAN vor Ort wählen.</p>
+                }
+              } @else {
+                <p class="status-bad">Nicht verbunden</p>
+                <p class="status-detail">{{ current.device ? 'WLAN ' + current.device : 'Kein WLAN-Gerät' }}</p>
+              }
+              @if (current.ethernet) {
+                <p class="status-detail">Netzwerkkabel verbunden</p>
+              }
+            } @else {
+              <p class="status-detail">Status wird geladen …</p>
+            }
+            @if (message()) {
+              <p class="message" role="alert">{{ message() }}</p>
+            }
+            <div class="overview-actions">
+              <button type="button" class="secondary" [disabled]="scanning()" (click)="refresh()">
+                {{ scanning() ? 'Suche …' : 'Neu suchen' }}
+              </button>
+              <button type="button" class="secondary" (click)="openHidden()">Verstecktes WLAN</button>
+            </div>
+          </div>
+          <ul class="network-list" aria-label="Gefundene WLANs">
+            @for (network of networks(); track network.ssid) {
+              <li>
+                <button type="button" class="network" [class.in-use]="network.inUse" (click)="choose(network)">
+                  <span class="network-name">{{ network.ssid }}</span>
+                  <span class="network-detail">{{ network.inUse ? 'aktuell · ' : '' }}{{ signalLabel(network) }}</span>
+                </button>
+              </li>
+            } @empty {
+              <li class="empty">{{ scanning() ? 'WLANs werden gesucht …' : 'Kein WLAN gefunden.' }}</li>
+            }
+          </ul>
+        </div>
+      }
+
+      @case ('hidden') {
+        <div class="entry">
+          <div class="entry-field">
+            <span>WLAN-Name (SSID)</span>
+            <output>{{ hiddenSsid() || ' ' }}</output>
+          </div>
+          @if (message()) {
+            <p class="message" role="alert">{{ message() }}</p>
+          }
+          <app-onscreen-keyboard [(value)]="hiddenSsid" [maxLength]="32" />
+          <div class="entry-actions">
+            <button type="button" class="secondary" (click)="backToOverview()">Zurück</button>
+            <button type="button" class="primary" (click)="confirmHidden()">Weiter</button>
+          </div>
+        </div>
+      }
+
+      @case ('password') {
+        <div class="entry">
+          <div class="entry-field">
+            <span>Passwort für „{{ target()?.ssid }}“</span>
+            <output aria-live="off">{{ maskedPassword() || ' ' }}</output>
+            <button type="button" class="secondary small" [attr.aria-pressed]="showPassword()" (click)="togglePassword()">
+              {{ showPassword() ? 'Verbergen' : 'Anzeigen' }}
+            </button>
+          </div>
+          @if (message()) {
+            <p class="message" role="alert">{{ message() }}</p>
+          }
+          <app-onscreen-keyboard [(value)]="password" [maxLength]="63" />
+          <div class="entry-actions">
+            <button type="button" class="secondary" (click)="backToOverview()">Zurück</button>
+            <button type="button" class="primary" [disabled]="busy()" (click)="connect()">Verbinden</button>
+          </div>
+        </div>
+      }
+
+      @case ('connecting') {
+        <div class="center" role="status" aria-live="polite">
+          <p class="big">Verbinde mit „{{ target()?.ssid }}“ …</p>
+          <p class="status-detail">Das dauert bis zu einer Minute. Klappt es nicht, bleibt das bisherige WLAN.</p>
+        </div>
+      }
+
+      @case ('result') {
+        @if (result(); as outcome) {
+          <div class="center" role="status" aria-live="polite">
+            <p class="big" [class.status-ok]="outcome.ok" [class.status-bad]="!outcome.ok">
+              {{ outcome.ok ? 'Verbunden' : 'Nicht verbunden' }}
+            </p>
+            <p>{{ outcome.text }}</p>
+            <div class="entry-actions">
+              @if (outcome.ok) {
+                <button type="button" class="primary" (click)="finish()">Fertig</button>
+              } @else {
+                <button type="button" class="secondary" (click)="backToOverview(); refresh()">WLAN-Liste</button>
+                <button type="button" class="primary" (click)="retry()">Erneut versuchen</button>
+              }
+            </div>
+          </div>
+        }
+      }
+    }
+  </section>
+</div>

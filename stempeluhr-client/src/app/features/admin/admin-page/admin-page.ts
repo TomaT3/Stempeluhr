@@ -379,6 +379,12 @@ export class AdminPage implements OnDestroy {
     this.updateSettings(settings => ({ ...settings, telegramCorrectionChatId: value }));
   }
 
+  updateMaintenance(
+    patch: Pick<Partial<AdminSettings>, 'serviceWifiSsid' | 'serviceWifiPsk' | 'maintenancePin' | 'clearMaintenancePin'>,
+  ): void {
+    this.updateSettings(settings => ({ ...settings, ...patch }));
+  }
+
   updateTelegramApproverUserIds(value: string): void {
     this.telegramApproverText.set(value);
     this.adminDirty.set(true);
@@ -767,6 +773,12 @@ export class AdminPage implements OnDestroy {
       sickActivityId: settings.sickActivityId ?? null,
       flexDayActivityId: settings.flexDayActivityId ?? null,
       absenceDayStart: settings.absenceDayStart ?? null,
+      // undefined: altes Backend, null lässt alles unverändert. Eine leere
+      // SSID schaltet das Wartungs-WLAN ab; leere Secrets behalten den Wert.
+      serviceWifiSsid: settings.serviceWifiSsid === undefined ? null : (settings.serviceWifiSsid ?? ''),
+      serviceWifiPsk: settings.serviceWifiPsk ?? '',
+      maintenancePin: settings.maintenancePin ?? '',
+      clearMaintenancePin: settings.clearMaintenancePin ?? false,
       employees: settings.employees.map(employee => ({
         id: employee.id,
         kimaiUserId: employee.kimaiUserId,

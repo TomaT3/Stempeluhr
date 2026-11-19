@@ -1,6 +1,6 @@
 #!/bin/sh
 # Baut das Agent-Bundle, das der Server unter /pi/ ausliefert:
-#   agent-<version>.tar.gz  Agent, WLAN-Recovery, Units, update.sh, install.sh, VERSION
+#   agent-<version>.tar.gz  Agent, WLAN-Recovery, WLAN-Einstellung, Units, update.sh, install.sh, VERSION
 #   agent.json              {"version", "file", "sha256"} - von update.sh gelesen
 #   install.sh, update.sh   für die Ersteinrichtung per curl
 #
@@ -19,9 +19,10 @@ esac
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-for f in stempeluhr_nfc_agent.py terminal_diagnostics.py pcsc_maintenance.py probe_reader.py kiosk_setup.py wifi_recovery.py journald-stempeluhr.conf update.sh install.sh config.example.json \
+for f in stempeluhr_nfc_agent.py terminal_diagnostics.py pcsc_maintenance.py probe_reader.py kiosk_setup.py wifi_recovery.py wifi_setup.py maintenance_access.py journald-stempeluhr.conf update.sh install.sh config.example.json \
   stempeluhr-nfc-agent.service stempeluhr-nfc-agent-update.service \
-  stempeluhr-nfc-agent-update.timer stempeluhr-wifi-recovery.service stempeluhr-wifi-recovery.timer; do
+  stempeluhr-nfc-agent-update.timer stempeluhr-wifi-recovery.service stempeluhr-wifi-recovery.timer \
+  stempeluhr-wifi-setup.socket stempeluhr-wifi-setup@.service; do
   cp "$SRC/$f" "$STAGE/$f"
 done
 # The Docker build supplies Trixie/arm64 packages; plain script tests may omit

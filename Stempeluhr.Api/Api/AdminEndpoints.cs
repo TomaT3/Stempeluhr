@@ -174,6 +174,11 @@ public static class AdminEndpoints
                 return Results.BadRequest(new { message = absenceError });
             }
 
+            if (update.ValidateMaintenance(settings) is { } maintenanceError)
+            {
+                return Results.BadRequest(new { message = maintenanceError });
+            }
+
             await settingsStore.SaveAsync(settings, cancellationToken);
 
             return Results.Ok(AdminSettingsDto.FromSettings(settings));

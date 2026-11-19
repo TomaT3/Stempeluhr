@@ -308,6 +308,63 @@ Abnahme am Terminal:
    zeigt. Dann das Passwort zurücksetzen. Die Recovery muss das Profil
    innerhalb weniger Minuten wieder aktivieren.
 
+## 8. WLAN ändern ohne Kabel (Wartungs-WLAN und Display)
+
+Eingebaut kommt man schlecht an die LAN-Buchse, und das WLAN beim Kunden kann
+sich ändern. Dafür gibt es zwei Wege, beide ohne Tastatur und ohne Desktop.
+
+**Einrichten (einmal, Admin-Seite → Terminal-Wartung):**
+
+- Wartungs-WLAN: SSID und Passwort eines Hotspots, den du (oder der Kunde)
+  am Handy einschalten kannst. WPA2, nicht nur WPA3.
+- Wartungs-PIN: 6 bis 12 Ziffern, nicht gleich einer Mitarbeiter-PIN. Der
+  Server speichert nur einen PBKDF2-Hash.
+
+Jedes Terminal mit `terminal_token` holt beides beim Update-Lauf
+(`wifi_setup.py sync-service`, Boot und alle 15 Minuten), solange es online
+ist. Es legt dann an:
+
+- das NetworkManager-Profil `stempeluhr-service` (Keyfile, root, `0600`,
+  Autoconnect-Priorität `-10`, das Kunden-WLAN hat also immer Vorrang),
+- `/etc/stempeluhr-nfc-agent/maintenance.json` mit dem PIN-Hash
+  (`root:stempeluhr`, `0640`).
+
+Ohne Token, offline oder bei einem Serverfehler bleibt alles, wie es ist. Ein
+leeres Feld auf der Admin-Seite entfernt Profil bzw. Hash beim nächsten Lauf.
+Kontrolle: `nmcli connection show stempeluhr-service`.
+
+**Weg 1, Hotspot:** Hotspot mit genau diesen Daten einschalten. Findet der Pi
+kein anderes bekanntes WLAN, verbindet er sich damit. Danach geht es per
+SSH/Tailscale weiter, oder direkt am Display (Weg 2) das WLAN vor Ort wählen.
+
+**Weg 2, am Display:** Ohne angemeldeten Mitarbeiter fünfmal innerhalb von
+3 s auf die Uhrzeit tippen, Wartungs-PIN eingeben, WLAN wählen und das
+Passwort über die Bildschirmtastatur eingeben. Das klappt auch offline. Nach 5
+falschen PINs ist die Eingabe gesperrt (60 s, dann doppelt so lang, höchstens
+15 Minuten). Nach 3 Minuten ohne Berührung schließt der Dialog.
+
+Technik: Der Agent (unprivilegiert) reicht die Befehle über
+`/run/stempeluhr-wifi-setup.sock` (`stempeluhr-wifi-setup.socket`, nur Gruppe
+`stempeluhr`) an `wifi_setup.py serve` (root) weiter. Das Kunden-WLAN wird als
+Profil `stempeluhr-wlan` (Priorität `10`) angelegt. Das alte Profil verschwindet
+erst, wenn das neue verbunden ist; sonst wird das neue gelöscht und die
+vorherige Verbindung wieder aktiviert. Das Passwort steht nie in einer
+Befehlszeile oder im Journal. Während der Umstellung pausiert die
+WLAN-Recovery. Protokoll: `journalctl -t stempeluhr-wifi-setup`.
+
+Abnahme:
+
+1. Wartungs-WLAN und PIN setzen, Update-Lauf abwarten
+   (`sudo systemctl start stempeluhr-nfc-agent-update`), Profil prüfen.
+2. LAN ziehen, Kunden-WLAN aus der Reichweite nehmen, Hotspot einschalten: Der
+   Pi verbindet sich, SSH über Tailscale funktioniert.
+3. Am Display ein anderes WLAN wählen: verbunden, IP angezeigt, Offline-Stempel
+   werden nachgetragen.
+4. Falsches Passwort: Meldung, die vorherige Verbindung steht wieder.
+5. Fünfmal falsche PIN: Sperre greift.
+6. `journalctl -t stempeluhr-wifi-setup -u stempeluhr-nfc-agent-update` enthält
+   kein Passwort.
+
 ## Hinweise
 
 - `terminal_id` in `config.json` und `terminalId` in der Kiosk-URL müssen

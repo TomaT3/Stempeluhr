@@ -10,8 +10,10 @@
 #   4. Health-Check über http://127.0.0.1:<port>/health - schlägt er fehl,
 #      zurück auf die vorherige Version
 #   0. vorab bei jedem Lauf: journald-Konfiguration, Kiosk-Touch
-#      (kiosk_setup.py) und WLAN-Recovery-Units des installierten Bundles
-#      nachziehen
+#      (kiosk_setup.py), WLAN-Recovery- und WLAN-Einstellungs-Units des
+#      installierten Bundles nachziehen; ist der Server erreichbar, das
+#      Wartungs-WLAN und den Hash der Wartungs-PIN abgleichen
+#      (wifi_setup.py sync-service)
 #   5. nach jedem erfolgreichen Lauf: fehlt der PC/SC-Fix, die Paketmigration
 #      des installierten Bundles losgelöst starten (pcsc_maintenance.py);
 #      eine durch Neustart unterbrochene Migration auch nach Fehlern zurückrollen
@@ -37,6 +39,9 @@ UNITS=(stempeluhr-nfc-agent.service stempeluhr-nfc-agent-update.service stempelu
 # Not part of UNITS: older bundles (rollback) do not contain them.
 WIFI_UNITS=(stempeluhr-wifi-recovery.service stempeluhr-wifi-recovery.timer)
 WIFI_ENABLED_MARKER="$BASE_DIR/.wifi-recovery-enabled"
+# WLAN setup at the display (wifi_setup.py); also missing in older bundles.
+SETUP_UNITS=(stempeluhr-wifi-setup.socket stempeluhr-wifi-setup@.service)
+SETUP_ENABLED_MARKER="$BASE_DIR/.wifi-setup-enabled"
 DEV_VERSION="0.0.0-local"
 
 FORCE=0
@@ -165,11 +170,51 @@ install_wifi_recovery() { # release-verzeichnis (auch alte Bundles ohne Dateien)
   fi
 }
 
+# Socket of the root helper for the WLAN setup at the display. Same rules as
+# the WLAN recovery: bundles without it change nothing, the socket is enabled
+# once, errors only warn.
+install_wifi_setup() { # release-verzeichnis (auch alte Bundles ohne Dateien)
+  local changed=0 unit
+  for unit in "${SETUP_UNITS[@]}"; do
+    [ -f "$1/$unit" ] || return 0
+  done
+  for unit in "${SETUP_UNITS[@]}"; do
+    if ! cmp -s "$1/$unit" "$SYSTEMD_DIR/$unit"; then
+      if ! install -m 644 "$1/$unit" "$SYSTEMD_DIR/$unit"; then
+        log "WARNUNG: WLAN-Einstellung nicht installiert; nächster Versuch beim nächsten Update-Lauf." >&2
+        return 0
+      fi
+      changed=1
+    fi
+  done
+  if [ "$changed" -eq 1 ] && ! "$SYSTEMCTL" daemon-reload; then
+    log "WARNUNG: systemctl daemon-reload nach Installation der WLAN-Einstellung fehlgeschlagen." >&2
+  fi
+  if [ ! -f "$SETUP_ENABLED_MARKER" ]; then
+    if "$SYSTEMCTL" enable --now stempeluhr-wifi-setup.socket; then
+      touch "$SETUP_ENABLED_MARKER"
+      log "WLAN-Einstellung am Display aktiviert (journalctl -t stempeluhr-wifi-setup)."
+    else
+      log "WARNUNG: Socket der WLAN-Einstellung nicht aktiviert; nächster Versuch beim nächsten Update-Lauf." >&2
+    fi
+  fi
+}
+
+# Maintenance WLAN and PIN hash from the server (terminal token). Without a
+# token, offline or with an older bundle nothing changes.
+sync_maintenance() { # release-verzeichnis
+  [ -f "$1/wifi_setup.py" ] || return 0
+  if ! python3 "$1/wifi_setup.py" sync-service --config "$CONFIG"; then
+    log "WARNUNG: Wartungs-WLAN nicht abgeglichen; nächster Versuch beim nächsten Update-Lauf." >&2
+  fi
+}
+
 # The first upgrade may still run an old updater. On its next timer run,
 # configure the installed bundle before same-version/offline early exits.
 install_journal "$BASE_DIR/current"
 configure_kiosk "$BASE_DIR/current"
 install_wifi_recovery "$BASE_DIR/current"
+install_wifi_setup "$BASE_DIR/current"
 
 [ -f "$CONFIG" ] || fail "$CONFIG fehlt"
 BASE_URL="$(json_value "$CONFIG" api_base_url "")"
@@ -183,6 +228,10 @@ if ! curl -fsS --max-time 20 -o "$WORK/agent.json" "$BASE_URL/pi/agent.json"; th
   log "Server nicht erreichbar oder liefert kein Agent-Bundle - nächster Versuch später."
   exit 0
 fi
+
+# The server is reachable: keep the maintenance WLAN current, also when the
+# agent version stays the same.
+sync_maintenance "$BASE_DIR/current"
 
 VERSION="$(json_value "$WORK/agent.json" version "")"
 FILE="$(json_value "$WORK/agent.json" file "")"
@@ -233,6 +282,7 @@ install_units() { # release-verzeichnis
   fi
   install_journal "$1"
   install_wifi_recovery "$1"
+  install_wifi_setup "$1"
 }
 
 switch_current() { # release-verzeichnis
@@ -268,6 +318,8 @@ if ! agent_healthy "$VERSION"; then
 fi
 
 log "Agent $VERSION läuft."
+# The first bundle with wifi_setup.py need not wait for the next run.
+sync_maintenance "$RELEASE"
 
 # Alte Releases aufräumen, das aktive bleibt immer erhalten.
 ACTIVE="$(readlink -f "$BASE_DIR/current")"

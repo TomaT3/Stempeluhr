@@ -1,0 +1,20 @@
+<div class="keyboard" role="group" aria-label="Bildschirmtastatur">
+  @for (row of rows(); track $index) {
+    <div class="row">
+      @for (key of row; track $index) {
+        <button type="button" class="key" [attr.aria-label]="keyLabel(key)" (click)="press(key)">{{ key }}</button>
+      }
+    </div>
+  }
+  <div class="row">
+    @if (layer() === 'letters') {
+      <button type="button" class="key key-wide key-muted" [class.active]="shift()" [attr.aria-pressed]="shift()"
+        aria-label="Großbuchstaben" (click)="toggleShift()">⇧</button>
+    }
+    <button type="button" class="key key-wide key-muted" (click)="toggleLayer()">
+      {{ layer() === 'letters' ? '?123' : 'abc' }}
+    </button>
+    <button type="button" class="key key-space" aria-label="Leerzeichen" (click)="press(' ')">Leerzeichen</button>
+    <button type="button" class="key key-wide key-muted" aria-label="Löschen" (click)="backspace()">⌫</button>
+  </div>
+</div>

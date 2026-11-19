@@ -14,6 +14,15 @@ public static class KioskEndpoints
     /// </summary>
     private const int MaxSyncBatchSize = 100;
 
+    public static IResult GetMaintenance(HttpContext context, IRuntimeSettingsStore store)
+    {
+        var settings = store.Load();
+        if (TerminalAuthentication.Authenticate(context.Request, settings) is null)
+            return Results.Unauthorized();
+        context.Response.Headers.CacheControl = "no-store";
+        return Results.Ok(TerminalMaintenance.Config(settings));
+    }
+
     public static IEndpointRouteBuilder MapKioskEndpoints(this IEndpointRouteBuilder app)
     {
         var diagnosticLimiter = new RequestRateLimiter(TimeSpan.FromMinutes(1), 2);
@@ -43,6 +52,9 @@ public static class KioskEndpoints
             context.Response.Headers.CacheControl = "no-store";
             return Results.Ok(TerminalAuthentication.Catalog(settings, employees));
         });
+
+        // Wartungs-WLAN und PIN-Hash für den Updater des Terminals (root).
+        app.MapGet("/api/kiosk/maintenance", GetMaintenance);
 
         app.MapPost("/api/kiosk/pin-login", async (
             KioskPinLoginRequest request,

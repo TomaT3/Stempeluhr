@@ -1,0 +1,305 @@
+// Vollbild über dem Terminal, ausgelegt auf 800x480 ohne Scrollen der Seite.
+:host {
+  position: fixed;
+  inset: 0;
+  // Über allem, auch über dem Versions-Badge (50).
+  z-index: 100;
+}
+
+h2,
+p {
+  margin: 0;
+}
+
+.backdrop {
+  display: grid;
+  height: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  background: rgba(8, 12, 18, 0.82);
+}
+
+.dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  min-height: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-raised);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  h2 {
+    font-size: 1.2rem;
+  }
+}
+
+button {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  touch-action: manipulation;
+
+  &:focus-visible {
+    outline: 3px solid var(--color-focus-ring);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+}
+
+.close,
+.secondary {
+  min-height: 42px;
+  padding: 0 16px;
+  background: var(--color-surface-subtle);
+  color: var(--color-text);
+}
+
+.primary {
+  min-height: 46px;
+  padding: 0 22px;
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+.small {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 0.9rem;
+}
+
+.message {
+  color: var(--color-danger-text);
+  font-weight: 700;
+}
+
+// --- PIN ---
+
+.pin-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 16px;
+  min-height: 0;
+}
+
+.pin-info {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  font-size: 1.1rem;
+}
+
+.pin-value {
+  font-size: 2rem;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+  min-height: 2.6rem;
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: minmax(48px, 1fr);
+  gap: 7px;
+  min-height: 0;
+
+  button {
+    background: var(--color-surface-muted);
+    color: var(--color-text);
+    font-size: 1.5rem;
+  }
+
+  .key-muted {
+    background: var(--color-surface-subtle);
+    color: var(--color-muted);
+  }
+
+  .key-ok {
+    grid-column: 1 / -1;
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #ffffff;
+    font-size: 1.15rem;
+  }
+}
+
+// --- Übersicht ---
+
+.overview {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  min-height: 0;
+}
+
+.status-card {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface-muted);
+}
+
+.status-ok {
+  color: var(--color-success-text);
+  font-weight: 900;
+}
+
+.status-bad {
+  color: var(--color-danger-text);
+  font-weight: 900;
+}
+
+.status-ssid {
+  font-size: 1.25rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.status-detail {
+  color: var(--color-muted);
+}
+
+.status-hint {
+  color: var(--color-warning-text);
+  font-weight: 700;
+}
+
+.overview-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.network-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+}
+
+.network {
+  display: flex;
+  width: 100%;
+  min-height: 50px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px;
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  text-align: left;
+
+  &.in-use {
+    border-color: var(--color-success-border);
+    background: var(--color-success-surface);
+  }
+}
+
+.network-name {
+  overflow: hidden;
+  font-size: 1.05rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.network-detail {
+  flex: none;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.empty {
+  padding: 12px;
+  color: var(--color-muted);
+}
+
+// --- Eingabe mit Tastatur ---
+
+// Mit und ohne Meldung gleich: die Knöpfe stehen unten, die Tastatur behält ihre Höhe.
+.entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.entry .entry-actions {
+  margin-top: auto;
+}
+
+.entry-field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+
+  span {
+    color: var(--color-muted);
+    font-weight: 700;
+  }
+
+  output {
+    min-height: 40px;
+    padding: 6px 10px;
+    box-sizing: border-box;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius);
+    background: var(--color-page);
+    font-size: 1.2rem;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: pre;
+  }
+}
+
+.entry-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.center {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.big {
+  font-size: 1.5rem;
+  font-weight: 900;
+}
+
+@media (max-width: 600px) {
+  .pin-step,
+  .overview {
+    grid-template-columns: 1fr;
+  }
+}

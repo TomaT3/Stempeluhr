@@ -1,4 +1,4 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, DeferBlockState, TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { signal } from '@angular/core';
 import { of, Subject, throwError } from 'rxjs';
@@ -22,7 +22,8 @@ import { ABSENCE_IDLE_MS, ABSENCE_TAP_GUARD_MS } from '../../clock/absence-flow/
 import { CORRECTION_IDLE_MS } from '../../clock/correction-flow/correction-flow';
 import { CORRECTION_NOW, CORRECTION_TIMESHEETS, correction } from '../../clock/correction-flow/correction-fixtures';
 import { SESSION_IDLE_MS } from '../../clock/clock-workflow';
-import { TerminalPage } from './terminal-page';
+import { TerminalWifiApi } from '../../../core/services/terminal-wifi';
+import { MAINTENANCE_TAP_WINDOW_MS, MAINTENANCE_TAPS, TerminalPage } from './terminal-page';
 
 describe('TerminalPage', () => {
   let pinLogin: ReturnType<typeof vi.fn>;
@@ -127,6 +128,7 @@ describe('TerminalPage', () => {
           },
         },
         { provide: AudioFeedback, useValue: { playBeeps: vi.fn() } },
+        { provide: TerminalWifiApi, useValue: { lock: vi.fn(() => of(null)) } },
         {
           provide: LocalNfcScanService,
           useValue: {
@@ -2112,6 +2114,56 @@ describe('TerminalPage', () => {
       unlock(fixture);
       fixture.componentInstance.stop();
       expect(enqueueKiosk).toHaveBeenLastCalledWith(expect.objectContaining({ source: 'pin', pin: '1234' }));
+    });
+  });
+
+  describe('hidden WLAN setup', () => {
+    function tapClock(fixture: ComponentFixture<TerminalPage>, times: number, gapMs = 300): void {
+      const clock = fixture.nativeElement.querySelector('.clock-time') as HTMLElement;
+      for (let tap = 0; tap < times; tap++) {
+        clock.click();
+        vi.advanceTimersByTime(gapMs);
+      }
+      fixture.detectChanges();
+    }
+
+    const dialog = (fixture: ComponentFixture<TerminalPage>) =>
+      fixture.nativeElement.querySelector('app-terminal-maintenance') as HTMLElement | null;
+
+    it(`opens after ${MAINTENANCE_TAPS} quick taps on the clock`, async () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      fixture.detectChanges();
+
+      tapClock(fixture, MAINTENANCE_TAPS - 1);
+      expect(await fixture.getDeferBlocks()).toHaveLength(0);
+      tapClock(fixture, 1);
+      // The dialog is its own chunk (@defer).
+      const [block] = await fixture.getDeferBlocks();
+      await block.render(DeferBlockState.Complete);
+      expect(dialog(fixture)?.textContent).toContain('Wartungs-PIN eingeben');
+
+      (dialog(fixture)!.querySelector('.close') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(dialog(fixture)).toBeNull();
+    });
+
+    it('ignores slow taps', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      fixture.detectChanges();
+
+      tapClock(fixture, MAINTENANCE_TAPS * 2, MAINTENANCE_TAP_WINDOW_MS / (MAINTENANCE_TAPS - 1) + 10);
+
+      expect(fixture.componentInstance.maintenanceOpen()).toBe(false);
+    });
+
+    it('stays closed during an employee session', () => {
+      const fixture = TestBed.createComponent(TerminalPage);
+      unlock(fixture);
+      fixture.detectChanges();
+
+      tapClock(fixture, MAINTENANCE_TAPS);
+
+      expect(fixture.componentInstance.maintenanceOpen()).toBe(false);
     });
   });
 });

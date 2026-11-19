@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from terminal_diagnostics import DiagnosticsMonitor, state_directory
+from maintenance_access import MaintenanceAccess, WifiJob, WifiSetupClient, WifiSetupUnavailable
 
 from smartcard import scard
 
@@ -177,6 +178,9 @@ class LastScan:
     consumed: bool = False
 
 
+MAINTENANCE_ROUTES = ("/maintenance/unlock", "/maintenance/lock", "/wifi/status", "/wifi/networks", "/wifi/connect")
+
+
 class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
     """Serves the last NFC scan to the kiosk UI on the loopback interface."""
 
@@ -229,6 +233,9 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/terminal/clock":
             self._terminal_clock()
+            return
+        if self.path in MAINTENANCE_ROUTES:
+            self._maintenance()
             return
         # Read the (ignored) body first: closing the socket with unread data
         # can reset the connection before the client sees the answer.
@@ -360,6 +367,82 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         except (OSError, ValueError):
             self._send_json(502, {"error": "server unavailable"})
 
+    def _maintenance(self) -> None:
+        """WLAN setup at the display: PIN unlock, then WLAN commands with the session.
+
+        Only the configured kiosk origin, also without a terminal token: the
+        WLAN must be changeable when the server is out of reach.
+        """
+        server: LocalScanServer = self.server.scan_server
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 4096:
+                raise ValueError()
+            payload = json.loads(self.rfile.read(length))
+            if not isinstance(payload, dict):
+                raise ValueError()
+        except (OSError, ValueError):
+            self.close_connection = True
+            self._send_json(400, {"error": "invalid request"})
+            return
+        origin = self.headers.get("Origin")
+        if not origin or not server.allowed_origin or not server.allows_origin(origin):
+            self._send_json(403, {"error": "origin not allowed"}, allow_origin=False)
+            return
+        access, job = server.maintenance, server.wifi_job
+        if access is None or job is None:
+            self._send_json(404, {"error": "not found"})
+            return
+
+        if self.path == "/maintenance/unlock":
+            outcome, value = access.unlock(payload.get("pin"))
+            if outcome == "ok":
+                LOGGER.info("Maintenance unlocked at the terminal")
+                self._send_json(200, {"session": value})
+            elif outcome == "locked":
+                LOGGER.warning("Maintenance unlock locked for %s s after wrong PINs", value)
+                self._send_json(429, {"error": "locked", "retryAfterSeconds": value})
+            elif outcome == "wrong":
+                LOGGER.warning("Maintenance unlock: wrong PIN")
+                self._send_json(401, {"error": "wrong pin"})
+            else:
+                self._send_json(403, {"error": "maintenance disabled"})
+            return
+        if not access.check(payload.get("session")):
+            self._send_json(401, {"error": "session expired"})
+            return
+        if self.path == "/maintenance/lock":
+            access.end(payload.get("session"))
+            self._send_json(200, {"ok": True})
+            return
+        if self.path == "/wifi/connect":
+            ssid, psk, hidden = payload.get("ssid"), payload.get("psk", ""), payload.get("hidden") is True
+            if not isinstance(ssid, str) or not 0 < len(ssid.encode("utf-8")) <= 32 \
+                    or not isinstance(psk, str) or len(psk) > 64:
+                self._send_json(400, {"error": "invalid network"})
+                return
+            if not job.start(ssid, psk, hidden):
+                self._send_json(409, {"error": "connect already running"})
+                return
+            LOGGER.info("WLAN setup: connecting to %r", ssid)
+            self._send_json(202, {"ok": True})
+            return
+
+        command, timeout = ("status", 20) if self.path == "/wifi/status" else ("scan", 40)
+        try:
+            answer = job.client.request({"command": command}, timeout=timeout)
+        except WifiSetupUnavailable:
+            self._send_json(503, {"error": "wifi setup unavailable"})
+            return
+        if not answer.get("ok"):
+            message = answer.get("error")
+            self._send_json(502, {"message": message[:300] if isinstance(message, str) else "WLAN-Fehler"})
+            return
+        if command == "status":
+            self._send_json(200, {"status": answer.get("status"), "job": job.snapshot()})
+        else:
+            self._send_json(200, {"networks": answer.get("networks") or []})
+
     def _heartbeat(self) -> None:
         server: LocalScanServer = self.server.scan_server
         # Diagnostic writes are allowed only from the configured kiosk,
@@ -454,10 +537,14 @@ class LocalScanServer:
 
     def __init__(
         self, port: int = DEFAULT_LOCAL_SCAN_PORT, allowed_origin: str | None = None,
-        config: AgentConfig | None = None, diagnostics: DiagnosticsMonitor | None = None
+        config: AgentConfig | None = None, diagnostics: DiagnosticsMonitor | None = None,
+        maintenance: MaintenanceAccess | None = None, wifi_setup: WifiSetupClient | None = None
     ) -> None:
         self.config = config
         self.diagnostics = diagnostics
+        # WLAN setup at the display; both None: the routes answer 404.
+        self.maintenance = maintenance
+        self.wifi_job = WifiJob(wifi_setup) if wifi_setup is not None else None
         self._scan: LastScan | None = None
         self._lock = threading.Lock()
         self.allowed_origin = origin_of(allowed_origin) if allowed_origin else None
@@ -578,7 +665,10 @@ def main() -> int:
         # The bind() in the constructor raises OSError when the port is
         # already taken - fail with a clear log line instead of a traceback.
         scan_server = LocalScanServer(
-            port=config.local_port, allowed_origin=config.allowed_origin, config=config, diagnostics=diagnostics
+            port=config.local_port, allowed_origin=config.allowed_origin, config=config, diagnostics=diagnostics,
+            # wifi_setup.py sync-service writes the PIN hash next to config.json.
+            maintenance=MaintenanceAccess(Path(args.config).parent / "maintenance.json"),
+            wifi_setup=WifiSetupClient(),
         )
         scan_thread = scan_server.start_background()
     except OSError as error:

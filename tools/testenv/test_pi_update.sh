@@ -113,6 +113,22 @@ esac
 EOF
 chmod +x "$WORK/systemctl"
 wifi_enables() { grep -c '^enable --now stempeluhr-wifi-recovery.timer$' "$WORK/systemctl.log" 2>/dev/null || true; }
+setup_enables() { grep -c '^enable --now stempeluhr-wifi-setup.socket$' "$WORK/systemctl.log" 2>/dev/null || true; }
+
+# Fake nmcli for the maintenance WLAN: records the call and lists the keyfiles
+# in \$WORK/nm as loaded profiles, like NetworkManager after "connection load".
+mkdir -p "$WORK/nm"
+cat > "$WORK/bin/nmcli" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$WORK/nmcli.log"
+if [[ "\$*" == *NAME,UUID,TYPE,DEVICE* ]]; then
+  for file in "$WORK"/nm/*.nmconnection; do
+    [ -f "\$file" ] || continue
+    echo "\$(sed -n 's/^id=//p' "\$file"):\$(sed -n 's/^uuid=//p' "\$file"):802-11-wireless:"
+  done
+fi
+EOF
+chmod +x "$WORK/bin/nmcli"
 
 run_update() {
   STEMPELUHR_AGENT_CONFIG="$WORK/config.json" \
@@ -122,6 +138,7 @@ run_update() {
   STEMPELUHR_HEALTH_TIMEOUT=8 \
   STEMPELUHR_PCSC_STATE="$WORK/pcsc-state" \
   STEMPELUHR_OS_RELEASE="$WORK/os-release" \
+  STEMPELUHR_NM_CONNECTIONS="$WORK/nm" \
   PATH="$WORK/bin:$PATH" \
   SYSTEMCTL="$WORK/systemctl" \
     bash "$AGENT_SRC/update.sh" "$@" > "$WORK/update.log" 2>&1
@@ -170,6 +187,13 @@ grep -q "current/stempeluhr_nfc_agent.py" "$WORK/systemd/stempeluhr-nfc-agent.se
   && ok "WLAN-Recovery im Bundle, Units installiert" || bad "WLAN-Recovery fehlt"
 [ "$(wifi_enables)" = 1 ] && [ -f "$WORK/opt/.wifi-recovery-enabled" ] \
   && ok "WLAN-Recovery-Timer einmal aktiviert" || bad "Timer-Aktivierung: $(wifi_enables)x"
+[ -f "$WORK/opt/current/wifi_setup.py" ] && [ -f "$WORK/opt/current/maintenance_access.py" ] \
+  && [ -f "$WORK/systemd/stempeluhr-wifi-setup.socket" ] && [ -f "$WORK/systemd/stempeluhr-wifi-setup@.service" ] \
+  && ok "WLAN-Einstellung im Bundle, Units installiert" || bad "WLAN-Einstellung fehlt"
+[ "$(setup_enables)" = 1 ] && [ -f "$WORK/opt/.wifi-setup-enabled" ] \
+  && ok "Socket der WLAN-Einstellung einmal aktiviert" || bad "Socket-Aktivierung: $(setup_enables)x"
+[ ! -f "$WORK/nmcli.log" ] && [ ! -f "$WORK/maintenance.json" ] \
+  && ok "Ohne Terminal-Token kein Abgleich des Wartungs-WLANs" || bad "Abgleich ohne Token"
 
 # Existing config deliberately has no terminal_token. Capability discovery must
 # fail explicitly while the original scan bridge stays usable after update.
@@ -213,6 +237,34 @@ if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/u
 cmp -s "$AGENT_SRC/stempeluhr-wifi-recovery.service" "$WORK/systemd/stempeluhr-wifi-recovery.service" \
   && ok "Geänderte Unit wird ersetzt" || bad "Unit nicht ersetzt"
 [ "$(wifi_enables)" = 2 ] && ok "Bereits eingerichteter Timer wird nicht erneut aktiviert" || bad "Timer erneut aktiviert"
+
+say "2d: Wartungs-WLAN und PIN-Hash vom Server"
+cp "$WORK/config.json" "$WORK/config.json.bak"
+python3 - "$WORK/config.json" <<'PY'
+import json, sys
+config = json.load(open(sys.argv[1]))
+config["terminal_token"] = "t" * 40
+json.dump(config, open(sys.argv[1], "w"))
+PY
+PIN_HASH="pbkdf2-sha256\$200000\$$(printf 'ab%.0s' $(seq 1 16))\$$(printf 'cd%.0s' $(seq 1 32))"
+mkdir -p "$WORK/www/api/kiosk"
+printf '{"serviceWifi": {"ssid": "Stempeluhr-Service", "psk": "hotspot-geheim"}, "maintenancePinHash": "%s"}\n' \
+  "$PIN_HASH" > "$WORK/www/api/kiosk/maintenance"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+grep -q '^autoconnect-priority=-10$' "$WORK/nm/stempeluhr-service.nmconnection" 2>/dev/null \
+  && [ "$(stat -c %a "$WORK/nm/stempeluhr-service.nmconnection")" = 600 ] \
+  && ok "Wartungs-WLAN als Keyfile (0600, Priorität -10) angelegt" || bad "Keyfile fehlt: $(tail -3 "$WORK/update.log")"
+grep -q "connection load $WORK/nm/stempeluhr-service.nmconnection" "$WORK/nmcli.log" \
+  && ! grep -q hotspot-geheim "$WORK/nmcli.log" "$WORK/update.log" \
+  && ok "Profil geladen, Passwort weder in nmcli-Aufrufen noch im Log" || bad "nmcli-Aufrufe: $(cat "$WORK/nmcli.log")"
+grep -q "$PIN_HASH" "$WORK/maintenance.json" 2>/dev/null && ok "PIN-Hash neben config.json abgelegt" || bad "maintenance.json fehlt"
+LOADS_BEFORE="$(grep -c 'connection load' "$WORK/nmcli.log")"
+if run_update; then ok "zweiter Lauf erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(grep -c 'connection load' "$WORK/nmcli.log")" = "$LOADS_BEFORE" ] && ! grep -q 'eingerichtet' "$WORK/update.log" \
+  && ok "Unveränderte Einstellungen lösen nichts aus" || bad "Profil unnötig neu geladen"
+[ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent dabei nicht neu gestartet" || bad "Agent neu gestartet"
+mv "$WORK/config.json.bak" "$WORK/config.json"
+rm -rf "$WORK/www/api"
 
 say "3: Server liefert neue Version"
 publish 1.1.0

@@ -71,6 +71,9 @@ public sealed record AdminSettingsDto(
     public int? SickActivityId { get; init; }
     public int? FlexDayActivityId { get; init; }
     public string AbsenceDayStart { get; init; } = RuntimeSettings.DefaultAbsenceDayStart;
+    public string? ServiceWifiSsid { get; init; }
+    public bool HasServiceWifiPsk { get; init; }
+    public bool HasMaintenancePin { get; init; }
 
     public static AdminSettingsDto FromSettings(RuntimeSettings settings)
     {
@@ -98,6 +101,9 @@ public sealed record AdminSettingsDto(
             SickActivityId = settings.SickActivityId,
             FlexDayActivityId = settings.FlexDayActivityId,
             AbsenceDayStart = settings.AbsenceDayStart,
+            ServiceWifiSsid = settings.ServiceWifiSsid,
+            HasServiceWifiPsk = !string.IsNullOrEmpty(settings.ServiceWifiPsk),
+            HasMaintenancePin = !string.IsNullOrEmpty(settings.MaintenancePinHash),
         };
     }
 }
@@ -206,10 +212,25 @@ public sealed record AdminSettingsUpdateDto(
     int? VacationActivityId = null,
     int? SickActivityId = null,
     int? FlexDayActivityId = null,
-    string? AbsenceDayStart = null)
+    string? AbsenceDayStart = null,
+    string? ServiceWifiSsid = null,
+    string? ServiceWifiPsk = null,
+    string? MaintenancePin = null,
+    bool ClearMaintenancePin = false)
 {
     public RuntimeSettings ToSettings(RuntimeSettings current)
     {
+        // Wartungs-WLAN: null (alter Client) behält alles, eine leere SSID
+        // schaltet es samt Passwort ab. Das Passwort ist write-only: leer
+        // behält das gespeicherte, solange die SSID bleibt.
+        var serviceWifiSsid = ServiceWifiSsid is null ? current.ServiceWifiSsid
+            : string.IsNullOrWhiteSpace(ServiceWifiSsid) ? null : ServiceWifiSsid.Trim();
+        var serviceWifiPsk = serviceWifiSsid is null ? null
+            : string.IsNullOrEmpty(ServiceWifiPsk) ? current.ServiceWifiPsk : ServiceWifiPsk;
+        var maintenancePinHash = ClearMaintenancePin ? null
+            : string.IsNullOrWhiteSpace(MaintenancePin) ? current.MaintenancePinHash
+            : TerminalMaintenance.HashPin(MaintenancePin.Trim());
+
         var employees = Employees.Select(employee => employee.ToSettings(current)).ToList();
         return new RuntimeSettings
         {
@@ -253,8 +274,25 @@ public sealed record AdminSettingsUpdateDto(
             AbsenceDayStart = IncludesAbsences ? AbsenceDayStart ?? RuntimeSettings.DefaultAbsenceDayStart : current.AbsenceDayStart,
             PauseEndRecoveryToleranceSeconds = current.PauseEndRecoveryToleranceSeconds,
             TerminalTokens = current.TerminalTokens,
+            ServiceWifiSsid = serviceWifiSsid,
+            ServiceWifiPsk = serviceWifiPsk,
+            MaintenancePinHash = maintenancePinHash,
             Employees = employees
         };
+    }
+
+    /// <summary>Prüft Wartungs-WLAN und -PIN; <paramref name="result"/> ist das Ergebnis von <see cref="ToSettings"/>.</summary>
+    public string? ValidateMaintenance(RuntimeSettings result)
+    {
+        if (TerminalMaintenance.ValidateServiceWifi(result.ServiceWifiSsid, result.ServiceWifiPsk) is { } wifiError)
+            return wifiError;
+        if (ClearMaintenancePin || string.IsNullOrWhiteSpace(MaintenancePin)) return null;
+        var pin = MaintenancePin.Trim();
+        if (TerminalMaintenance.ValidatePin(pin) is { } pinError) return pinError;
+        // Sonst entsperrt eine Mitarbeiter-PIN die WLAN-Einstellung.
+        return result.Employees.Any(employee => employee.Pin == pin)
+            ? "Die Wartungs-PIN darf keiner Mitarbeiter-PIN entsprechen."
+            : null;
     }
 
     /// <summary>

@@ -72,6 +72,14 @@ export interface AdminSettings {
   flexDayActivityId?: number | null;
   /** Beginn der Abwesenheitseinträge (`HH:mm`, Kimai-Zeitzone des Mitarbeiters). */
   absenceDayStart?: string;
+  /** Wartungs-WLAN der Terminals (Handy-Hotspot); undefined = Backend kennt es nicht. */
+  serviceWifiSsid?: string | null;
+  hasServiceWifiPsk?: boolean;
+  hasMaintenancePin?: boolean;
+  /** Nur zum Speichern: neues Hotspot-Passwort bzw. neue Wartungs-PIN, leer = unverändert. */
+  serviceWifiPsk?: string;
+  maintenancePin?: string;
+  clearMaintenancePin?: boolean;
   employees: AdminEmployee[];
 }
 

@@ -18,6 +18,15 @@ und in der API, nicht im Agenten.
 | `GET` | `/health` | `{"ok": true, "version": "x.y.z", "features": ["traceparent"]}` |
 | `POST` | `/diagnostics/heartbeat` | technisches Browser-Lebenszeichen; ausschließlich konfigurierte Origin |
 | `GET` | `/diagnostics` | letzte Pi-/Browser-Diagnose für lokale Wartung |
+| `POST` | `/maintenance/unlock` | Wartungs-PIN `{pin}` → `{session}` (10 min); 401 falsch, 429 gesperrt, 403 ohne PIN-Hash |
+| `POST` | `/maintenance/lock` | Sitzung beenden |
+| `POST` | `/wifi/status` | WLAN-Status und laufender Verbindungsversuch (`{session}`) |
+| `POST` | `/wifi/networks` | WLAN-Suche (`{session}`) |
+| `POST` | `/wifi/connect` | `{session, ssid, psk, hidden}` → 202; Ergebnis über `/wifi/status` |
+
+Die Wartungs- und WLAN-Routen verlangen immer die konfigurierte Origin, aber
+kein Terminal-Token: Das WLAN muss sich auch ohne Server ändern lassen
+(siehe [Pi-Anleitung, Abschnitt 8](../../docs/raspberry-pi-kiosk-nfc.md#8-wlan-ändern-ohne-kabel-wartungs-wlan-und-display)).
 
 Bestätigt die Kiosk-App einen Scan nicht innerhalb von
 `selection_timeout_seconds`, wird er verworfen (Log + Fehler-Piep). CORS- und
@@ -63,6 +72,11 @@ weitergereicht. Die Queue bleibt dabei erhalten.
   Trennung das gespeicherte WLAN-Profil neu, z. B. nach `no-secrets`.
   `update.sh` installiert die Units bei jedem Lauf nach und aktiviert den
   Timer einmalig (siehe [Pi-Anleitung](../../docs/raspberry-pi-kiosk-nfc.md#7-wlan-recovery))
+- `wifi_setup.py`, `stempeluhr-wifi-setup.socket` / `stempeluhr-wifi-setup@.service` –
+  root-Helfer der WLAN-Einstellung am Display (Socket nur für die Gruppe
+  `stempeluhr`) und Abgleich von Wartungs-WLAN und PIN-Hash mit dem Server
+  (`sync-service`, aus `update.sh`); `maintenance_access.py` – PIN-Prüfung,
+  Sperre, Sitzung und Socket-Client im Agenten
 - `config.example.json` – Beispielkonfiguration
 - `test_scan_handling.py`, `test_local_scan_server.py` – Selbsttests ohne
   Kartenleser (`python3 <datei>`); Updater-Test:
