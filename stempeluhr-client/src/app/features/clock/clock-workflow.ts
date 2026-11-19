@@ -1152,11 +1152,24 @@ export abstract class ClockWorkflow implements OnDestroy {
     }
   }
 
+  /** Karten werden gerade nicht ausgewertet, nur quittiert. */
+  protected localScansPaused(): boolean {
+    return false;
+  }
+
   private pollLocalScan(): void {
     // Deliberately runs even while isBusy(): a stamp request can take up to
     // its timeout, and an unacked scan blocks the agent's reader loop for
     // the whole selection timeout. Consuming scans is always safe - it only
     // acks, never stamps.
+    if (this.localScansPaused()) {
+      // Z. B. hinter dem Wartungsdialog: Eine Sitzung darf dort nicht
+      // unsichtbar aufgehen. Quittieren, damit der Scan nicht später wirkt.
+      this.localNfcScan.poll().subscribe(scan => {
+        if (scan) this.localNfcScan.ack().subscribe();
+      });
+      return;
+    }
     if (this.isUnlocked()) {
       this.localNfcScan.poll().subscribe(scan => {
         if (!scan) {

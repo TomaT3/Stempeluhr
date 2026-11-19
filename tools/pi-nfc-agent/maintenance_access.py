@@ -107,8 +107,10 @@ class MaintenanceAccess:
             failures = json.loads(self.state_file.read_text(encoding="utf-8")).get("failures")
         except (AttributeError, OSError, ValueError):
             return 0
+        if not isinstance(failures, int) or isinstance(failures, bool) or failures < 0:
+            return 0
         # Capped, not discarded: a huge count must not reset the lockout.
-        return min(failures, MAX_FAILURES) if isinstance(failures, int) and not isinstance(failures, bool)             and failures >= 0 else 0
+        return min(failures, MAX_FAILURES)
 
     def _save_failures(self) -> None:
         if self.state_file is None:

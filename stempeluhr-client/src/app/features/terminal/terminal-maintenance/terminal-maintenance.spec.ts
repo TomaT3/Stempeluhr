@@ -318,35 +318,50 @@ describe('TerminalMaintenance', () => {
     expect(text()).toContain('Verbunden mit „Kunde“');
   });
 
-  it('does not show another running attempt as the outcome of a new choice', () => {
+  it('follows an earlier running attempt on 409 without passing it off as the new one', () => {
     unlocked();
     component.choose(NETWORKS[1]);
-    component.password.set('kunden-pass');
+    component.password.set('richtig-pw');
     component.connect();
     http.expectOne(`${AGENT}/wifi/connect`)
       .flush({ error: 'connect already running', ssid: 'Alt' }, { status: 409, statusText: 'Conflict' });
     fixture.detectChanges();
 
+    expect(text()).toContain('Ein früherer Versuch zu „Alt“ läuft noch');
+    expect(text()).toContain('Die neue Eingabe wurde nicht verwendet.');
+    expect(component.password()).toBe('');
+    pollStatus({ state: 'failed', ssid: 'Alt', message: 'Verbindung abgelehnt. Bitte das Passwort prüfen.' });
+
+    expect(text()).toContain('Früherer Versuch: Verbindung abgelehnt.');
+    // Now the own choice can be sent.
+    component.retry();
     expect(component.step()).toBe('password');
-    expect(text()).toContain('Eine WLAN-Umstellung zu „Alt“ läuft noch; die neue Eingabe wurde nicht verwendet.');
-    vi.advanceTimersByTime(CONNECT_POLL_MS);
-    http.expectNone(`${AGENT}/wifi/status`);
   });
 
-  it('does not pass off a running attempt to the same network as the new one', () => {
-    // E.g. a wrong password, dialog closed while connecting, reopened with the right one.
+  it('labels the outcome of an earlier attempt to the same network as such', () => {
+    // E.g. the first POST timed out in the kiosk, but the agent had started it.
     unlocked();
     component.choose(NETWORKS[1]);
     component.password.set('richtig-pw');
     component.connect();
     http.expectOne(`${AGENT}/wifi/connect`)
       .flush({ error: 'connect already running', ssid: 'Kunde' }, { status: 409, statusText: 'Conflict' });
+
+    pollStatus({ state: 'connected', ssid: 'Kunde' });
+    expect(text()).toContain('Früherer Versuch: Verbunden mit „Kunde“');
+  });
+
+  it('follows an attempt still running when the dialog opens', () => {
+    enterPin('482915');
+    http.expectOne(`${AGENT}/maintenance/unlock`).flush({ session: 's1' });
+    http.expectOne(`${AGENT}/wifi/status`).flush({ status: CONNECTED, job: { state: 'running', ssid: 'Kunde' } });
+    http.expectOne(`${AGENT}/wifi/networks`).flush({ networks: NETWORKS });
     fixture.detectChanges();
 
-    expect(component.step()).toBe('password');
-    expect(text()).toContain('„Kunde“ läuft noch; die neue Eingabe wurde nicht verwendet.');
-    vi.advanceTimersByTime(CONNECT_POLL_MS);
-    http.expectNone(`${AGENT}/wifi/status`);
+    expect(component.step()).toBe('connecting');
+    expect(text()).toContain('Ein früherer Versuch zu „Kunde“ läuft noch');
+    pollStatus({ state: 'connected', ssid: 'Kunde' });
+    expect(text()).toContain('Früherer Versuch: Verbunden mit „Kunde“');
   });
 
   it('retries an OWE network without asking for a password', () => {

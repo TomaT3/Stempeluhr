@@ -63,6 +63,10 @@ export class TerminalMaintenance {
     { value: '', label: 'Offen' },
   ];
   readonly result = signal<{ ok: boolean; text: string } | null>(null);
+  /** SSID des Versuchs, auf dessen Ergebnis der Dialog wartet. */
+  readonly connectingSsid = signal('');
+  /** Der Versuch stammt nicht von der letzten Eingabe (z. B. vor dem Schließen gestartet). */
+  readonly earlierAttempt = signal(false);
 
   private session: string | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -134,6 +138,12 @@ export class TerminalMaintenance {
     this.requests.add(this.api.status(session).subscribe({
       next: answer => {
         this.status.set(answer.status);
+        // Ein Versuch von vorher läuft noch (Dialog geschlossen und wieder
+        // geöffnet): ihn verfolgen, statt ihn zu verschweigen.
+        if (answer.job?.state === 'running' && this.poll === null && this.step() === 'overview') {
+          this.waitForResult(session, answer.job.ssid ?? '', true);
+          return;
+        }
         if (!answer.status) {
           this.message.set(answer.helper === 'missing'
             ? 'Die WLAN-Einstellung ist auf diesem Terminal noch nicht eingerichtet (Agent-Update abwarten).'
@@ -229,16 +239,14 @@ export class TerminalMaintenance {
     this.requests.add(this.api.connect(session, target.ssid, password, target.hidden, security).subscribe({
       next: () => this.waitForResult(session, target.ssid),
       error: (error: unknown) => {
-        // 409: Ein anderer Versuch läuft noch - dieser Dialog hat ihn nicht
-        // gestartet (busy() verhindert einen zweiten), etwa vor dem Schließen
-        // und erneuten Öffnen. Auch bei gleicher SSID kann er ein anderes
-        // Passwort haben: Sein Ergebnis darf nicht als das der neuen Eingabe
-        // erscheinen.
+        // 409: Ein früherer Versuch läuft noch - aus einem geschlossenen
+        // Dialog oder dieser, wenn die erste Anfrage im Kiosk scheiterte,
+        // der Agent sie aber schon angenommen hatte. Er kann ein anderes
+        // Passwort haben: Sein Ergebnis wird als das des früheren Versuchs
+        // gezeigt, nie als das der neuen Eingabe.
         if (error instanceof HttpErrorResponse && error.status === 409) {
           const running: unknown = error.error?.ssid;
-          this.busy.set(false);
-          this.message.set(`Eine WLAN-Umstellung${typeof running === 'string' ? ` zu „${running}“` : ''} läuft noch; `
-            + 'die neue Eingabe wurde nicht verwendet. Bitte warten und dann erneut versuchen.');
+          this.waitForResult(session, typeof running === 'string' ? running : target.ssid, true);
           return;
         }
         this.busy.set(false);
@@ -274,7 +282,12 @@ export class TerminalMaintenance {
     this.step.set('password');
   }
 
-  private waitForResult(session: string, ssid: string): void {
+  /** earlier: ein Versuch, den diese Eingabe nicht gestartet hat. */
+  private waitForResult(session: string, ssid: string, earlier = false): void {
+    this.busy.set(true);
+    this.connectingSsid.set(ssid);
+    this.earlierAttempt.set(earlier);
+    this.password.set('');
     this.step.set('connecting');
     // Monotone Uhr: Ein Pi ohne RTC stellt die Wanduhr genau dann um Stunden
     // vor, wenn das neue WLAN verbindet - mit Date.now() gäbe das Warten auf.
@@ -307,9 +320,11 @@ export class TerminalMaintenance {
           if (!job || job.state === 'running' || job.state === 'idle') return;
           if (answer.status) this.status.set(answer.status);
           const ip = answer.status?.ip;
+          const name = job.ssid ?? ssid;
+          const prefix = earlier ? 'Früherer Versuch: ' : '';
           this.finishConnect(job.state === 'connected'
-            ? { ok: true, text: `Verbunden mit „${ssid}“${ip ? ` (IP ${ip})` : ''}.` }
-            : { ok: false, text: job.message || 'Verbindung fehlgeschlagen.' });
+            ? { ok: true, text: `${prefix}Verbunden mit „${name}“${ip ? ` (IP ${ip})` : ''}.` }
+            : { ok: false, text: prefix + (job.message || 'Verbindung fehlgeschlagen.') });
         },
         error: (error: unknown) => {
           this.poll = null;

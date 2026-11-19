@@ -362,7 +362,11 @@ Dialog, nicht aber während ein Verbindungsversuch läuft.
 Ein Verbindungsversuch dauert meist unter einer Minute, im ungünstigsten Fall
 (beschäftigter NetworkManager, Rückfall auf das alte WLAN) bis etwa 5 Minuten.
 Das Terminal währenddessen nicht ausschalten. Es läuft immer nur ein Versuch;
-ein zweiter wird abgewiesen, bis der erste fertig ist.
+ein zweiter wird abgewiesen, bis der erste fertig ist. Läuft beim Öffnen des
+Dialogs oder beim Verbinden noch ein früherer Versuch, zeigt der Dialog dessen
+Ergebnis (als „Früherer Versuch“). Der Update-Lauf startet den Agent während
+einer Umstellung nicht neu und gleicht das Wartungs-WLAN erst beim nächsten
+Lauf ab.
 
 Technik: Der Agent (unprivilegiert) reicht die Befehle über
 `/run/stempeluhr-wifi-setup.sock` (`stempeluhr-wifi-setup.socket`, nur Gruppe

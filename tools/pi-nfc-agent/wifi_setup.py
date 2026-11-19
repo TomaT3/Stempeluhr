@@ -445,7 +445,8 @@ class ConnectLock:
         except BlockingIOError:
             self.handle.close()
             self.handle = None
-            raise SetupError("Eine WLAN-Umstellung läuft noch. Bitte in ein paar Minuten erneut versuchen.") from None
+            raise SetupError("Eine WLAN-Umstellung oder ein Agent-Update läuft noch. "
+                             "Bitte in ein paar Minuten erneut versuchen.") from None
         return self
 
     def __exit__(self, *_exc) -> None:

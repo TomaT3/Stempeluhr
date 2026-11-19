@@ -129,7 +129,12 @@
 
       @case ('connecting') {
         <div class="center" role="status" aria-live="polite">
-          <p class="big">Verbinde mit „{{ target()?.ssid }}“ …</p>
+          @if (earlierAttempt()) {
+            <p class="big">Ein früherer Versuch zu „{{ connectingSsid() }}“ läuft noch …</p>
+            <p class="status-detail">Die neue Eingabe wurde nicht verwendet. Das Ergebnis des früheren Versuchs erscheint hier, danach lässt sich erneut wählen.</p>
+          } @else {
+            <p class="big">Verbinde mit „{{ connectingSsid() }}“ …</p>
+          }
           <p class="status-detail">Das kann einige Minuten dauern. Bitte das Terminal nicht ausschalten – klappt es nicht, stellt es das bisherige WLAN wieder her.</p>
         </div>
       }

@@ -52,4 +52,11 @@ export class TerminalPage extends ClockWorkflow {
   protected override keepFocusedShellAfterReset(): boolean {
     return true;
   }
+
+  /** Hinter dem Wartungsdialog darf keine Mitarbeiter-Sitzung unsichtbar aufgehen. */
+  protected override localScansPaused(): boolean {
+    // Der Konstruktor von ClockWorkflow pollt schon, bevor die Felder dieser
+    // Klasse angelegt sind: dann ist der Dialog sicher zu.
+    return this.maintenanceOpen?.() ?? false;
+  }
 }

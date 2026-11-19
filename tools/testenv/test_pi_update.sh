@@ -112,6 +112,11 @@ case "\$1" in
       --config "$WORK/config.json" > "$WORK/agent.log" 2>&1 &
     echo \$! > "$WORK/agent.pid"
     ;;
+  daemon-reload)
+    echo "\$*" >> "$WORK/systemctl.log"
+    [ -f "$WORK/fail-daemon-reload" ] && exit 1
+    exit 0
+    ;;
   *) echo "\$*" >> "$WORK/systemctl.log" ;;
 esac
 EOF
@@ -244,6 +249,16 @@ if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/u
   && ok "Socket nach geänderter Unit neu gestartet" || bad "Socket-Neustarts: $(setup_restarts)x"
 if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
 [ "$(setup_restarts)" = 1 ] && ok "Unveränderte Unit: kein weiterer Neustart" || bad "Socket-Neustarts: $(setup_restarts)x"
+# daemon-reload fails: a restart would keep the old unit and drop the marker.
+echo "# alt" >> "$WORK/systemd/stempeluhr-wifi-setup.socket"
+touch "$WORK/fail-daemon-reload"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 1 ] && [ -f "$WORK/opt/.wifi-setup-socket-restart" ] \
+  && ok "Nach gescheitertem daemon-reload kein Neustart, Merker bleibt" || bad "Socket-Neustarts: $(setup_restarts)x"
+rm "$WORK/fail-daemon-reload"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 2 ] && [ ! -f "$WORK/opt/.wifi-setup-socket-restart" ] \
+  && ok "Nächster Lauf lädt neu und startet den Socket" || bad "Socket-Neustarts: $(setup_restarts)x"
 
 say "2c: WLAN-Recovery nach Upgrade durch alten Updater"
 # The old updater installed the bundle but neither these units nor the timer.
@@ -290,6 +305,18 @@ rm -rf "$WORK/www/api"
 
 say "3: Server liefert neue Version"
 publish 1.1.0
+# A WLAN change at the display runs: neither agent restart nor sync-service.
+PID_BEFORE="$(cat "$WORK/agent.pid")"
+NMCLI_BEFORE="$(cat "$WORK/nmcli.log" 2>/dev/null | wc -l)"
+exec 9>"$WORK/wifi-setup.lock"
+flock 9
+if run_update; then ok "Update während WLAN-Umstellung endet ohne Fehler"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
+[ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && [ "$(health_version)" != "1.1.0" ] \
+  && grep -q 'Agent 1.1.0 beim nächsten Update-Lauf' "$WORK/update.log" \
+  && ok "Agent wird während einer WLAN-Umstellung nicht neu gestartet" || bad "Agent neu gestartet trotz Sperre"
+[ "$(cat "$WORK/nmcli.log" 2>/dev/null | wc -l)" = "$NMCLI_BEFORE" ] && grep -q 'Wartungs-WLAN beim nächsten' "$WORK/update.log" \
+  && ok "Wartungs-WLAN wird während einer WLAN-Umstellung nicht angefasst" || bad "sync-service trotz Sperre"
+exec 9>&-
 rm "$WORK/journald/stempeluhr.conf"
 touch "$WORK/fail-journald"
 if run_update; then ok "Update endet erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi

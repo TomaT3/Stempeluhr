@@ -2156,6 +2156,29 @@ describe('TerminalPage', () => {
       expect(fixture.componentInstance.maintenanceOpen()).toBe(false);
     });
 
+    it('discards card scans while the dialog is open, so no session opens behind it', () => {
+      window.localStorage.setItem(
+        'stempeluhr.employee-card-cache.v1',
+        JSON.stringify({ '04ABCD': session.employee }),
+      );
+      const fixture = TestBed.createComponent(TerminalPage);
+      fixture.detectChanges();
+      tapClock(fixture, MAINTENANCE_TAPS);
+      expect(fixture.componentInstance.maintenanceOpen()).toBe(true);
+      const scans = TestBed.inject(LocalNfcScanService);
+      vi.mocked(scans.ack).mockClear();
+
+      localScanValue = { cardId: '04abcd', scannedAt: new Date().toISOString(), consumed: false };
+      vi.advanceTimersByTime(1_000);
+      localScanValue = null;
+      fixture.componentInstance.maintenanceOpen.set(false);
+      vi.advanceTimersByTime(1_000);
+      fixture.detectChanges();
+
+      expect(scans.ack).toHaveBeenCalled();
+      expect(fixture.componentInstance.isUnlocked()).toBe(false);
+    });
+
     it('stays closed during an employee session', () => {
       const fixture = TestBed.createComponent(TerminalPage);
       unlock(fixture);
