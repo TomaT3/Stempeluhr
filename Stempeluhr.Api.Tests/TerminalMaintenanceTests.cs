@@ -125,7 +125,7 @@ public sealed class TerminalMaintenanceTests
 
             Assert.Equal(("Stempeluhr-Service", "hotspot-secret", Current.MaintenancePinHash),
                 (result.ServiceWifiSsid, result.ServiceWifiPsk, result.MaintenancePinHash));
-            Assert.Null(update.ValidateMaintenance(result));
+            Assert.Null(update.ValidateMaintenance(result, Current));
         }
     }
 
@@ -144,7 +144,7 @@ public sealed class TerminalMaintenanceTests
         var update = Update(pin: " 739104 ");
         var result = update.ToSettings(Current);
 
-        Assert.Null(update.ValidateMaintenance(result));
+        Assert.Null(update.ValidateMaintenance(result, Current));
         Assert.DoesNotContain("739104", result.MaintenancePinHash);
         Assert.True(TerminalMaintenance.VerifyPin("739104", result.MaintenancePinHash));
         Assert.False(TerminalMaintenance.VerifyPin("482915", result.MaintenancePinHash));
@@ -160,8 +160,8 @@ public sealed class TerminalMaintenanceTests
         var update = Update(pin: pin);
 
         Assert.Contains(message, update.ValidateMaintenancePin());
-        // Never hashed: the stored hash stays.
-        Assert.Equal(Current.MaintenancePinHash, update.ToSettings(Current).MaintenancePinHash);
+        // Without the prior check the invalid PIN must not silently pass.
+        Assert.Throws<ArgumentException>(() => update.ToSettings(Current));
     }
 
     private static AdminEmployeeUpdateDto Employee(string pin) => new(Id: "max", KimaiUserId: null, DisplayName: "Max",
@@ -183,9 +183,24 @@ public sealed class TerminalMaintenanceTests
         var update = Update() with { Employees = [Employee("482915")] };
         Assert.Null(update.ValidateMaintenancePin());
 
-        Assert.Contains("Mitarbeiter-PIN entspricht der Wartungs-PIN", update.ValidateMaintenance(update.ToSettings(Current)));
+        Assert.Contains("Mitarbeiter-PIN entspricht der Wartungs-PIN", update.ValidateMaintenance(update.ToSettings(Current), Current));
         var other = Update() with { Employees = [Employee("482916")] };
-        Assert.Null(other.ValidateMaintenance(other.ToSettings(Current)));
+        Assert.Null(other.ValidateMaintenance(other.ToSettings(Current), Current));
+    }
+
+    [Fact]
+    public void Save_UnchangedEmployeePins_AreNotHashedAgain()
+    {
+        // An unchanged PIN was checked when the maintenance PIN was set; even a
+        // (hypothetical) stored collision is not re-checked on every save.
+        var current = new RuntimeSettings
+        {
+            MaintenancePinHash = Current.MaintenancePinHash,
+            Employees = [new() { Id = "max", Pin = "482915" }],
+        };
+        var update = Update() with { Employees = [Employee("482915")] };
+
+        Assert.Null(update.ValidateMaintenance(update.ToSettings(current), current));
     }
 
     [Fact]
@@ -195,7 +210,7 @@ public sealed class TerminalMaintenanceTests
         var result = update.ToSettings(Current);
 
         Assert.Null(result.ServiceWifiPsk);
-        Assert.Contains("fehlt das Passwort", update.ValidateMaintenance(result));
+        Assert.Contains("fehlt das Passwort", update.ValidateMaintenance(result, Current));
         Assert.Equal("neues-geheim", Update(ssid: "Handy-B", psk: "neues-geheim").ToSettings(Current).ServiceWifiPsk);
     }
 
@@ -216,7 +231,7 @@ public sealed class TerminalMaintenanceTests
     {
         var update = Update(ssid: ssid, psk: psk);
 
-        Assert.Contains(message, update.ValidateMaintenance(update.ToSettings(new RuntimeSettings())));
+        Assert.Contains(message, update.ValidateMaintenance(update.ToSettings(new RuntimeSettings()), new RuntimeSettings()));
     }
 
     [Fact]

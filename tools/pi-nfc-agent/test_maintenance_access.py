@@ -12,8 +12,10 @@ import urllib.request
 
 # Installs the smartcard stub before the agent module is imported.
 from test_local_scan_server import FOREIGN, KIOSK  # noqa: F401
-from maintenance_access import (FREE_ATTEMPTS, LOCK_BASE_SECONDS, SESSION_SECONDS, MaintenanceAccess,
-                                WifiSetupUnavailable, verify_pin)
+import socket
+
+from maintenance_access import (FREE_ATTEMPTS, LOCK_BASE_SECONDS, SESSION_SECONDS, MaintenanceAccess, WifiJob,
+                                WifiSetupClient, WifiSetupTimeout, WifiSetupUnavailable, verify_pin)
 from stempeluhr_nfc_agent import LocalScanServer
 
 PIN = "482915"
@@ -53,6 +55,43 @@ class FakeHelper:
             return {"ok": True, "networks": [{"ssid": "Kunde", "signal": 80, "security": "WPA2", "inUse": True}]}
         self.release.wait(5)
         return self.connect_answer
+
+
+class ClientTest(unittest.TestCase):
+    """Why the helper did not answer, over a real Unix socket."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "setup.sock"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_missing_socket(self):
+        with self.assertRaises(WifiSetupUnavailable) as caught:
+            WifiSetupClient(self.path).request({"command": "status"}, timeout=1)
+        self.assertEqual(caught.exception.reason, "missing")
+
+    def test_silent_helper_is_a_timeout(self):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(self.path))
+            listener.listen(1)
+            with self.assertRaises(WifiSetupTimeout) as caught:
+                WifiSetupClient(self.path).request({"command": "status"}, timeout=0.2)
+        self.assertEqual(caught.exception.reason, "timeout")
+
+    def test_job_reports_a_timeout_as_such(self):
+        class Silent:
+            def request(self, payload, timeout=30):
+                raise WifiSetupTimeout("timeout")
+
+        job = WifiJob(Silent())
+        job.start("Kunde", "passwort1", False)
+        for _ in range(50):
+            if job.snapshot()["state"] != "running":
+                break
+            time.sleep(0.02)
+        self.assertIn("WLAN-Status prüfen", job.snapshot()["message"])
 
 
 class VerifyPinTest(unittest.TestCase):
@@ -218,12 +257,32 @@ class RoutesTest(unittest.TestCase):
 
     def test_invalid_network_and_missing_helper(self):
         session = self.unlock()
-        for body in ({"ssid": ""}, {"ssid": "x" * 33}, {"ssid": "Kunde", "psk": 5}, {"ssid": "Kunde", "psk": "x" * 65}):
+        for body in ({"ssid": ""}, {"ssid": "x" * 33}, {"ssid": "Kunde", "psk": 5}, {"ssid": "Kunde", "psk": "x" * 65},
+                     {"ssid": "Kunde", "hidden": True, "security": "WEP"}):
             self.assertEqual(self.post("/wifi/connect", {"session": session, **body})[0], 400, body)
         self.helper.available = False
         self.assertEqual(self.post("/wifi/networks", {"session": session}), (503, {"error": "wifi setup unavailable"}))
         status, answer = self.post("/wifi/status", {"session": session})
-        self.assertEqual((status, answer["status"], answer["job"]), (200, None, {"state": "idle"}))
+        self.assertEqual((status, answer["status"], answer["job"], answer["helper"]),
+                         (200, None, {"state": "idle"}, "missing"))
+
+    def test_hidden_network_passes_its_encryption(self):
+        session = self.unlock()
+        self.post("/wifi/connect", {"session": session, "ssid": "Versteckt", "psk": "passwort1", "hidden": True,
+                                    "security": "WPA3"})
+        for _ in range(50):
+            if any(r["command"] == "connect" for r in self.helper.requests):
+                break
+            time.sleep(0.02)
+        self.assertIn({"command": "connect", "ssid": "Versteckt", "psk": "passwort1", "hidden": True,
+                       "security": "WPA3"}, self.helper.requests)
+
+    def test_status_answers_before_the_kiosk_gives_up(self):
+        from stempeluhr_nfc_agent import STATUS_HELPER_TIMEOUT_SECONDS
+        session = self.unlock()
+        self.post("/wifi/status", {"session": session})
+        # The kiosk waits 15 s (terminal-wifi.ts) for any agent request.
+        self.assertLess(STATUS_HELPER_TIMEOUT_SECONDS, 15)
 
     def test_connect_outcome_survives_failing_status_queries(self):
         session = self.unlock()

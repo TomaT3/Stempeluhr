@@ -178,6 +178,8 @@ class LastScan:
     consumed: bool = False
 
 
+# Below the kiosk's 15 s request timeout (terminal-wifi.ts, AGENT_TIMEOUT_MS).
+STATUS_HELPER_TIMEOUT_SECONDS = 8
 MAINTENANCE_ROUTES = ("/maintenance/unlock", "/maintenance/lock", "/wifi/status", "/wifi/networks", "/wifi/connect")
 
 
@@ -417,31 +419,38 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/wifi/connect":
             ssid, psk, hidden = payload.get("ssid"), payload.get("psk", ""), payload.get("hidden") is True
+            # Encryption only for hidden networks (not in the scan): WPA2, WPA3 or '' (open).
+            security = payload.get("security")
             if not isinstance(ssid, str) or not 0 < len(ssid.encode("utf-8")) <= 32 \
-                    or not isinstance(psk, str) or len(psk) > 64:
+                    or not isinstance(psk, str) or len(psk) > 64 \
+                    or security not in (None, "WPA2", "WPA3", ""):
                 self._send_json(400, {"error": "invalid network"})
                 return
-            if not job.start(ssid, psk, hidden):
+            if not job.start(ssid, psk, hidden, security):
                 self._send_json(409, {"error": "connect already running"})
                 return
             LOGGER.info("WLAN setup: connecting to %r", ssid)
             self._send_json(202, {"ok": True})
             return
 
-        command, timeout = ("status", 20) if self.path == "/wifi/status" else ("scan", 40)
+        # Status: shorter than the kiosk's request timeout (15 s), so the job
+        # snapshot below always arrives, however slow nmcli is.
+        command, timeout = ("status", STATUS_HELPER_TIMEOUT_SECONDS) if self.path == "/wifi/status" else ("scan", 40)
+        unavailable: WifiSetupUnavailable | None = None
         try:
             answer = job.client.request({"command": command}, timeout=timeout)
-        except WifiSetupUnavailable:
-            answer = None
+        except WifiSetupUnavailable as error:
+            answer, unavailable = None, error
         if command == "status":
             # The connect outcome comes from the agent itself: it must reach the
             # kiosk even when the helper's status query fails meanwhile (NM busy,
-            # all socket slots taken).
+            # all socket slots taken). "helper" says why the status is missing.
             if answer is not None and answer.get("ok"):
                 self._send_json(200, {"status": answer.get("status"), "job": job.snapshot()})
             else:
                 message = answer.get("error") if answer is not None else None
                 self._send_json(200, {"status": None, "job": job.snapshot(),
+                                      "helper": unavailable.reason if unavailable else "error",
                                       "message": message[:300] if isinstance(message, str)
                                       else "WLAN-Status gerade nicht verfügbar."})
             return

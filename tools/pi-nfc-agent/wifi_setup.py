@@ -42,6 +42,7 @@ from wifi_recovery import STATE_DIR, CommandResult, Runner, device_category, run
 
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
 CONNECTIONS_DIR = Path(os.environ.get("STEMPELUHR_NM_CONNECTIONS", "/etc/NetworkManager/system-connections"))
+CONNECT_LOCK = Path(os.environ.get("STEMPELUHR_WIFI_SETUP_LOCK", "/run/stempeluhr-wifi-setup.lock"))
 SERVICE_GROUP = "stempeluhr"
 MAINTENANCE_FILE_NAME = "maintenance.json"
 
@@ -59,8 +60,8 @@ ROLLBACK_WAIT_SECONDS = 30
 ROLLBACK_TIMEOUT_SECONDS = 45
 LOCK_WAIT_SECONDS = 50
 # Upper bound of one "connect" request, every nmcli call at its timeout: lock,
-# scan with fallback, activation, rollback and up to nine short calls (device,
-# profiles, load, delete, status). The agent waits longer
+# scan with fallback, activation, rollback and at most nine short calls (device,
+# profiles, load, one delete for all old profiles, status). The agent waits longer
 # (maintenance_access.CONNECT_TIMEOUT_SECONDS), systemd longer still
 # (RuntimeMaxSec), so neither cuts off a rollback; test_wifi_setup checks it.
 CONNECT_WORST_CASE_SECONDS = (LOCK_WAIT_SECONDS + SCAN_TIMEOUT_SECONDS + CONNECT_TIMEOUT_SECONDS
@@ -201,10 +202,14 @@ class NetworkManager:
                 profiles.append({"name": fields[0], "uuid": fields[1], "device": fields[3]})
         return profiles
 
-    def delete(self, connection_uuid: str) -> None:
-        result = self.run(["connection", "delete", "uuid", connection_uuid])
+    def delete(self, *connection_uuids: str) -> None:
+        """Deletes the profiles in one nmcli call (one timeout, however many)."""
+        args = ["connection", "delete"]
+        for connection_uuid in connection_uuids:
+            args += ["uuid", connection_uuid]
+        result = self.run(args)
         if result.returncode != 0:
-            self.log(f"WARNUNG: WLAN-Profil {connection_uuid} ließ sich nicht löschen: {short_error(result)}")
+            self.log(f"WARNUNG: WLAN-Profil {', '.join(connection_uuids)} ließ sich nicht löschen: {short_error(result)}")
 
     def load(self, path: Path) -> None:
         result = self.run(["connection", "load", str(path)])
@@ -265,13 +270,14 @@ class NetworkManager:
         ordered = sorted(networks.values(), key=lambda entry: (not entry["inUse"], -entry["signal"], entry["ssid"]))
         return ordered[:MAX_NETWORKS]
 
-    def connect(self, ssid: str, psk: str, hidden: bool = False) -> dict:
+    def connect(self, ssid: str, psk: str, hidden: bool = False, security: Optional[str] = None) -> dict:
+        """security: only for hidden networks ('WPA2', 'WPA3' or '' for open), else from the scan."""
         ssid, psk = validate_ssid(ssid), validate_psk(psk)
         device = self.wifi_device()
         if device is None:
             raise SetupError("Kein WLAN-Gerät gefunden.")
         if hidden:
-            security = "WPA2" if psk else ""
+            security = ("WPA2" if psk else "") if security is None else security
         else:
             match = next((network for network in self.scan() if network["ssid"] == ssid), None)
             if match is None:
@@ -294,8 +300,10 @@ class NetworkManager:
         result = self.run(["--wait", str(CONNECT_WAIT_SECONDS), "connection", "up", "uuid", new_uuid,
                            "ifname", device["device"]], CONNECT_TIMEOUT_SECONDS)
         if result.returncode == 0:
-            for old in old_customer:
-                self.delete(old)
+            # One call for all old profiles: the time bound must not depend on
+            # how many earlier deletions failed.
+            if old_customer:
+                self.delete(*old_customer)
             self.log(f"WLAN-Einstellung: mit '{ssid}' verbunden.")
             return self.status()
 
@@ -384,8 +392,41 @@ class RecoveryPause:
             self.handle.close()
 
 
+class ConnectLock:
+    """Only one connect at a time, also after the agent gave up waiting for one.
+
+    Not waited for: a second connect fails right away instead of running its
+    own rollback in parallel to the first one.
+    """
+
+    def __init__(self, path: Optional[Path] = None):
+        self.path = path or CONNECT_LOCK
+        self.handle = None
+
+    def __enter__(self) -> "ConnectLock":
+        try:
+            self.handle = self.path.open("a")
+        except OSError:
+            raise SetupError("WLAN-Einstellung gerade nicht möglich (Sperrdatei).") from None
+        try:
+            fcntl.flock(self.handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self.handle.close()
+            self.handle = None
+            raise SetupError("Eine WLAN-Umstellung läuft noch. Bitte in ein paar Minuten erneut versuchen.") from None
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        if self.handle is not None:
+            self.handle.close()
+
+
+HIDDEN_SECURITY = ("WPA2", "WPA3", "")
+
+
 def handle_request(raw: bytes, manager: NetworkManager,
-                   pause: Callable[[], RecoveryPause] = RecoveryPause) -> dict:
+                   pause: Callable[[], RecoveryPause] = RecoveryPause,
+                   connect_lock: Callable[[], ConnectLock] = ConnectLock) -> dict:
     try:
         request = json.loads(raw.decode("utf-8"))
         if not isinstance(request, dict):
@@ -400,8 +441,12 @@ def handle_request(raw: bytes, manager: NetworkManager,
             return {"ok": True, "networks": manager.scan()}
         if command == "connect":
             hidden = request.get("hidden") is True
-            with pause():
-                return {"ok": True, "status": manager.connect(request.get("ssid"), request.get("psk", ""), hidden)}
+            security = request.get("security")
+            if security is not None and security not in HIDDEN_SECURITY:
+                return {"ok": False, "error": "Unbekannte Verschlüsselung."}
+            with connect_lock(), pause():
+                return {"ok": True, "status": manager.connect(request.get("ssid"), request.get("psk", ""), hidden,
+                                                              security if hidden else None)}
     except SetupError as error:
         return {"ok": False, "error": str(error)}
     return {"ok": False, "error": "Unbekannter Befehl."}

@@ -179,7 +179,7 @@ public static class AdminEndpoints
                 return Results.BadRequest(new { message = absenceError });
             }
 
-            if (update.ValidateMaintenance(settings) is { } maintenanceError)
+            if (update.ValidateMaintenance(settings, current) is { } maintenanceError)
             {
                 return Results.BadRequest(new { message = maintenanceError });
             }

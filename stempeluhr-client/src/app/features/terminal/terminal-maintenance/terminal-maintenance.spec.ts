@@ -159,21 +159,86 @@ describe('TerminalMaintenance', () => {
 
     component.hiddenSsid.set('Versteckt');
     component.confirmHidden();
+    expect(component.step()).toBe('password');
     component.password.set('geheim-123');
     component.connect();
     expect(http.expectOne(`${AGENT}/wifi/connect`).request.body)
-      .toEqual({ session: 's1', ssid: 'Versteckt', psk: 'geheim-123', hidden: true });
+      .toEqual({ session: 's1', ssid: 'Versteckt', psk: 'geheim-123', hidden: true, security: 'WPA2' });
   });
 
-  it('connects to an open hidden network without a password', () => {
+  it('passes WPA3 for a hidden WPA3-only network', () => {
     unlocked();
     component.openHidden();
-    component.hiddenSsid.set('Offen versteckt');
+    fixture.detectChanges();
+    component.hiddenSsid.set('Versteckt3');
+    (fixture.nativeElement.querySelector('[role="radio"]:nth-child(2)') as HTMLButtonElement).click();
     component.confirmHidden();
+    component.password.set('geheim-123');
     component.connect();
 
     expect(http.expectOne(`${AGENT}/wifi/connect`).request.body)
-      .toEqual({ session: 's1', ssid: 'Offen versteckt', psk: '', hidden: true });
+      .toEqual({ session: 's1', ssid: 'Versteckt3', psk: 'geheim-123', hidden: true, security: 'WPA3' });
+  });
+
+  it('connects to an open hidden network without asking for a password', () => {
+    unlocked();
+    component.openHidden();
+    component.hiddenSsid.set('Offen versteckt');
+    component.hiddenSecurity.set('');
+    component.confirmHidden();
+
+    expect(http.expectOne(`${AGENT}/wifi/connect`).request.body)
+      .toEqual({ session: 's1', ssid: 'Offen versteckt', psk: '', hidden: true, security: '' });
+  });
+
+  it('still requires a password for a hidden secured network', () => {
+    unlocked();
+    component.openHidden();
+    component.hiddenSsid.set('Versteckt');
+    component.confirmHidden();
+    component.connect();
+    fixture.detectChanges();
+
+    expect(text()).toContain('mindestens 8 Zeichen');
+    http.expectNone(`${AGENT}/wifi/connect`);
+  });
+
+  it('does not cancel slow status queries and stays open while waiting', () => {
+    unlocked();
+    component.choose(NETWORKS[1]);
+    component.password.set('kunden-pass');
+    component.connect();
+    http.expectOne(`${AGENT}/wifi/connect`).flush({ ok: true }, { status: 202, statusText: 'Accepted' });
+
+    // One query that takes 10 s: further ticks neither cancel it nor start more.
+    vi.advanceTimersByTime(CONNECT_POLL_MS);
+    const slow = http.expectOne(`${AGENT}/wifi/status`);
+    vi.advanceTimersByTime(4 * CONNECT_POLL_MS);
+    expect(slow.cancelled).toBe(false);
+    http.expectNone(`${AGENT}/wifi/status`);
+    slow.flush({ status: CONNECTED, job: { state: 'running', ssid: 'Kunde' } });
+
+    // The agent hangs: every query runs into its own timeout, no answer
+    // arrives - the dialog still does not close as idle.
+    vi.advanceTimersByTime(MAINTENANCE_IDLE_MS + CONNECT_POLL_MS);
+    expect(closed).toBe(0);
+    const open = http.match(`${AGENT}/wifi/status`).filter(request => !request.cancelled);
+    expect(open).toHaveLength(1);
+    open[0].flush({ status: CONNECTED, job: { state: 'connected', ssid: 'Kunde' } });
+    fixture.detectChanges();
+
+    expect(component.step()).toBe('result');
+  });
+
+  it('explains a missing helper', () => {
+    enterPin('482915');
+    http.expectOne(`${AGENT}/maintenance/unlock`).flush({ session: 's1' });
+    http.expectOne(`${AGENT}/wifi/status`)
+      .flush({ status: null, job: { state: 'idle' }, helper: 'missing', message: 'WLAN-Status gerade nicht verfügbar.' });
+    http.expectOne(`${AGENT}/wifi/networks`).flush({ networks: [] });
+    fixture.detectChanges();
+
+    expect(text()).toContain('noch nicht eingerichtet');
   });
 
   it('keeps waiting for the outcome when status queries fail meanwhile', () => {
@@ -203,10 +268,13 @@ describe('TerminalMaintenance', () => {
     component.password.set('kunden-pass');
     component.connect();
     http.expectOne(`${AGENT}/wifi/connect`).flush({ ok: true }, { status: 202, statusText: 'Accepted' });
-    for (let elapsed = 0; elapsed <= CONNECT_GIVE_UP_MS; elapsed += CONNECT_POLL_MS) {
+    for (let elapsed = CONNECT_POLL_MS; elapsed <= CONNECT_GIVE_UP_MS; elapsed += CONNECT_POLL_MS) {
       vi.advanceTimersByTime(CONNECT_POLL_MS);
       http.expectOne(`${AGENT}/wifi/status`).flush({ error: 'x' }, { status: 503, statusText: 'x' });
     }
+    // The first tick past the limit gives up without asking again.
+    vi.advanceTimersByTime(CONNECT_POLL_MS);
+    http.expectNone(`${AGENT}/wifi/status`);
     fixture.detectChanges();
 
     expect(component.step()).toBe('result');

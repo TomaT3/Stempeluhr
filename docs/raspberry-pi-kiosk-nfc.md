@@ -339,9 +339,16 @@ SSH/Tailscale weiter, oder direkt am Display (Weg 2) das WLAN vor Ort wählen.
 
 **Weg 2, am Display:** Ohne angemeldeten Mitarbeiter fünfmal innerhalb von
 3 s auf die Uhrzeit tippen, Wartungs-PIN eingeben, WLAN wählen und das
-Passwort über die Bildschirmtastatur eingeben. Das klappt auch offline. Nach 5
-falschen PINs ist die Eingabe gesperrt (60 s, dann doppelt so lang, höchstens
-15 Minuten). Nach 3 Minuten ohne Berührung schließt der Dialog.
+Passwort über die Bildschirmtastatur eingeben. Das klappt auch offline. Für
+ein verstecktes WLAN Namen und Verschlüsselung angeben (WPA2/WPA3, nur WPA3
+oder offen). Nach 5 falschen PINs ist die Eingabe gesperrt (60 s, dann doppelt
+so lang, höchstens 15 Minuten). Nach 3 Minuten ohne Berührung schließt der
+Dialog, nicht aber während ein Verbindungsversuch läuft.
+
+Ein Verbindungsversuch dauert meist unter einer Minute, im ungünstigsten Fall
+(beschäftigter NetworkManager, Rückfall auf das alte WLAN) bis etwa 5 Minuten.
+Das Terminal währenddessen nicht ausschalten. Es läuft immer nur ein Versuch;
+ein zweiter wird abgewiesen, bis der erste fertig ist.
 
 Technik: Der Agent (unprivilegiert) reicht die Befehle über
 `/run/stempeluhr-wifi-setup.sock` (`stempeluhr-wifi-setup.socket`, nur Gruppe

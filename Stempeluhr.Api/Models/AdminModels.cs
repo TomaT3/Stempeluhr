@@ -231,10 +231,13 @@ public sealed record AdminSettingsUpdateDto(
             : !string.IsNullOrEmpty(ServiceWifiPsk) ? ServiceWifiPsk
             : serviceWifiSsid == current.ServiceWifiSsid ? current.ServiceWifiPsk
             : null;
-        // Gehasht wird nur eine gültige PIN (ValidateMaintenancePin läuft vorher).
+        // Vertrag: ValidateMaintenancePin lief vorher. Eine ungültige PIN wird
+        // nicht still übergangen, sonst hielte der Admin sie für gesetzt.
         var newPin = NewMaintenancePin;
+        if (newPin is not null && TerminalMaintenance.ValidatePin(newPin) is { } pinError)
+            throw new ArgumentException(pinError, nameof(MaintenancePin));
         var maintenancePinHash = ClearMaintenancePin ? null
-            : newPin is null || TerminalMaintenance.ValidatePin(newPin) is not null ? current.MaintenancePinHash
+            : newPin is null ? current.MaintenancePinHash
             : TerminalMaintenance.HashPin(newPin);
 
         var employees = Employees.Select(employee => employee.ToSettings(current)).ToList();
@@ -305,16 +308,19 @@ public sealed record AdminSettingsUpdateDto(
     }
 
     /// <summary>Prüft Wartungs-WLAN und -PIN; <paramref name="result"/> ist das Ergebnis von <see cref="ToSettings"/>.</summary>
-    public string? ValidateMaintenance(RuntimeSettings result)
+    public string? ValidateMaintenance(RuntimeSettings result, RuntimeSettings current)
     {
         if (TerminalMaintenance.ValidateServiceWifi(result.ServiceWifiSsid, result.ServiceWifiPsk) is { } wifiError)
             return wifiError;
-        // Eine neue PIN hat ValidateMaintenancePin im Klartext geprüft. Sonst
-        // gilt der gespeicherte Hash weiter: Auch eine später vergebene
-        // Mitarbeiter-PIN darf ihm nicht entsprechen. Nur Mitarbeiter-PINs im
-        // Format der Wartungs-PIN kommen infrage (PBKDF2 ist teuer).
+        // Eine neue PIN hat ValidateMaintenancePin im Klartext gegen alle
+        // Mitarbeiter geprüft. Sonst gilt der gespeicherte Hash weiter: Auch
+        // eine später vergebene Mitarbeiter-PIN darf ihm nicht entsprechen.
+        // PBKDF2 ist teuer, deshalb nur neue oder geänderte PINs im Format der
+        // Wartungs-PIN - die unveränderten wurden beim Setzen schon geprüft.
         if (NewMaintenancePin is not null || result.MaintenancePinHash is not { } stored) return null;
         return result.Employees.Any(employee => employee.Pin is { } pin
+                && pin != current.Employees.FirstOrDefault(old =>
+                    string.Equals(old.Id, employee.Id, StringComparison.OrdinalIgnoreCase))?.Pin
                 && TerminalMaintenance.ValidatePin(pin) is null && TerminalMaintenance.VerifyPin(pin, stored))
             ? "Eine Mitarbeiter-PIN entspricht der Wartungs-PIN. Bitte eine andere Wartungs-PIN setzen."
             : null;

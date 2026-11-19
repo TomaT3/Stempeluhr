@@ -9,6 +9,7 @@ import stat
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.error
 
 import wifi_setup
@@ -51,10 +52,12 @@ class FakeNmcli:
             self.profiles = [p for p in self.profiles if p[1] != uuid] + [(name, uuid)]
             return CommandResult(0)
         if args[:2] == ["connection", "delete"]:
-            self.profiles = [p for p in self.profiles if p[1] != args[3]]
+            uuids = args[3::2]
+            assert args[2::2] == ["uuid"] * len(uuids), args
+            self.profiles = [p for p in self.profiles if p[1] not in uuids]
             # Like NetworkManager: the keyfile goes with the profile.
             for path in (self.dir.glob("*.nmconnection") if self.dir else []):
-                if f"uuid={args[3]}" in path.read_text():
+                if any(f"uuid={uuid}" in path.read_text() for uuid in uuids):
                     path.unlink()
             return CommandResult(0)
         if "up" in args:
@@ -86,6 +89,9 @@ class SetupTest(unittest.TestCase):
         self.nmcli.dir = self.dir
         self.logs = []
         self.manager = NetworkManager(self.nmcli, self.dir, self.logs.append)
+        lock = patch.object(wifi_setup, "CONNECT_LOCK", self.dir / "connect.lock")
+        lock.start()
+        self.addCleanup(lock.stop)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -139,7 +145,69 @@ class TimeoutsTest(unittest.TestCase):
         self.assertLess(maintenance_access.CONNECT_TIMEOUT_SECONDS, runtime_max)
 
 
+class ConnectBoundTest(SetupTest):
+    """The nmcli timeouts a connect actually passes stay within CONNECT_WORST_CASE_SECONDS."""
+
+    def budget(self, fail: bool) -> float:
+        # Many leftovers of earlier failed deletions and a failing rescan.
+        self.nmcli.profiles += [("stempeluhr-wlan", f"0b9f6e4a-5555-4c2e-9a3f-00000000000{i}") for i in range(6)]
+        self.nmcli.rescan_fails = True
+        timeouts = []
+
+        def recording(args, timeout):
+            timeouts.append(timeout)
+            if fail and "up" in args and args[args.index("uuid") + 1] != OLD:
+                return CommandResult(4, "", "Error: Secrets were required, but not provided.")
+            return self.nmcli(args, timeout)
+
+        manager = NetworkManager(recording, self.dir, self.logs.append)
+        try:
+            manager.connect("Kunde", SECRET)
+        except SetupError:
+            self.assertTrue(fail)
+        return sum(timeouts) + wifi_setup.LOCK_WAIT_SECONDS
+
+    def test_success_path(self):
+        self.assertLessEqual(self.budget(fail=False), wifi_setup.CONNECT_WORST_CASE_SECONDS)
+
+    def test_rollback_path(self):
+        self.assertLessEqual(self.budget(fail=True), wifi_setup.CONNECT_WORST_CASE_SECONDS)
+
+
 class ConnectTest(SetupTest):
+    def test_all_old_profiles_go_in_one_call(self):
+        olds = [f"0b9f6e4a-6666-4c2e-9a3f-00000000000{i}" for i in range(3)]
+        self.nmcli.profiles += [("stempeluhr-wlan", uuid) for uuid in olds]
+
+        self.manager.connect("Kunde", SECRET)
+
+        deletes = [call for call in self.nmcli.calls if call[:2] == ["connection", "delete"]]
+        self.assertEqual(deletes, [["connection", "delete"] + [part for uuid in olds for part in ("uuid", uuid)]])
+
+    def test_hidden_wpa3_and_open(self):
+        self.manager.connect("Versteckt3", "passwort1", hidden=True, security="WPA3")
+        self.assertIn("key-mgmt=sae", (self.dir / self.files()[0]).read_text())
+        self.manager.connect("Versteckt", "", hidden=True, security="")
+        self.assertNotIn("[wifi-security]", (self.dir / self.files()[0]).read_text())
+        with self.assertRaisesRegex(SetupError, "fehlt das Passwort"):
+            self.manager.connect("Versteckt3", "", hidden=True, security="WPA3")
+
+    def test_second_connect_is_refused_while_one_runs(self):
+        with wifi_setup.ConnectLock():
+            answer = wifi_setup.handle_request(
+                b'{"command": "connect", "ssid": "Kunde", "psk": "passwort1"}', self.manager,
+                lambda: RecoveryPause(self.dir / "recovery", wait_seconds=0))
+        self.assertEqual(answer["ok"], False)
+        self.assertIn("läuft noch", answer["error"])
+        self.assertEqual(self.files(), [])
+        answer = wifi_setup.handle_request(b'{"command": "connect", "ssid": "Kunde", "psk": "passwort1"}',
+                                           self.manager, lambda: RecoveryPause(self.dir / "recovery", wait_seconds=0))
+        self.assertTrue(answer["ok"], answer)
+
+    def test_unknown_security_is_refused(self):
+        answer = wifi_setup.handle_request(
+            b'{"command": "connect", "ssid": "X", "psk": "", "hidden": true, "security": "WEP"}', self.manager)
+        self.assertEqual(answer, {"ok": False, "error": "Unbekannte Verschlüsselung."})
     def test_success_replaces_old_customer_profile(self):
         old_customer = "0b9f6e4a-3333-4c2e-9a3f-000000000003"
         self.nmcli.profiles.append(("stempeluhr-wlan", old_customer))

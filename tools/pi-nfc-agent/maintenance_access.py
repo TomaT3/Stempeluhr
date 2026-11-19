@@ -117,6 +117,20 @@ class MaintenanceAccess:
 class WifiSetupUnavailable(Exception):
     """The root helper is not installed or does not answer."""
 
+    reason = "missing"
+
+
+class WifiSetupTimeout(WifiSetupUnavailable):
+    """The helper is there but did not answer in time (it may still be working)."""
+
+    reason = "timeout"
+
+
+class WifiSetupError(WifiSetupUnavailable):
+    """The helper broke off or answered garbage."""
+
+    reason = "error"
+
 
 class WifiSetupClient:
     def __init__(self, socket_path: Path = SOCKET_PATH):
@@ -137,10 +151,16 @@ class WifiSetupClient:
                     chunks.append(chunk)
                     size += len(chunk)
             answer = json.loads(b"".join(chunks))
-        except (OSError, ValueError) as error:
+        # socket.timeout: an alias of TimeoutError only since Python 3.10.
+        except (socket.timeout, TimeoutError) as error:
+            raise WifiSetupTimeout(type(error).__name__) from None
+        except (FileNotFoundError, ConnectionRefusedError) as error:
+            # No socket unit (older bundle) or not enabled.
             raise WifiSetupUnavailable(type(error).__name__) from None
+        except (OSError, ValueError) as error:
+            raise WifiSetupError(type(error).__name__) from None
         if not isinstance(answer, dict):
-            raise WifiSetupUnavailable("unexpected answer")
+            raise WifiSetupError("unexpected answer")
         return answer
 
 
@@ -156,21 +176,26 @@ class WifiJob:
         with self._lock:
             return dict(self._state)
 
-    def start(self, ssid: str, psk: str, hidden: bool) -> bool:
+    def start(self, ssid: str, psk: str, hidden: bool, security: str | None = None) -> bool:
         with self._lock:
             if self._state["state"] == "running":
                 return False
             self._state = {"state": "running", "ssid": ssid}
-        threading.Thread(target=self._run, args=(ssid, psk, hidden), name="wifi-connect", daemon=True).start()
+        threading.Thread(target=self._run, args=(ssid, psk, hidden, security), name="wifi-connect",
+                         daemon=True).start()
         return True
 
-    def _run(self, ssid: str, psk: str, hidden: bool) -> None:
+    def _run(self, ssid: str, psk: str, hidden: bool, security: str | None) -> None:
+        payload = {"command": "connect", "ssid": ssid, "psk": psk, "hidden": hidden}
+        if hidden and security is not None:
+            payload["security"] = security
         try:
-            answer = self.client.request({"command": "connect", "ssid": ssid, "psk": psk, "hidden": hidden},
-                                         timeout=CONNECT_TIMEOUT_SECONDS)
-        except WifiSetupUnavailable as error:
-            answer = {"ok": False, "error": "Keine Rückmeldung vom Terminal. Bitte den WLAN-Status prüfen."
-                      if str(error) == "TimeoutError" else "WLAN-Einstellung auf diesem Terminal nicht verfügbar."}
+            answer = self.client.request(payload, timeout=CONNECT_TIMEOUT_SECONDS)
+        except WifiSetupTimeout:
+            # The helper may still finish; a second connect is refused until then.
+            answer = {"ok": False, "error": "Keine Rückmeldung vom Terminal. Bitte den WLAN-Status prüfen."}
+        except WifiSetupUnavailable:
+            answer = {"ok": False, "error": "WLAN-Einstellung auf diesem Terminal nicht verfügbar."}
         with self._lock:
             if answer.get("ok"):
                 self._state = {"state": "connected", "ssid": ssid}

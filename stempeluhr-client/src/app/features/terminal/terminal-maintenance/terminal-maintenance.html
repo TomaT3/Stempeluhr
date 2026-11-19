@@ -90,8 +90,19 @@
           }
           <app-onscreen-keyboard [(value)]="hiddenSsid" [maxLength]="32" />
           <div class="entry-actions">
+            <!-- Ein verstecktes WLAN taucht in der Suche nicht auf: Verschlüsselung angeben. -->
+            <div class="security-choice" role="radiogroup" aria-label="Verschlüsselung">
+              @for (option of hiddenSecurityOptions; track option.value) {
+                <button type="button" class="secondary" role="radio"
+                  [class.selected]="hiddenSecurity() === option.value"
+                  [attr.aria-checked]="hiddenSecurity() === option.value"
+                  (click)="hiddenSecurity.set(option.value)">{{ option.label }}</button>
+              }
+            </div>
             <button type="button" class="secondary" (click)="backToOverview()">Zurück</button>
-            <button type="button" class="primary" (click)="confirmHidden()">Weiter</button>
+            <button type="button" class="primary" [disabled]="busy()" (click)="confirmHidden()">
+              {{ hiddenSecurity() ? 'Weiter' : 'Verbinden' }}
+            </button>
           </div>
         </div>
       }
@@ -119,7 +130,7 @@
       @case ('connecting') {
         <div class="center" role="status" aria-live="polite">
           <p class="big">Verbinde mit „{{ target()?.ssid }}“ …</p>
-          <p class="status-detail">Das dauert bis zu einer Minute. Klappt es nicht, bleibt das bisherige WLAN.</p>
+          <p class="status-detail">Das kann einige Minuten dauern. Bitte das Terminal nicht ausschalten – klappt es nicht, stellt es das bisherige WLAN wieder her.</p>
         </div>
       }
 

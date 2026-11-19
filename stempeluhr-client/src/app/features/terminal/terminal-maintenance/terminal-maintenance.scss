@@ -303,3 +303,16 @@ button {
     grid-template-columns: 1fr;
   }
 }
+
+.security-choice {
+  display: flex;
+  gap: 6px;
+  margin-right: auto;
+
+  // Deutlich abgesetzt: nur die gewählte Option ist gefüllt.
+  .selected {
+    border-color: var(--color-primary-strong);
+    background: var(--color-primary);
+    color: #ffffff;
+  }
+}

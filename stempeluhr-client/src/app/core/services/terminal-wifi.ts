@@ -31,7 +31,14 @@ export interface WifiJob {
   message?: string;
 }
 
-/** Suche und Verbinden dauern im Helfer selbst bis zu 40 bzw. 55 s. */
+/** Verschlüsselung eines versteckten WLANs: WPA2 (auch WPA2/WPA3-gemischt), nur WPA3, '' = offen. */
+export type HiddenSecurity = 'WPA2' | 'WPA3' | '';
+
+/**
+ * Der Agent antwortet auf Status und Login schneller (Status-Abfrage beim
+ * Helfer: höchstens 8 s); Verbinden kehrt sofort zurück (202), das Ergebnis
+ * kommt per Status. Die Suche wartet im Agenten bis zu 40 s.
+ */
 const AGENT_TIMEOUT_MS = 15_000;
 const SCAN_TIMEOUT_MS = 45_000;
 
@@ -53,9 +60,13 @@ export class TerminalWifiApi {
     return this.post<unknown>('/maintenance/lock', { session });
   }
 
-  /** `status` null: Der Helfer konnte den Status gerade nicht lesen; `job` gilt trotzdem. */
+  /**
+   * `status` null: Der Helfer konnte den Status gerade nicht lesen; `job` gilt
+   * trotzdem. `helper` nennt dann den Grund ('missing': nicht installiert).
+   */
   status(session: string) {
-    return this.post<{ status: WifiStatus | null; job: WifiJob; message?: string }>('/wifi/status', { session });
+    return this.post<{ status: WifiStatus | null; job: WifiJob; message?: string; helper?: 'missing' | 'timeout' | 'error' }>(
+      '/wifi/status', { session });
   }
 
   networks(session: string) {
@@ -64,8 +75,10 @@ export class TerminalWifiApi {
     );
   }
 
-  connect(session: string, ssid: string, psk: string, hidden = false) {
-    return this.post<unknown>('/wifi/connect', { session, ssid, psk, hidden });
+  /** `security` nur für versteckte WLANs, sichtbare kennt der Helfer aus der Suche. */
+  connect(session: string, ssid: string, psk: string, hidden = false, security?: HiddenSecurity) {
+    return this.post<unknown>('/wifi/connect',
+      { session, ssid, psk, hidden, ...(hidden && security !== undefined ? { security } : {}) });
   }
 
   private post<T>(path: string, body: object, timeoutMs = AGENT_TIMEOUT_MS) {
