@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, output, signal } from '@angular/core';
-import { Subscription, switchMap, timer } from 'rxjs';
+import { Subscription, catchError, of, switchMap, throwError, timer } from 'rxjs';
 
 import { TerminalWifiApi, WifiNetwork, WifiStatus } from '../../../core/services/terminal-wifi';
 import { OnscreenKeyboard } from '../../../shared/components/onscreen-keyboard/onscreen-keyboard';
@@ -16,8 +16,8 @@ interface Target {
 /** Ohne Berührung schließt der Dialog und beendet die Sitzung. */
 export const MAINTENANCE_IDLE_MS = 3 * 60_000;
 export const CONNECT_POLL_MS = 2_000;
-/** Etwas länger als der Helfer (55 s Verbinden plus Rückfall auf das alte WLAN). */
-export const CONNECT_GIVE_UP_MS = 150_000;
+/** Länger, als der Agent auf den Helfer wartet (330 s, inkl. Rückfall auf das alte WLAN). */
+export const CONNECT_GIVE_UP_MS = 345_000;
 const PIN_MAX_LENGTH = 12;
 
 /**
@@ -120,7 +120,10 @@ export class TerminalMaintenance {
     if (!session) return;
     this.scanning.set(true);
     this.requests.add(this.api.status(session).subscribe({
-      next: answer => this.status.set(answer.status),
+      next: answer => {
+        this.status.set(answer.status);
+        if (!answer.status) this.message.set(answer.message ?? 'WLAN-Status gerade nicht verfügbar.');
+      },
       error: (error: unknown) => this.handleError(error),
     }));
     this.requests.add(this.api.networks(session).subscribe({
@@ -158,7 +161,9 @@ export class TerminalMaintenance {
       this.message.set('Bitte den WLAN-Namen eingeben.');
       return;
     }
-    this.target.set({ ssid, security: 'WPA2', hidden: true });
+    // Die Verschlüsselung eines versteckten WLANs ist unbekannt: ohne
+    // Passwort offen, sonst WPA (so entscheidet auch der Helfer).
+    this.target.set({ ssid, security: '', hidden: true });
     this.openPassword();
   }
 
@@ -191,8 +196,8 @@ export class TerminalMaintenance {
     const session = this.session;
     if (!target || !session || this.busy()) return;
     const password = this.password();
-    // Ein verstecktes WLAN ohne Passwort ist offen; sonst gilt WPA.
-    if ((target.security || (target.hidden && password)) && password.length < 8) {
+    // Ein gesichertes WLAN braucht ein WPA-Passwort; ein verstecktes ohne Passwort gilt als offen.
+    if ((target.security || password) && password.length < 8) {
       this.message.set('Das Passwort hat mindestens 8 Zeichen.');
       return;
     }
@@ -239,19 +244,27 @@ export class TerminalMaintenance {
     const startedAt = Date.now();
     this.poll?.unsubscribe();
     this.poll = timer(CONNECT_POLL_MS, CONNECT_POLL_MS)
-      .pipe(switchMap(() => this.api.status(session)))
+      .pipe(switchMap(() => this.api.status(session).pipe(
+        // Nur eine abgelaufene Sitzung beendet das Warten. Ist der Agent kurz
+        // nicht erreichbar oder antwortet nicht rechtzeitig, weiter fragen:
+        // Das Ergebnis des Versuchs kommt sonst nie an.
+        catchError((error: unknown) =>
+          error instanceof HttpErrorResponse && error.status === 401 ? throwError(() => error) : of(null)),
+      )))
       .subscribe({
-        next: ({ status, job }) => {
+        next: answer => {
           this.touch();
-          if (job.state === 'running') {
+          const job = answer?.job;
+          if (!job || job.state === 'running' || job.state === 'idle') {
             if (Date.now() - startedAt > CONNECT_GIVE_UP_MS) {
-              this.finishConnect({ ok: false, text: 'Keine Rückmeldung vom Terminal. Bitte erneut versuchen.' });
+              this.finishConnect({ ok: false, text: 'Keine Rückmeldung vom Terminal. Bitte den WLAN-Status prüfen.' });
             }
             return;
           }
-          this.status.set(status);
+          if (answer.status) this.status.set(answer.status);
+          const ip = answer.status?.ip;
           this.finishConnect(job.state === 'connected'
-            ? { ok: true, text: `Verbunden mit „${ssid}“${status.ip ? ` (IP ${status.ip})` : ''}.` }
+            ? { ok: true, text: `Verbunden mit „${ssid}“${ip ? ` (IP ${ip})` : ''}.` }
             : { ok: false, text: job.message || 'Verbindung fehlgeschlagen.' });
         },
         error: (error: unknown) => {

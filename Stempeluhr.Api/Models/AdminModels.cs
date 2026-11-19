@@ -221,15 +221,21 @@ public sealed record AdminSettingsUpdateDto(
     public RuntimeSettings ToSettings(RuntimeSettings current)
     {
         // Wartungs-WLAN: null (alter Client) behält alles, eine leere SSID
-        // schaltet es samt Passwort ab. Das Passwort ist write-only: leer
-        // behält das gespeicherte, solange die SSID bleibt.
+        // schaltet es samt Passwort ab. Kein Trim: Leerzeichen am Rand sind
+        // Teil einer SSID. Das Passwort ist write-only: leer behält das
+        // gespeicherte, aber nur für dieselbe SSID - zu einem anderen
+        // Hotspot passt es nicht (ValidateMaintenance verlangt dann ein neues).
         var serviceWifiSsid = ServiceWifiSsid is null ? current.ServiceWifiSsid
-            : string.IsNullOrWhiteSpace(ServiceWifiSsid) ? null : ServiceWifiSsid.Trim();
+            : string.IsNullOrWhiteSpace(ServiceWifiSsid) ? null : ServiceWifiSsid;
         var serviceWifiPsk = serviceWifiSsid is null ? null
-            : string.IsNullOrEmpty(ServiceWifiPsk) ? current.ServiceWifiPsk : ServiceWifiPsk;
+            : !string.IsNullOrEmpty(ServiceWifiPsk) ? ServiceWifiPsk
+            : serviceWifiSsid == current.ServiceWifiSsid ? current.ServiceWifiPsk
+            : null;
+        // Gehasht wird nur eine gültige PIN (ValidateMaintenancePin läuft vorher).
+        var newPin = NewMaintenancePin;
         var maintenancePinHash = ClearMaintenancePin ? null
-            : string.IsNullOrWhiteSpace(MaintenancePin) ? current.MaintenancePinHash
-            : TerminalMaintenance.HashPin(MaintenancePin.Trim());
+            : newPin is null || TerminalMaintenance.ValidatePin(newPin) is not null ? current.MaintenancePinHash
+            : TerminalMaintenance.HashPin(newPin);
 
         var employees = Employees.Select(employee => employee.ToSettings(current)).ToList();
         return new RuntimeSettings
@@ -281,17 +287,36 @@ public sealed record AdminSettingsUpdateDto(
         };
     }
 
+    private string? NewMaintenancePin =>
+        ClearMaintenancePin || string.IsNullOrWhiteSpace(MaintenancePin) ? null : MaintenancePin.Trim();
+
+    /// <summary>
+    /// Prüft eine neue Wartungs-PIN im Klartext, vor <see cref="ToSettings"/>:
+    /// eine ungültige PIN wird so gar nicht erst (teuer) gehasht.
+    /// </summary>
+    public string? ValidateMaintenancePin()
+    {
+        if (NewMaintenancePin is not { } pin) return null;
+        if (TerminalMaintenance.ValidatePin(pin) is { } pinError) return pinError;
+        // Sonst entsperrt eine Mitarbeiter-PIN die WLAN-Einstellung.
+        return Employees.Any(employee => employee.Pin?.Trim() == pin)
+            ? "Die Wartungs-PIN darf keiner Mitarbeiter-PIN entsprechen."
+            : null;
+    }
+
     /// <summary>Prüft Wartungs-WLAN und -PIN; <paramref name="result"/> ist das Ergebnis von <see cref="ToSettings"/>.</summary>
     public string? ValidateMaintenance(RuntimeSettings result)
     {
         if (TerminalMaintenance.ValidateServiceWifi(result.ServiceWifiSsid, result.ServiceWifiPsk) is { } wifiError)
             return wifiError;
-        if (ClearMaintenancePin || string.IsNullOrWhiteSpace(MaintenancePin)) return null;
-        var pin = MaintenancePin.Trim();
-        if (TerminalMaintenance.ValidatePin(pin) is { } pinError) return pinError;
-        // Sonst entsperrt eine Mitarbeiter-PIN die WLAN-Einstellung.
-        return result.Employees.Any(employee => employee.Pin == pin)
-            ? "Die Wartungs-PIN darf keiner Mitarbeiter-PIN entsprechen."
+        // Eine neue PIN hat ValidateMaintenancePin im Klartext geprüft. Sonst
+        // gilt der gespeicherte Hash weiter: Auch eine später vergebene
+        // Mitarbeiter-PIN darf ihm nicht entsprechen. Nur Mitarbeiter-PINs im
+        // Format der Wartungs-PIN kommen infrage (PBKDF2 ist teuer).
+        if (NewMaintenancePin is not null || result.MaintenancePinHash is not { } stored) return null;
+        return result.Employees.Any(employee => employee.Pin is { } pin
+                && TerminalMaintenance.ValidatePin(pin) is null && TerminalMaintenance.VerifyPin(pin, stored))
+            ? "Eine Mitarbeiter-PIN entspricht der Wartungs-PIN. Bitte eine andere Wartungs-PIN setzen."
             : null;
     }
 

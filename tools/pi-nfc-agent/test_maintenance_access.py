@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 
@@ -108,6 +109,27 @@ class AccessTest(unittest.TestCase):
         self.assertEqual(self.access.unlock(PIN)[0], "ok")
         self.assertEqual(self.access.unlock("000000"), ("wrong", None))
 
+    def test_parallel_wrong_pins_cannot_bypass_the_lockout(self):
+        outcomes, checks = [], []
+        threads = [threading.Thread(target=lambda: outcomes.append(self.access.unlock("000000")[0]))
+                   for _ in range(30)]
+
+        def slow_check(pin, stored):
+            # A slow check like PBKDF2 on the Pi widens the race window.
+            checks.append(pin)
+            time.sleep(0.02)
+            return False
+
+        with patch("maintenance_access.verify_pin", slow_check):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(10)
+        # Only the attempts before the lockout are checked at all.
+        self.assertEqual(len(checks), FREE_ATTEMPTS)
+        self.assertEqual(outcomes.count("wrong"), FREE_ATTEMPTS - 1)
+        self.assertEqual(outcomes.count("locked"), 30 - (FREE_ATTEMPTS - 1))
+
     def test_non_digit_pins_count_as_wrong(self):
         for pin in (None, 482915, "48291a", "1" * 13):
             self.assertEqual(self.access.unlock(pin), ("wrong", None))
@@ -199,7 +221,31 @@ class RoutesTest(unittest.TestCase):
         for body in ({"ssid": ""}, {"ssid": "x" * 33}, {"ssid": "Kunde", "psk": 5}, {"ssid": "Kunde", "psk": "x" * 65}):
             self.assertEqual(self.post("/wifi/connect", {"session": session, **body})[0], 400, body)
         self.helper.available = False
-        self.assertEqual(self.post("/wifi/status", {"session": session}), (503, {"error": "wifi setup unavailable"}))
+        self.assertEqual(self.post("/wifi/networks", {"session": session}), (503, {"error": "wifi setup unavailable"}))
+        status, answer = self.post("/wifi/status", {"session": session})
+        self.assertEqual((status, answer["status"], answer["job"]), (200, None, {"state": "idle"}))
+
+    def test_connect_outcome_survives_failing_status_queries(self):
+        session = self.unlock()
+        self.helper.release.clear()
+        self.post("/wifi/connect", {"session": session, "ssid": "Kunde", "psk": "passwort1"})
+        original = self.helper.request
+
+        def busy(payload, timeout=30):
+            if payload["command"] == "status":
+                return {"ok": False, "error": "NetworkManager antwortet nicht."}
+            return original(payload, timeout)
+
+        self.helper.request = busy
+        status, answer = self.post("/wifi/status", {"session": session})
+        self.assertEqual((status, answer["job"]["state"], answer["message"]), (200, "running", "NetworkManager antwortet nicht."))
+        self.helper.release.set()
+        for _ in range(50):
+            job = self.post("/wifi/status", {"session": session})[1]["job"]
+            if job["state"] != "running":
+                break
+            time.sleep(0.05)
+        self.assertEqual(job["state"], "connected")
 
     def test_lock_ends_the_session(self):
         session = self.unlock()

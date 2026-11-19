@@ -55,7 +55,16 @@ READ_TIMEOUT_SECONDS = 15
 SCAN_TIMEOUT_SECONDS = 25
 CONNECT_WAIT_SECONDS = 40
 CONNECT_TIMEOUT_SECONDS = 55
-LOCK_WAIT_SECONDS = 60
+ROLLBACK_WAIT_SECONDS = 30
+ROLLBACK_TIMEOUT_SECONDS = 45
+LOCK_WAIT_SECONDS = 50
+# Upper bound of one "connect" request, every nmcli call at its timeout: lock,
+# scan with fallback, activation, rollback and up to nine short calls (device,
+# profiles, load, delete, status). The agent waits longer
+# (maintenance_access.CONNECT_TIMEOUT_SECONDS), systemd longer still
+# (RuntimeMaxSec), so neither cuts off a rollback; test_wifi_setup checks it.
+CONNECT_WORST_CASE_SECONDS = (LOCK_WAIT_SECONDS + SCAN_TIMEOUT_SECONDS + CONNECT_TIMEOUT_SECONDS
+                              + ROLLBACK_TIMEOUT_SECONDS + 9 * READ_TIMEOUT_SECONDS)
 MAX_REQUEST_BYTES = 4096
 MAX_NETWORKS = 30
 SERVER_TIMEOUT_SECONDS = 15
@@ -295,8 +304,8 @@ class NetworkManager:
         self.delete(new_uuid)
         path.unlink(missing_ok=True)
         if previous is not None:
-            back = self.run(["--wait", "30", "connection", "up", "uuid", previous["uuid"],
-                             "ifname", device["device"]], 45)
+            back = self.run(["--wait", str(ROLLBACK_WAIT_SECONDS), "connection", "up", "uuid", previous["uuid"],
+                             "ifname", device["device"]], ROLLBACK_TIMEOUT_SECONDS)
             if back.returncode != 0:
                 self.log(f"WARNUNG: vorheriges WLAN {previous['name']} nicht wieder aktiviert: {short_error(back)}")
         raise SetupError(message)

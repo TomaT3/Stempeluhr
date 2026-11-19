@@ -130,6 +130,15 @@ class KeyfileTest(unittest.TestCase):
         self.assertEqual(wifi_setup.validate_psk("a" * 64), "a" * 64)
 
 
+class TimeoutsTest(unittest.TestCase):
+    def test_nobody_cuts_off_a_running_connect(self):
+        import maintenance_access
+        unit = (Path(__file__).parent / "stempeluhr-wifi-setup@.service").read_text()
+        runtime_max = int(re.search(r"^RuntimeMaxSec=(\d+)min$", unit, re.M).group(1)) * 60
+        self.assertLess(wifi_setup.CONNECT_WORST_CASE_SECONDS, maintenance_access.CONNECT_TIMEOUT_SECONDS)
+        self.assertLess(maintenance_access.CONNECT_TIMEOUT_SECONDS, runtime_max)
+
+
 class ConnectTest(SetupTest):
     def test_success_replaces_old_customer_profile(self):
         old_customer = "0b9f6e4a-3333-4c2e-9a3f-000000000003"

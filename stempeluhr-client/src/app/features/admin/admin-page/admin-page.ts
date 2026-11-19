@@ -60,6 +60,7 @@ export class AdminPage implements OnDestroy {
   readonly openAbsences = signal(0);
   /** Eingabe der Freigeber-IDs als Text, damit „12, “ beim Tippen nicht umgeschrieben wird. */
   readonly telegramApproverText = signal('');
+  private storedServiceWifiSsid: string | null | undefined;
 
   private nfcPollTimer: number | null = null;
 
@@ -742,7 +743,13 @@ export class AdminPage implements OnDestroy {
     return `Admin-Anmeldung fehlgeschlagen (${error.status}).`;
   }
 
+  /** Das gespeicherte Hotspot-Passwort gilt nur, solange die SSID unverändert bleibt (wie im Backend). */
+  keepsServiceWifiPsk(settings: AdminSettings): boolean {
+    return !!settings.hasServiceWifiPsk && settings.serviceWifiSsid === this.storedServiceWifiSsid;
+  }
+
   private withEditableTokens(settings: AdminSettings): AdminSettings {
+    this.storedServiceWifiSsid = settings.serviceWifiSsid;
     return {
       ...settings,
       employees: settings.employees.map(employee => ({ ...employee, apiToken: '' })),

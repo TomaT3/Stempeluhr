@@ -155,25 +155,57 @@ public sealed class TerminalMaintenanceTests
     [InlineData("12345", "6 bis 12 Ziffern")]
     [InlineData("12345a", "6 bis 12 Ziffern")]
     [InlineData("1234567890123", "6 bis 12 Ziffern")]
-    public void Save_InvalidPin_IsRejected(string pin, string message)
+    public void Save_InvalidPin_IsRejectedBeforeHashing(string pin, string message)
     {
         var update = Update(pin: pin);
 
-        Assert.Contains(message, update.ValidateMaintenance(update.ToSettings(Current)));
+        Assert.Contains(message, update.ValidateMaintenancePin());
+        // Never hashed: the stored hash stays.
+        Assert.Equal(Current.MaintenancePinHash, update.ToSettings(Current).MaintenancePinHash);
     }
+
+    private static AdminEmployeeUpdateDto Employee(string pin) => new(Id: "max", KimaiUserId: null, DisplayName: "Max",
+        Pin: pin, NfcCardId: null, ApiToken: null, KeepApiToken: true, ProjectId: null, ActivityId: null, Color: null,
+        ImageUrl: null, Description: null, Tags: null, Billable: false, IsEnabled: true);
 
     [Fact]
     public void Save_PinOfAnEmployee_IsRejected()
     {
-        var settings = new RuntimeSettings { Employees = [new() { Id = "max", Pin = "123456" }] };
-        var update = Update(pin: "123456") with
-        {
-            Employees = [new(Id: "max", KimaiUserId: null, DisplayName: "Max", Pin: "123456", NfcCardId: null,
-                ApiToken: null, KeepApiToken: true, ProjectId: null, ActivityId: null, Color: null, ImageUrl: null,
-                Description: null, Tags: null, Billable: false, IsEnabled: true)],
-        };
+        var update = Update(pin: "123456") with { Employees = [Employee(" 123456 ")] };
 
-        Assert.Contains("Mitarbeiter-PIN", update.ValidateMaintenance(update.ToSettings(settings)));
+        Assert.Contains("Mitarbeiter-PIN", update.ValidateMaintenancePin());
+    }
+
+    [Fact]
+    public void Save_EmployeeLaterGivenTheMaintenancePin_IsRejected()
+    {
+        // Current holds the hash of 482915; the maintenance PIN itself is not resent.
+        var update = Update() with { Employees = [Employee("482915")] };
+        Assert.Null(update.ValidateMaintenancePin());
+
+        Assert.Contains("Mitarbeiter-PIN entspricht der Wartungs-PIN", update.ValidateMaintenance(update.ToSettings(Current)));
+        var other = Update() with { Employees = [Employee("482916")] };
+        Assert.Null(other.ValidateMaintenance(other.ToSettings(Current)));
+    }
+
+    [Fact]
+    public void Save_ChangedSsidWithoutNewPassword_IsRejected()
+    {
+        var update = Update(ssid: "Handy-B", psk: "");
+        var result = update.ToSettings(Current);
+
+        Assert.Null(result.ServiceWifiPsk);
+        Assert.Contains("fehlt das Passwort", update.ValidateMaintenance(result));
+        Assert.Equal("neues-geheim", Update(ssid: "Handy-B", psk: "neues-geheim").ToSettings(Current).ServiceWifiPsk);
+    }
+
+    [Fact]
+    public void Save_SsidKeepsSpacesAtTheEdges()
+    {
+        var result = Update(ssid: " Service ", psk: "hotspot-geheim").ToSettings(Current);
+
+        Assert.Equal(" Service ", result.ServiceWifiSsid);
+        Assert.Null(Update(ssid: "   ").ToSettings(Current).ServiceWifiSsid);
     }
 
     [Theory]

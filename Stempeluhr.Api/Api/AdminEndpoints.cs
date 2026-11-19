@@ -152,6 +152,11 @@ public static class AdminEndpoints
                 return Results.BadRequest(new { message = telegramError });
             }
 
+            if (update.ValidateMaintenancePin() is { } pinError)
+            {
+                return Results.BadRequest(new { message = pinError });
+            }
+
             var current = settingsStore.Load();
             var settings = update.ToSettings(current);
             if (adminService.HasDuplicatePins(settings.Employees))

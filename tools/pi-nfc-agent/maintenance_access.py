@@ -30,6 +30,10 @@ LOCK_BASE_SECONDS = 60
 LOCK_MAX_SECONDS = 15 * 60
 MAX_ITERATIONS = 2_000_000
 MAX_ANSWER_BYTES = 65536
+# Longer than the helper's worst case (wifi_setup.CONNECT_WORST_CASE_SECONDS,
+# 310 s) and shorter than its RuntimeMaxSec (6 min): the agent never gives up
+# on a connect that is still running or rolling back.
+CONNECT_TIMEOUT_SECONDS = 330
 PIN_HASH = re.compile(r"pbkdf2-sha256\$([1-9][0-9]{0,6})\$([0-9a-f]{16,128})\$([0-9a-f]{32,128})")
 
 
@@ -50,6 +54,9 @@ class MaintenanceAccess:
     def __init__(self, hash_file: Path, clock: Callable[[], float] = time.monotonic):
         self.hash_file, self.clock = hash_file, clock
         self._lock = threading.Lock()
+        # One PIN check at a time: parallel requests must not all pass the
+        # lockout check before the first failure is counted.
+        self._attempt = threading.Lock()
         self._failures = 0
         self._locked_until = 0.0
         self._session: Optional[str] = None
@@ -70,6 +77,10 @@ class MaintenanceAccess:
         stored = self.stored_hash()
         if stored is None:
             return "disabled", None
+        with self._attempt:
+            return self._unlock(pin, stored)
+
+    def _unlock(self, pin: object, stored: str) -> tuple[str, object]:
         with self._lock:
             remaining = self._locked_until - self.clock()
             if remaining > 0:
@@ -156,9 +167,10 @@ class WifiJob:
     def _run(self, ssid: str, psk: str, hidden: bool) -> None:
         try:
             answer = self.client.request({"command": "connect", "ssid": ssid, "psk": psk, "hidden": hidden},
-                                         timeout=150)
-        except WifiSetupUnavailable:
-            answer = {"ok": False, "error": "WLAN-Einstellung auf diesem Terminal nicht verfügbar."}
+                                         timeout=CONNECT_TIMEOUT_SECONDS)
+        except WifiSetupUnavailable as error:
+            answer = {"ok": False, "error": "Keine Rückmeldung vom Terminal. Bitte den WLAN-Status prüfen."
+                      if str(error) == "TimeoutError" else "WLAN-Einstellung auf diesem Terminal nicht verfügbar."}
         with self._lock:
             if answer.get("ok"):
                 self._state = {"state": "connected", "ssid": ssid}

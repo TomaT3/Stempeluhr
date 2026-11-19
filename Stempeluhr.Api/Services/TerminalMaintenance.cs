@@ -61,7 +61,7 @@ public static class TerminalMaintenance
         if (Encoding.UTF8.GetByteCount(ssid) > 32 || ssid.Any(char.IsControl))
             return "Die SSID des Wartungs-WLANs darf höchstens 32 Byte lang sein.";
         if (string.IsNullOrEmpty(psk))
-            return "Für das Wartungs-WLAN fehlt das Passwort.";
+            return "Für das Wartungs-WLAN fehlt das Passwort (bei einer neuen SSID bitte neu eingeben).";
         var valid = psk.Length is >= 8 and <= 63 && psk.All(c => c is >= ' ' and <= '~')
             || psk.Length == 64 && psk.All(char.IsAsciiHexDigit);
         return valid ? null : "Das Passwort des Wartungs-WLANs braucht 8 bis 63 druckbare Zeichen.";

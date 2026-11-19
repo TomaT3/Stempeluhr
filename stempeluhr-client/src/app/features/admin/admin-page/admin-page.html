@@ -216,7 +216,7 @@
                 type="password"
                 [value]="settings.serviceWifiPsk ?? ''"
                 (input)="updateMaintenance({ serviceWifiPsk: $any($event.target).value })"
-                [placeholder]="settings.hasServiceWifiPsk ? 'gespeichert, leer lassen zum Behalten' : 'mindestens 8 Zeichen'"
+                [placeholder]="keepsServiceWifiPsk(settings) ? 'gespeichert, leer lassen zum Behalten' : 'mindestens 8 Zeichen'"
                 autocomplete="new-password">
             </label>
             <label>

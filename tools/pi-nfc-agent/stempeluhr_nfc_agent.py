@@ -432,14 +432,24 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
         try:
             answer = job.client.request({"command": command}, timeout=timeout)
         except WifiSetupUnavailable:
-            self._send_json(503, {"error": "wifi setup unavailable"})
+            answer = None
+        if command == "status":
+            # The connect outcome comes from the agent itself: it must reach the
+            # kiosk even when the helper's status query fails meanwhile (NM busy,
+            # all socket slots taken).
+            if answer is not None and answer.get("ok"):
+                self._send_json(200, {"status": answer.get("status"), "job": job.snapshot()})
+            else:
+                message = answer.get("error") if answer is not None else None
+                self._send_json(200, {"status": None, "job": job.snapshot(),
+                                      "message": message[:300] if isinstance(message, str)
+                                      else "WLAN-Status gerade nicht verfügbar."})
             return
-        if not answer.get("ok"):
+        if answer is None:
+            self._send_json(503, {"error": "wifi setup unavailable"})
+        elif not answer.get("ok"):
             message = answer.get("error")
             self._send_json(502, {"message": message[:300] if isinstance(message, str) else "WLAN-Fehler"})
-            return
-        if command == "status":
-            self._send_json(200, {"status": answer.get("status"), "job": job.snapshot()})
         else:
             self._send_json(200, {"networks": answer.get("networks") or []})
 

@@ -237,6 +237,22 @@ describe('AdminPage', () => {
       fixture.destroy();
     });
 
+    it('asks for a new password once the name changes', async () => {
+      const { fixture, component } = await openPage(configured);
+      const passwordInput = () =>
+        (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>('#maintenance input')[1];
+      expect(passwordInput().placeholder).toContain('leer lassen zum Behalten');
+
+      component.updateMaintenance({ serviceWifiSsid: 'Handy-B' });
+      fixture.detectChanges();
+      expect(passwordInput().placeholder).toBe('mindestens 8 Zeichen');
+
+      component.updateMaintenance({ serviceWifiSsid: 'Stempeluhr-Service' });
+      fixture.detectChanges();
+      expect(passwordInput().placeholder).toContain('leer lassen zum Behalten');
+      fixture.destroy();
+    });
+
     it('sends a new password and PIN once and forgets them after saving', async () => {
       const { fixture, component, http } = await openPage(configured);
 

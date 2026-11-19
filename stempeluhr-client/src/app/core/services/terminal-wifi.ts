@@ -53,8 +53,9 @@ export class TerminalWifiApi {
     return this.post<unknown>('/maintenance/lock', { session });
   }
 
+  /** `status` null: Der Helfer konnte den Status gerade nicht lesen; `job` gilt trotzdem. */
   status(session: string) {
-    return this.post<{ status: WifiStatus; job: WifiJob }>('/wifi/status', { session });
+    return this.post<{ status: WifiStatus | null; job: WifiJob; message?: string }>('/wifi/status', { session });
   }
 
   networks(session: string) {

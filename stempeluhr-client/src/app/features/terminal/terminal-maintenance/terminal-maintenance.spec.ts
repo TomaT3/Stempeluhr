@@ -3,7 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
 import { WifiNetwork, WifiStatus } from '../../../core/services/terminal-wifi';
-import { CONNECT_POLL_MS, MAINTENANCE_IDLE_MS, TerminalMaintenance } from './terminal-maintenance';
+import { CONNECT_GIVE_UP_MS, CONNECT_POLL_MS, MAINTENANCE_IDLE_MS, TerminalMaintenance } from './terminal-maintenance';
 
 const AGENT = 'http://127.0.0.1:8737';
 
@@ -163,6 +163,54 @@ describe('TerminalMaintenance', () => {
     component.connect();
     expect(http.expectOne(`${AGENT}/wifi/connect`).request.body)
       .toEqual({ session: 's1', ssid: 'Versteckt', psk: 'geheim-123', hidden: true });
+  });
+
+  it('connects to an open hidden network without a password', () => {
+    unlocked();
+    component.openHidden();
+    component.hiddenSsid.set('Offen versteckt');
+    component.confirmHidden();
+    component.connect();
+
+    expect(http.expectOne(`${AGENT}/wifi/connect`).request.body)
+      .toEqual({ session: 's1', ssid: 'Offen versteckt', psk: '', hidden: true });
+  });
+
+  it('keeps waiting for the outcome when status queries fail meanwhile', () => {
+    unlocked();
+    component.choose(NETWORKS[1]);
+    component.password.set('kunden-pass');
+    component.connect();
+    http.expectOne(`${AGENT}/wifi/connect`).flush({ ok: true }, { status: 202, statusText: 'Accepted' });
+
+    vi.advanceTimersByTime(CONNECT_POLL_MS);
+    http.expectOne(`${AGENT}/wifi/status`).flush({ error: 'wifi setup unavailable' }, { status: 503, statusText: 'x' });
+    vi.advanceTimersByTime(CONNECT_POLL_MS);
+    http.expectOne(`${AGENT}/wifi/status`).error(new ProgressEvent('error'));
+    pollStatus({ state: 'running', ssid: 'Kunde' });
+    expect(component.step()).toBe('connecting');
+    // The helper could not read the status, the agent still reports the outcome.
+    vi.advanceTimersByTime(CONNECT_POLL_MS);
+    http.expectOne(`${AGENT}/wifi/status`).flush({ status: null, job: { state: 'connected', ssid: 'Kunde' }, message: 'x' });
+    fixture.detectChanges();
+
+    expect(text()).toContain('Verbunden mit „Kunde“.');
+  });
+
+  it('gives up after the agent would have answered', () => {
+    unlocked();
+    component.choose(NETWORKS[1]);
+    component.password.set('kunden-pass');
+    component.connect();
+    http.expectOne(`${AGENT}/wifi/connect`).flush({ ok: true }, { status: 202, statusText: 'Accepted' });
+    for (let elapsed = 0; elapsed <= CONNECT_GIVE_UP_MS; elapsed += CONNECT_POLL_MS) {
+      vi.advanceTimersByTime(CONNECT_POLL_MS);
+      http.expectOne(`${AGENT}/wifi/status`).flush({ error: 'x' }, { status: 503, statusText: 'x' });
+    }
+    fixture.detectChanges();
+
+    expect(component.step()).toBe('result');
+    expect(text()).toContain('Keine Rückmeldung vom Terminal');
   });
 
   it('asks for the PIN again when the session expired', () => {
