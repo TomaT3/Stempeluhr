@@ -229,17 +229,16 @@ export class TerminalMaintenance {
     this.requests.add(this.api.connect(session, target.ssid, password, target.hidden, security).subscribe({
       next: () => this.waitForResult(session, target.ssid),
       error: (error: unknown) => {
-        // 409: Ein Versuch läuft bereits. Zum selben WLAN (z. B. Doppeltipp)
-        // auf ihn warten; zu einem anderen darf dessen Ergebnis nicht als das
-        // der neuen Wahl erscheinen.
+        // 409: Ein anderer Versuch läuft noch - dieser Dialog hat ihn nicht
+        // gestartet (busy() verhindert einen zweiten), etwa vor dem Schließen
+        // und erneuten Öffnen. Auch bei gleicher SSID kann er ein anderes
+        // Passwort haben: Sein Ergebnis darf nicht als das der neuen Eingabe
+        // erscheinen.
         if (error instanceof HttpErrorResponse && error.status === 409) {
           const running: unknown = error.error?.ssid;
-          if (typeof running !== 'string' || running === target.ssid) {
-            this.waitForResult(session, target.ssid);
-            return;
-          }
           this.busy.set(false);
-          this.message.set(`Eine WLAN-Umstellung zu „${running}“ läuft noch. Bitte warten und dann erneut versuchen.`);
+          this.message.set(`Eine WLAN-Umstellung${typeof running === 'string' ? ` zu „${running}“` : ''} läuft noch; `
+            + 'die neue Eingabe wurde nicht verwendet. Bitte warten und dann erneut versuchen.');
           return;
         }
         this.busy.set(false);
@@ -256,7 +255,7 @@ export class TerminalMaintenance {
       // Ursache: zurück in den Schritt mit beiden (die Eingaben bleiben).
       this.message.set('');
       this.step.set('hidden');
-    } else if (target?.security) {
+    } else if (target && needsPassword(target.security)) {
       this.openPassword();
     } else {
       this.backToOverview();

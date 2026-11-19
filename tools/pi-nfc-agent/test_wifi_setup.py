@@ -386,6 +386,15 @@ class ServiceWifiTest(SetupTest):
         self.assert_secret_hidden("hotspot-geheim")
         self.assert_secret_hidden("neues-geheim")
 
+    def test_wpa3_only_hotspot_gets_sae(self):
+        path = self.dir / "stempeluhr-service.nmconnection"
+        self.manager.sync_service_wifi({**self.WIFI, "security": "WPA3"})
+        self.assertIn("key-mgmt=sae\n", path.read_text())
+        # WPA2 and an older server without the field: wpa-psk (also WPA2/WPA3 mixed).
+        for wifi in ({**self.WIFI, "security": "WPA2"}, self.WIFI):
+            self.assertEqual(self.manager.sync_service_wifi(wifi), "eingerichtet" if "security" in wifi else "unverändert")
+            self.assertIn("key-mgmt=wpa-psk\n", path.read_text())
+
     def test_replaces_profile_created_by_hand(self):
         by_hand = "0b9f6e4a-4444-4c2e-9a3f-000000000004"
         self.nmcli.profiles.append(("stempeluhr-service", by_hand))
@@ -407,8 +416,9 @@ class ServiceWifiTest(SetupTest):
         self.assertEqual(json.loads(path.read_text()), {"maintenancePinHash": PIN_HASH})
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
         self.assertEqual(wifi_setup.sync_pin_hash(PIN_HASH, path), "unverändert")
-        with self.assertRaises(SetupError):
-            wifi_setup.sync_pin_hash("md5$1$00$00", path)
+        for broken in ("md5$1$00$00", PIN_HASH + "0"):  # odd hex length
+            with self.assertRaises(SetupError):
+                wifi_setup.sync_pin_hash(broken, path)
         self.assertEqual(wifi_setup.sync_pin_hash(None, path), "entfernt")
         self.assertFalse(path.exists())
 

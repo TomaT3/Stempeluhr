@@ -97,6 +97,10 @@ cat > "$WORK/systemctl" <<EOF
 #!/usr/bin/env bash
 case "\$1" in
   restart)
+    if [ "\$2" = "stempeluhr-wifi-setup.socket" ]; then
+      echo "\$*" >> "$WORK/systemctl.log"
+      exit 0
+    fi
     if [ "\$2" = "systemd-journald.service" ]; then
       echo restart >> "$WORK/journald-restarts"
       [ -f "$WORK/fail-journald" ] && exit 1
@@ -113,6 +117,7 @@ esac
 EOF
 chmod +x "$WORK/systemctl"
 wifi_enables() { grep -c '^enable --now stempeluhr-wifi-recovery.timer$' "$WORK/systemctl.log" 2>/dev/null || true; }
+setup_restarts() { grep -c '^restart stempeluhr-wifi-setup.socket$' "$WORK/systemctl.log" 2>/dev/null || true; }
 setup_enables() { grep -c '^enable --now stempeluhr-wifi-setup.socket$' "$WORK/systemctl.log" 2>/dev/null || true; }
 
 # Fake nmcli for the maintenance WLAN: records the call and lists the keyfiles
@@ -139,6 +144,7 @@ run_update() {
   STEMPELUHR_PCSC_STATE="$WORK/pcsc-state" \
   STEMPELUHR_OS_RELEASE="$WORK/os-release" \
   STEMPELUHR_NM_CONNECTIONS="$WORK/nm" \
+  STEMPELUHR_WIFI_SETUP_LOCK="$WORK/wifi-setup.lock" \
   PATH="$WORK/bin:$PATH" \
   SYSTEMCTL="$WORK/systemctl" \
     bash "$AGENT_SRC/update.sh" "$@" > "$WORK/update.log" 2>&1
@@ -222,6 +228,22 @@ grep -q 'WARNUNG: Kiosk-Touch-Einrichtung fehlgeschlagen' "$WORK/update.log" \
   && ok "Fehler wird gemeldet" || bad "Kiosk-Warnung fehlt"
 [ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent läuft unverändert weiter" || bad "Agent neu gestartet"
 cp "$AGENT_SRC/kiosk_setup.py" "$KIOSK_SETUP"
+
+say "2b2: Geänderte Socket-Unit der WLAN-Einstellung"
+[ "$(setup_restarts)" = 0 ] && ok "Erstinstallation startet den Socket nicht neu" || bad "Neustart bei Erstinstallation"
+echo "# alt" >> "$WORK/systemd/stempeluhr-wifi-setup.socket"
+# A connect is running (lock held): no restart now, but next time.
+exec 9>"$WORK/wifi-setup.lock"
+flock 9
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 0 ] && grep -q 'nicht neu gestartet' "$WORK/update.log" \
+  && ok "Kein Socket-Neustart während einer WLAN-Umstellung" || bad "Neustart trotz Sperre ($(setup_restarts)x)"
+exec 9>&-
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 1 ] && [ ! -f "$WORK/opt/.wifi-setup-socket-restart" ] \
+  && ok "Socket nach geänderter Unit neu gestartet" || bad "Socket-Neustarts: $(setup_restarts)x"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 1 ] && ok "Unveränderte Unit: kein weiterer Neustart" || bad "Socket-Neustarts: $(setup_restarts)x"
 
 say "2c: WLAN-Recovery nach Upgrade durch alten Updater"
 # The old updater installed the bundle but neither these units nor the timer.

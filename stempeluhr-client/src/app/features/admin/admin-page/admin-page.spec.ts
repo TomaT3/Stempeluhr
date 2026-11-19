@@ -275,13 +275,27 @@ describe('AdminPage', () => {
       fixture.destroy();
     });
 
+    it('sends the WPA3-only choice of the hotspot', async () => {
+      const { fixture, component, http } = await openPage({ ...configured, serviceWifiWpa3Only: false });
+      const toggle = [...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLLabelElement>('#maintenance label')]
+        .find(label => label.textContent?.includes('nur mit WPA3'))?.querySelector('input');
+      expect(toggle?.checked).toBe(false);
+
+      toggle!.click();
+      component.saveAdminSettings();
+
+      expect(savedPayload(http)).toMatchObject({ serviceWifiWpa3Only: true });
+      fixture.destroy();
+    });
+
     it('hides the section and changes nothing when the backend does not know the fields', async () => {
       const { fixture, component, http } = await openPage(emptySettings);
 
       expect((fixture.nativeElement as HTMLElement).querySelector('#maintenance')).toBeNull();
       component.saveAdminSettings();
 
-      expect(savedPayload(http)).toMatchObject({ serviceWifiSsid: null, serviceWifiPsk: '', maintenancePin: '' });
+      expect(savedPayload(http))
+        .toMatchObject({ serviceWifiSsid: null, serviceWifiPsk: '', serviceWifiWpa3Only: null, maintenancePin: '' });
       fixture.destroy();
     });
   });

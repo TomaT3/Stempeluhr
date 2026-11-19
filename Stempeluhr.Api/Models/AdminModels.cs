@@ -73,6 +73,7 @@ public sealed record AdminSettingsDto(
     public string AbsenceDayStart { get; init; } = RuntimeSettings.DefaultAbsenceDayStart;
     public string? ServiceWifiSsid { get; init; }
     public bool HasServiceWifiPsk { get; init; }
+    public bool ServiceWifiWpa3Only { get; init; }
     public bool HasMaintenancePin { get; init; }
 
     public static AdminSettingsDto FromSettings(RuntimeSettings settings)
@@ -103,6 +104,7 @@ public sealed record AdminSettingsDto(
             AbsenceDayStart = settings.AbsenceDayStart,
             ServiceWifiSsid = settings.ServiceWifiSsid,
             HasServiceWifiPsk = !string.IsNullOrEmpty(settings.ServiceWifiPsk),
+            ServiceWifiWpa3Only = settings.ServiceWifiWpa3Only,
             HasMaintenancePin = !string.IsNullOrEmpty(settings.MaintenancePinHash),
         };
     }
@@ -215,6 +217,7 @@ public sealed record AdminSettingsUpdateDto(
     string? AbsenceDayStart = null,
     string? ServiceWifiSsid = null,
     string? ServiceWifiPsk = null,
+    bool? ServiceWifiWpa3Only = null,
     string? MaintenancePin = null,
     bool ClearMaintenancePin = false)
 {
@@ -231,6 +234,9 @@ public sealed record AdminSettingsUpdateDto(
             : !string.IsNullOrEmpty(ServiceWifiPsk) ? ServiceWifiPsk
             : serviceWifiSsid == current.ServiceWifiSsid ? current.ServiceWifiPsk
             : null;
+        // null (alter Client) behält die Wahl; ohne Wartungs-WLAN gibt es keine.
+        var serviceWifiWpa3Only = serviceWifiSsid is not null
+            && (ServiceWifiWpa3Only ?? current.ServiceWifiWpa3Only);
         // Vertrag: ValidateMaintenancePin lief vorher. Eine ungültige PIN wird
         // nicht still übergangen, sonst hielte der Admin sie für gesetzt.
         var newPin = NewMaintenancePin;
@@ -285,6 +291,7 @@ public sealed record AdminSettingsUpdateDto(
             TerminalTokens = current.TerminalTokens,
             ServiceWifiSsid = serviceWifiSsid,
             ServiceWifiPsk = serviceWifiPsk,
+            ServiceWifiWpa3Only = serviceWifiWpa3Only,
             MaintenancePinHash = maintenancePinHash,
             Employees = employees
         };

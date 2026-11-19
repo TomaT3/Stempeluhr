@@ -21,6 +21,17 @@ public sealed class TerminalMaintenanceTests
         Employees = [new() { Id = "max", Pin = "1234" }],
     };
 
+    private static RuntimeSettings Wpa3Current() => new()
+    {
+        BaseUrl = Current.BaseUrl,
+        TerminalTokens = Current.TerminalTokens,
+        ServiceWifiSsid = Current.ServiceWifiSsid,
+        ServiceWifiPsk = Current.ServiceWifiPsk,
+        ServiceWifiWpa3Only = true,
+        MaintenancePinHash = Current.MaintenancePinHash,
+        Employees = Current.Employees,
+    };
+
     private sealed class Store(RuntimeSettings settings) : IRuntimeSettingsStore
     {
         public RuntimeSettings Load() => settings;
@@ -89,6 +100,32 @@ public sealed class TerminalMaintenanceTests
         Assert.Equal("Stempeluhr-Service", json.RootElement.GetProperty("serviceWifi").GetProperty("ssid").GetString());
         Assert.Equal("hotspot-secret", json.RootElement.GetProperty("serviceWifi").GetProperty("psk").GetString());
         Assert.Equal(Current.MaintenancePinHash, json.RootElement.GetProperty("maintenancePinHash").GetString());
+    }
+
+    [Fact]
+    public async Task Endpoint_TellsTheTerminalTheHotspotEncryption()
+    {
+        static async Task<string?> Security(RuntimeSettings settings)
+        {
+            var (_, body, _) = await CallEndpoint(settings, "pi-1", "terminal-secret");
+            using var json = JsonDocument.Parse(body);
+            return json.RootElement.GetProperty("serviceWifi").GetProperty("security").GetString();
+        }
+
+        Assert.Equal("WPA2", await Security(Current));
+        Assert.Equal("WPA3", await Security(Wpa3Current()));
+    }
+
+    [Fact]
+    public void Save_Wpa3Only_IsKeptByOldClientsAndDroppedWithTheSsid()
+    {
+        var wpa3 = Wpa3Current();
+
+        Assert.True((Update() with { ServiceWifiWpa3Only = true }).ToSettings(Current).ServiceWifiWpa3Only);
+        Assert.True(Update().ToSettings(wpa3).ServiceWifiWpa3Only);
+        Assert.False((Update() with { ServiceWifiWpa3Only = false }).ToSettings(wpa3).ServiceWifiWpa3Only);
+        Assert.False((Update(ssid: "") with { ServiceWifiWpa3Only = true }).ToSettings(wpa3).ServiceWifiWpa3Only);
+        Assert.True(AdminSettingsDto.FromSettings(wpa3).ServiceWifiWpa3Only);
     }
 
     [Fact]

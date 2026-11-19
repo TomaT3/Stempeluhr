@@ -75,6 +75,8 @@ export interface AdminSettings {
   /** Wartungs-WLAN der Terminals (Handy-Hotspot); undefined = Backend kennt es nicht. */
   serviceWifiSsid?: string | null;
   hasServiceWifiPsk?: boolean;
+  /** Der Hotspot kann nur WPA3 (sonst WPA2, auch WPA2/WPA3 gemischt). */
+  serviceWifiWpa3Only?: boolean;
   hasMaintenancePin?: boolean;
   /** Nur zum Speichern: neues Hotspot-Passwort bzw. neue Wartungs-PIN, leer = unverändert. */
   serviceWifiPsk?: string;

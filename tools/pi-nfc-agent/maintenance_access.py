@@ -50,7 +50,10 @@ SCAN_WAIT_SECONDS = 44
 # mixed), WPA3 only, '' open. Shared by agent and helper; the kiosk offers
 # the same values (terminal-wifi.ts, HiddenSecurity).
 HIDDEN_SECURITY = ("WPA2", "WPA3", "")
-PIN_HASH = re.compile(r"pbkdf2-sha256\$([1-9][0-9]{0,6})\$([0-9a-f]{16,128})\$([0-9a-f]{32,128})")
+# Whole bytes only (even hex lengths): bytes.fromhex would raise otherwise.
+# Same format as TerminalMaintenance.VerifyPin on the server; wifi_setup
+# uses it before storing a hash.
+PIN_HASH = re.compile(r"pbkdf2-sha256\$([1-9][0-9]{0,6})\$((?:[0-9a-f]{2}){8,64})\$((?:[0-9a-f]{2}){16,64})")
 # First line of the helper's answer to a connect, before it changes anything.
 STARTED_LINE = b'{"started": true}\n'
 # A cached status or scan result older than this is not handed out.
@@ -66,6 +69,10 @@ def verify_pin(pin: str, stored: Optional[str]) -> bool:
     actual = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), bytes.fromhex(match.group(2)),
                                  int(match.group(1)), dklen=len(expected))
     return hmac.compare_digest(actual, expected)
+
+
+# lock_seconds reaches LOCK_MAX_SECONDS long before; the count stays bounded.
+MAX_FAILURES = 999
 
 
 def lock_seconds(failures: int) -> float:
@@ -100,7 +107,8 @@ class MaintenanceAccess:
             failures = json.loads(self.state_file.read_text(encoding="utf-8")).get("failures")
         except (AttributeError, OSError, ValueError):
             return 0
-        return failures if isinstance(failures, int) and 0 <= failures < 1000 else 0
+        # Capped, not discarded: a huge count must not reset the lockout.
+        return min(failures, MAX_FAILURES) if isinstance(failures, int) and not isinstance(failures, bool)             and failures >= 0 else 0
 
     def _save_failures(self) -> None:
         if self.state_file is None:
@@ -138,7 +146,7 @@ class MaintenanceAccess:
         valid = isinstance(pin, str) and pin.isdigit() and len(pin) <= 12 and verify_pin(pin, stored)
         with self._lock:
             if not valid:
-                self._failures += 1
+                self._failures = min(self._failures + 1, MAX_FAILURES)
                 self._save_failures()
                 if self._failures >= FREE_ATTEMPTS:
                     wait = lock_seconds(self._failures)
@@ -341,9 +349,13 @@ class WifiJob:
             return dict(self._state)
 
     def connect_status(self) -> Optional[dict]:
-        """The status the helper reported with the last successful connect."""
+        """The status the helper reported with the last successful connect,
+        while it is recent: it stands in for a slow query right after the
+        connect, not days later when the WLAN may be gone."""
         with self._lock:
-            return dict(self._connect_status) if self._connect_status else None
+            if not self._connect_status or self.clock() - self.changed_at > MAX_RESULT_AGE_SECONDS:
+                return None
+            return dict(self._connect_status)
 
     def _set(self, state: dict, connect_status: Optional[dict] = None) -> None:
         self._state, self._connect_status = state, connect_status

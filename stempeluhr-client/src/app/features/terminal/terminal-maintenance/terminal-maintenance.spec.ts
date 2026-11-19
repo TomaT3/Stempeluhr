@@ -328,21 +328,38 @@ describe('TerminalMaintenance', () => {
     fixture.detectChanges();
 
     expect(component.step()).toBe('password');
-    expect(text()).toContain('Eine WLAN-Umstellung zu „Alt“ läuft noch.');
+    expect(text()).toContain('Eine WLAN-Umstellung zu „Alt“ läuft noch; die neue Eingabe wurde nicht verwendet.');
     vi.advanceTimersByTime(CONNECT_POLL_MS);
     http.expectNone(`${AGENT}/wifi/status`);
   });
 
-  it('waits for a running attempt to the same network', () => {
+  it('does not pass off a running attempt to the same network as the new one', () => {
+    // E.g. a wrong password, dialog closed while connecting, reopened with the right one.
     unlocked();
     component.choose(NETWORKS[1]);
-    component.password.set('kunden-pass');
+    component.password.set('richtig-pw');
     component.connect();
     http.expectOne(`${AGENT}/wifi/connect`)
       .flush({ error: 'connect already running', ssid: 'Kunde' }, { status: 409, statusText: 'Conflict' });
+    fixture.detectChanges();
 
-    pollStatus({ state: 'connected', ssid: 'Kunde' });
-    expect(text()).toContain('Verbunden mit „Kunde“');
+    expect(component.step()).toBe('password');
+    expect(text()).toContain('„Kunde“ läuft noch; die neue Eingabe wurde nicht verwendet.');
+    vi.advanceTimersByTime(CONNECT_POLL_MS);
+    http.expectNone(`${AGENT}/wifi/status`);
+  });
+
+  it('retries an OWE network without asking for a password', () => {
+    unlocked();
+    component.choose({ ssid: 'Enhanced', signal: 60, security: 'OWE', inUse: false });
+    http.expectOne(`${AGENT}/wifi/connect`).flush({ ok: true }, { status: 202, statusText: 'Accepted' });
+    pollStatus({ state: 'failed', ssid: 'Enhanced', message: 'WLAN nicht gefunden. Ist es in Reichweite?' });
+
+    component.retry();
+
+    expect(component.step()).toBe('overview');
+    http.expectOne(`${AGENT}/wifi/status`).flush({ status: CONNECTED, job: { state: 'failed' } });
+    http.expectOne(`${AGENT}/wifi/networks`).flush({ networks: NETWORKS });
   });
 
   it('keeps spaces at the edges of a hidden SSID', () => {

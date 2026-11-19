@@ -150,6 +150,12 @@ public sealed class RuntimeSettings
     /// <summary>Passwort des Wartungs-WLANs (Secret, nur für authentifizierte Terminals).</summary>
     public string? ServiceWifiPsk { get; init; }
 
+    /// <summary>
+    /// Der Hotspot kann nur WPA3 (SAE). Sonst WPA2, was auch WPA2/WPA3 im
+    /// Übergangsmodus abdeckt - ein reiner WPA3-Hotspot braucht key-mgmt=sae.
+    /// </summary>
+    public bool ServiceWifiWpa3Only { get; init; }
+
     /// <summary>PBKDF2-Hash der Wartungs-PIN für die WLAN-Einstellung am Display.</summary>
     public string? MaintenancePinHash { get; init; }
 

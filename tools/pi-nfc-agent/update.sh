@@ -42,6 +42,11 @@ WIFI_ENABLED_MARKER="$BASE_DIR/.wifi-recovery-enabled"
 # WLAN setup at the display (wifi_setup.py); also missing in older bundles.
 SETUP_UNITS=(stempeluhr-wifi-setup.socket stempeluhr-wifi-setup@.service)
 SETUP_ENABLED_MARKER="$BASE_DIR/.wifi-setup-enabled"
+# daemon-reload does not re-bind a listening socket: a changed socket unit
+# (e.g. MaxConnections) needs a restart, retried until it succeeds.
+SETUP_RESTART_MARKER="$BASE_DIR/.wifi-setup-socket-restart"
+# Held by wifi_setup.py during a connect and its rollback (CONNECT_LOCK).
+SETUP_LOCK="${STEMPELUHR_WIFI_SETUP_LOCK:-/run/stempeluhr-wifi-setup.lock}"
 DEV_VERSION="0.0.0-local"
 
 FORCE=0
@@ -185,10 +190,22 @@ install_wifi_setup() { # release-verzeichnis (auch alte Bundles ohne Dateien)
         return 0
       fi
       changed=1
+      if [ "$unit" = stempeluhr-wifi-setup.socket ] && [ -f "$SETUP_ENABLED_MARKER" ]; then
+        touch "$SETUP_RESTART_MARKER"
+      fi
     fi
   done
   if [ "$changed" -eq 1 ] && ! "$SYSTEMCTL" daemon-reload; then
     log "WARNUNG: systemctl daemon-reload nach Installation der WLAN-Einstellung fehlgeschlagen." >&2
+  fi
+  if [ -f "$SETUP_RESTART_MARKER" ]; then
+    # Not while a connect runs: it holds the lock until its rollback is done.
+    if flock -n "$SETUP_LOCK" "$SYSTEMCTL" restart stempeluhr-wifi-setup.socket; then
+      rm -f "$SETUP_RESTART_MARKER"
+      log "Socket der WLAN-Einstellung mit geänderter Unit neu gestartet."
+    else
+      log "WARNUNG: Socket der WLAN-Einstellung nicht neu gestartet (WLAN-Umstellung läuft oder Fehler); nächster Versuch beim nächsten Update-Lauf." >&2
+    fi
   fi
   if [ ! -f "$SETUP_ENABLED_MARKER" ]; then
     if "$SYSTEMCTL" enable --now stempeluhr-wifi-setup.socket; then

@@ -38,7 +38,7 @@ import urllib.error
 import urllib.request
 import uuid as uuidlib
 
-from maintenance_access import HIDDEN_SECURITY, STARTED_LINE
+from maintenance_access import HIDDEN_SECURITY, PIN_HASH, STARTED_LINE
 from wifi_recovery import STATE_DIR, CommandResult, Runner, device_category, run_nmcli, short_error, split_terse
 
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
@@ -70,8 +70,6 @@ CONNECT_WORST_CASE_SECONDS = (LOCK_WAIT_SECONDS + SCAN_TIMEOUT_SECONDS + CONNECT
 MAX_REQUEST_BYTES = 4096
 MAX_NETWORKS = 30
 SERVER_TIMEOUT_SECONDS = 15
-
-PIN_HASH = re.compile(r"pbkdf2-sha256\$[1-9][0-9]{0,6}\$[0-9a-f]{16,128}\$[0-9a-f]{32,128}")
 
 
 class SetupError(Exception):
@@ -367,7 +365,10 @@ class NetworkManager:
             raise SetupError("Wartungs-WLAN ohne Passwort wird nicht eingerichtet.")
         current = read_text(path)
         connection_uuid = uuid_of(current) or str(uuidlib.uuid4())
-        content = keyfile(SERVICE_ID, connection_uuid, ssid, psk, "wpa-psk", SERVICE_PRIORITY)
+        # "WPA3": a hotspot with WPA3-Personal only needs SAE; everything else
+        # (also missing, from an older server) is WPA2 incl. WPA2/WPA3 mixed.
+        key_mgmt = "sae" if desired.get("security") == "WPA3" else "wpa-psk"
+        content = keyfile(SERVICE_ID, connection_uuid, ssid, psk, key_mgmt, SERVICE_PRIORITY)
         if current == content and existing == [connection_uuid]:
             return "unverändert"
         # Also a profile of the same name created by hand (other uuid/file).

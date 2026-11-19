@@ -318,7 +318,8 @@ sich ändern. Dafür gibt es zwei Wege, beide ohne Tastatur und ohne Desktop.
 **Einrichten (einmal, Admin-Seite → Terminal-Wartung):**
 
 - Wartungs-WLAN: SSID und Passwort eines Hotspots, den du (oder der Kunde)
-  am Handy einschalten kannst. WPA2, nicht nur WPA3.
+  am Handy einschalten kannst. WPA2 oder WPA2/WPA3 gemischt. Bietet das Handy
+  nur WPA3 an, „Hotspot nur mit WPA3“ anhaken (das Profil nutzt dann SAE).
 - Wartungs-PIN: 6 bis 12 Ziffern, nicht gleich einer Mitarbeiter-PIN. Der
   Server speichert nur einen PBKDF2-Hash.
 

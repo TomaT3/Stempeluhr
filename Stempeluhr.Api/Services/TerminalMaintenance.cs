@@ -74,7 +74,8 @@ public static class TerminalMaintenance
     public static TerminalMaintenanceDto Config(RuntimeSettings settings) => new(
         string.IsNullOrEmpty(settings.ServiceWifiSsid) || string.IsNullOrEmpty(settings.ServiceWifiPsk)
             ? null
-            : new TerminalServiceWifiDto(settings.ServiceWifiSsid, settings.ServiceWifiPsk),
+            : new TerminalServiceWifiDto(settings.ServiceWifiSsid, settings.ServiceWifiPsk,
+                settings.ServiceWifiWpa3Only ? "WPA3" : "WPA2"),
         string.IsNullOrEmpty(settings.MaintenancePinHash) ? null : settings.MaintenancePinHash);
 }
 
@@ -103,6 +104,7 @@ public sealed class PinMatchCache(Func<string, string, bool> verify)
     }
 }
 
-public sealed record TerminalServiceWifiDto(string Ssid, string Psk);
+/// <summary>Security: "WPA2" (auch WPA2/WPA3) oder "WPA3" (nur SAE); ältere Pis ignorieren es.</summary>
+public sealed record TerminalServiceWifiDto(string Ssid, string Psk, string Security);
 
 public sealed record TerminalMaintenanceDto(TerminalServiceWifiDto? ServiceWifi, string? MaintenancePinHash);

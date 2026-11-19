@@ -381,7 +381,7 @@ export class AdminPage implements OnDestroy {
   }
 
   updateMaintenance(
-    patch: Pick<Partial<AdminSettings>, 'serviceWifiSsid' | 'serviceWifiPsk' | 'maintenancePin' | 'clearMaintenancePin'>,
+    patch: Pick<Partial<AdminSettings>, 'serviceWifiSsid' | 'serviceWifiPsk' | 'serviceWifiWpa3Only' | 'maintenancePin' | 'clearMaintenancePin'>,
   ): void {
     this.updateSettings(settings => ({ ...settings, ...patch }));
   }
@@ -784,6 +784,8 @@ export class AdminPage implements OnDestroy {
       // SSID schaltet das Wartungs-WLAN ab; leere Secrets behalten den Wert.
       serviceWifiSsid: settings.serviceWifiSsid === undefined ? null : (settings.serviceWifiSsid ?? ''),
       serviceWifiPsk: settings.serviceWifiPsk ?? '',
+      // undefined: altes Backend, null behält die Wahl.
+      serviceWifiWpa3Only: settings.serviceWifiWpa3Only ?? null,
       maintenancePin: settings.maintenancePin ?? '',
       clearMaintenancePin: settings.clearMaintenancePin ?? false,
       employees: settings.employees.map(employee => ({

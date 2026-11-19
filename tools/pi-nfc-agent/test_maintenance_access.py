@@ -276,6 +276,19 @@ class SingleFlightTest(unittest.TestCase):
         helper.scan_gate.set()
         self.assertEqual(commands, ["scan", "status"])
 
+    def test_connect_status_stands_in_only_while_recent(self):
+        helper = FakeHelper()
+        helper.connect_answer = {"ok": True, "status": helper.connect_status}
+        job = WifiJob(helper, self.clock)
+        job.start("Neu", "passwort1", False)
+        for _ in range(50):
+            if job.snapshot()["state"] == "connected":
+                break
+            time.sleep(0.02)
+        self.assertEqual(job.connect_status()["ip"], "192.168.5.7")
+        self.clock.now += MAX_RESULT_AGE_SECONDS + 1  # days later the WLAN may be gone
+        self.assertIsNone(job.connect_status())
+
     def test_queries_follow_a_replaced_client(self):
         job = WifiJob(FakeHelper())
         replacement = FakeHelper()
@@ -298,6 +311,11 @@ class VerifyPinTest(unittest.TestCase):
         self.assertFalse(verify_pin("482916", stored))
         for broken in (None, "", "plain", stored.replace("pbkdf2-sha256", "md5"),
                        f"pbkdf2-sha256$9999999${SALT}${'cd' * 32}"):
+            self.assertFalse(verify_pin(PIN, broken))
+
+    def test_odd_hex_lengths_are_rejected_not_raised(self):
+        # bytes.fromhex would raise ValueError in the HTTP handler.
+        for broken in (f"pbkdf2-sha256$1000${SALT}a${'cd' * 32}", f"pbkdf2-sha256$1000${SALT}${'cd' * 32}c"):
             self.assertFalse(verify_pin(PIN, broken))
 
 
@@ -327,6 +345,16 @@ class AccessTest(unittest.TestCase):
         # Unwritable or broken state never blocks.
         state.write_text("kaputt")
         self.assertEqual(MaintenanceAccess(self.file, Clock(), state).unlock(PIN)[0], "ok")
+
+    def test_huge_stored_failure_count_still_locks(self):
+        state = Path(self.tmp.name) / "lockout.json"
+        state.write_text(json.dumps({"failures": 5000}))
+        clock = Clock()
+        access = MaintenanceAccess(self.file, clock, state)
+        self.assertEqual(access.unlock(PIN)[0], "locked")
+        clock.now += 24 * 3600
+        access.unlock("000000")  # counting on stays bounded
+        self.assertLessEqual(json.loads(state.read_text())["failures"], 999)
 
     def test_session_ends_when_the_pin_is_removed_or_changed(self):
         _, token = self.access.unlock(PIN)

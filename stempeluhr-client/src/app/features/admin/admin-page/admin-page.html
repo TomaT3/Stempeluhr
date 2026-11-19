@@ -219,6 +219,13 @@
                 [placeholder]="keepsServiceWifiPsk(settings) ? 'gespeichert, leer lassen zum Behalten' : 'mindestens 8 Zeichen'"
                 autocomplete="new-password">
             </label>
+            <label class="toggle">
+              <input
+                type="checkbox"
+                [checked]="settings.serviceWifiWpa3Only ?? false"
+                (change)="updateMaintenance({ serviceWifiWpa3Only: $any($event.target).checked })">
+              Hotspot nur mit WPA3 (wenn das Handy kein WPA2 anbietet)
+            </label>
             <label>
               Wartungs-PIN
               <input
@@ -239,7 +246,7 @@
               </label>
             }
           </div>
-          <p class="task-admin-hint">Jedes Terminal mit Token übernimmt beides beim nächsten Update-Lauf (spätestens nach 15 Minuten, solange es online ist). Ohne Kunden-WLAN verbindet es sich mit dem Wartungs-WLAN, z. B. einem Handy-Hotspot mit genau diesen Daten (WPA2). Am Display: fünfmal auf die Uhrzeit tippen, Wartungs-PIN eingeben, WLAN wählen.</p>
+          <p class="task-admin-hint">Jedes Terminal mit Token übernimmt beides beim nächsten Update-Lauf (spätestens nach 15 Minuten, solange es online ist). Ohne Kunden-WLAN verbindet es sich mit dem Wartungs-WLAN, z. B. einem Handy-Hotspot mit genau diesen Daten (WPA2 oder WPA2/WPA3; nur WPA3 bitte oben anhaken). Am Display: fünfmal auf die Uhrzeit tippen, Wartungs-PIN eingeben, WLAN wählen.</p>
         </section>
       }
 
