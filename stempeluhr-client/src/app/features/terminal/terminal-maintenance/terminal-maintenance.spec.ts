@@ -166,6 +166,29 @@ describe('TerminalMaintenance', () => {
       .toEqual({ session: 's1', ssid: 'Versteckt', psk: 'geheim-123', hidden: true, security: 'WPA2' });
   });
 
+  it('retries a hidden network from the step with name and encryption', () => {
+    unlocked();
+    component.openHidden();
+    component.hiddenSsid.set('Versteckt3');
+    component.confirmHidden();
+    component.password.set('geheim-123');
+    component.connect();
+    http.expectOne(`${AGENT}/wifi/connect`).flush({ ok: true }, { status: 202, statusText: 'Accepted' });
+    pollStatus({ state: 'failed', ssid: 'Versteckt3', message: 'Verbindung abgelehnt. Bitte das Passwort prüfen.' });
+
+    component.retry();
+    fixture.detectChanges();
+
+    expect(component.step()).toBe('hidden');
+    expect(component.hiddenSsid()).toBe('Versteckt3');
+    // Now the encryption can be corrected, e.g. to WPA3 only.
+    component.hiddenSecurity.set('WPA3');
+    component.confirmHidden();
+    component.password.set('geheim-123');
+    component.connect();
+    expect(http.expectOne(`${AGENT}/wifi/connect`).request.body).toMatchObject({ ssid: 'Versteckt3', security: 'WPA3' });
+  });
+
   it('passes WPA3 for a hidden WPA3-only network', () => {
     unlocked();
     component.openHidden();

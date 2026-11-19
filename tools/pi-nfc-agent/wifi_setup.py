@@ -38,6 +38,7 @@ import urllib.error
 import urllib.request
 import uuid as uuidlib
 
+from maintenance_access import HIDDEN_SECURITY
 from wifi_recovery import STATE_DIR, CommandResult, Runner, device_category, run_nmcli, short_error, split_terse
 
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
@@ -277,6 +278,9 @@ class NetworkManager:
         if device is None:
             raise SetupError("Kein WLAN-Gerät gefunden.")
         if hidden:
+            if security == "" and psk:
+                # Otherwise the keyfile would get wpa-psk for an open network.
+                raise SetupError("Ein offenes WLAN hat kein Passwort.")
             security = ("WPA2" if psk else "") if security is None else security
         else:
             match = next((network for network in self.scan() if network["ssid"] == ssid), None)
@@ -419,9 +423,6 @@ class ConnectLock:
     def __exit__(self, *_exc) -> None:
         if self.handle is not None:
             self.handle.close()
-
-
-HIDDEN_SECURITY = ("WPA2", "WPA3", "")
 
 
 def handle_request(raw: bytes, manager: NetworkManager,

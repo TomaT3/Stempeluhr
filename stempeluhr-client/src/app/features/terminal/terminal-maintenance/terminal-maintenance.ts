@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, output, signal } from '@angular/core';
-import { Subscription, catchError, exhaustMap, filter, of, tap, throwError, timer } from 'rxjs';
+import { Subscription, catchError, exhaustMap, of, tap, throwError, timer } from 'rxjs';
 
 import { HiddenSecurity, TerminalWifiApi, WifiNetwork, WifiStatus } from '../../../core/services/terminal-wifi';
 import { OnscreenKeyboard } from '../../../shared/components/onscreen-keyboard/onscreen-keyboard';
@@ -237,10 +237,13 @@ export class TerminalMaintenance {
   retry(): void {
     this.result.set(null);
     const target = this.target();
-    if (target?.security) {
-      this.openPassword();
-    } else if (target?.hidden) {
+    if (target?.hidden) {
+      // Bei versteckten Netzen sind SSID und Verschlüsselung die häufigste
+      // Ursache: zurück in den Schritt mit beiden (die Eingaben bleiben).
+      this.message.set('');
       this.step.set('hidden');
+    } else if (target?.security) {
+      this.openPassword();
     } else {
       this.backToOverview();
       this.refresh();
@@ -265,14 +268,14 @@ export class TerminalMaintenance {
     this.poll = timer(CONNECT_POLL_MS, CONNECT_POLL_MS)
       .pipe(
         // Jeder Takt hält den Dialog offen und prüft die Obergrenze - auch
-        // wenn gerade keine Antwort kommt.
+        // wenn gerade keine Antwort kommt. finishConnect() beendet die
+        // Subscription synchron, der Takt erreicht exhaustMap dann nicht mehr.
         tap(() => {
           this.touch();
           if (Date.now() - startedAt > CONNECT_GIVE_UP_MS) {
             this.finishConnect({ ok: false, text: 'Keine Rückmeldung vom Terminal. Bitte den WLAN-Status prüfen.' });
           }
         }),
-        filter(() => this.poll !== null),
         // Eine langsame Abfrage läuft zu Ende, statt vom nächsten Takt
         // abgebrochen zu werden; Takte währenddessen entfallen.
         exhaustMap(() => this.api.status(session).pipe(

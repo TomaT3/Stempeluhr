@@ -34,6 +34,19 @@ MAX_ANSWER_BYTES = 65536
 # 310 s) and shorter than its RuntimeMaxSec (6 min): the agent never gives up
 # on a connect that is still running or rolling back.
 CONNECT_TIMEOUT_SECONDS = 330
+# A status query of the helper may take up to three nmcli calls of 15 s; the
+# agent keeps its socket open that long (no orphaned helper), the kiosk is
+# answered after STATUS_WAIT_SECONDS with the last known status meanwhile.
+STATUS_QUERY_TIMEOUT_SECONDS = 60
+SCAN_QUERY_TIMEOUT_SECONDS = 60
+# Below the kiosk's 15 s request timeout (terminal-wifi.ts, AGENT_TIMEOUT_MS).
+STATUS_WAIT_SECONDS = 8
+SCAN_WAIT_SECONDS = 40
+
+# Encryption of a hidden network (not in the scan): WPA2 (also WPA2/WPA3
+# mixed), WPA3 only, '' open. Shared by agent and helper; the kiosk offers
+# the same values (terminal-wifi.ts, HiddenSecurity).
+HIDDEN_SECURITY = ("WPA2", "WPA3", "")
 PIN_HASH = re.compile(r"pbkdf2-sha256\$([1-9][0-9]{0,6})\$([0-9a-f]{16,128})\$([0-9a-f]{32,128})")
 
 
@@ -120,16 +133,16 @@ class WifiSetupUnavailable(Exception):
     reason = "missing"
 
 
-class WifiSetupTimeout(WifiSetupUnavailable):
+class WifiSetupError(WifiSetupUnavailable):
+    """The helper is installed but broke off or answered garbage."""
+
+    reason = "error"
+
+
+class WifiSetupTimeout(WifiSetupError):
     """The helper is there but did not answer in time (it may still be working)."""
 
     reason = "timeout"
-
-
-class WifiSetupError(WifiSetupUnavailable):
-    """The helper broke off or answered garbage."""
-
-    reason = "error"
 
 
 class WifiSetupClient:
@@ -137,14 +150,25 @@ class WifiSetupClient:
         self.socket_path = socket_path
 
     def request(self, payload: dict, timeout: float = 30) -> dict:
+        """`timeout` bounds the whole request, not each socket operation."""
+        deadline = time.monotonic() + timeout
+
+        def remaining() -> float:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise socket.timeout("deadline")
+            return left
+
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                connection.settimeout(timeout)
+                connection.settimeout(remaining())
                 connection.connect(str(self.socket_path))
+                connection.settimeout(remaining())
                 connection.sendall(json.dumps(payload).encode("utf-8") + b"\n")
                 connection.shutdown(socket.SHUT_WR)
                 chunks, size = [], 0
                 while size <= MAX_ANSWER_BYTES:
+                    connection.settimeout(remaining())
                     chunk = connection.recv(8192)
                     if not chunk:
                         break
@@ -154,14 +178,56 @@ class WifiSetupClient:
         # socket.timeout: an alias of TimeoutError only since Python 3.10.
         except (socket.timeout, TimeoutError) as error:
             raise WifiSetupTimeout(type(error).__name__) from None
-        except (FileNotFoundError, ConnectionRefusedError) as error:
-            # No socket unit (older bundle) or not enabled.
+        except (FileNotFoundError, ConnectionRefusedError, PermissionError) as error:
+            # No socket unit (older bundle), not enabled, or the agent user is
+            # not in the group stempeluhr: the setup is incomplete.
             raise WifiSetupUnavailable(type(error).__name__) from None
         except (OSError, ValueError) as error:
             raise WifiSetupError(type(error).__name__) from None
         if not isinstance(answer, dict):
             raise WifiSetupError("unexpected answer")
         return answer
+
+
+class SingleFlight:
+    """At most one helper query of a kind at a time.
+
+    The helper sockets allow only a few connections (MaxConnections): a caller
+    that gives up must not leave a root helper behind while the kiosk already
+    asks again. So a caller waits up to `wait` seconds; if the query is still
+    running it gets the last finished result instead (or WifiSetupTimeout) and
+    the query keeps running, its result serves the next caller.
+    """
+
+    def __init__(self, query: Callable[[], dict]):
+        self.query = query
+        self._lock = threading.Lock()
+        self._running: Optional[dict] = None
+        self._last: Optional[dict] = None
+
+    def get(self, wait: float) -> dict:
+        with self._lock:
+            run = self._running
+            if run is None:
+                run = self._running = {"done": threading.Event()}
+                threading.Thread(target=self._run, args=(run,), name="wifi-query", daemon=True).start()
+        if not run["done"].wait(wait):
+            with self._lock:
+                run = self._last
+            if run is None:
+                raise WifiSetupTimeout("pending")
+        if "error" in run:
+            raise run["error"]
+        return run["answer"]
+
+    def _run(self, run: dict) -> None:
+        try:
+            run["answer"] = self.query()
+        except WifiSetupUnavailable as error:
+            run["error"] = error
+        with self._lock:
+            self._running, self._last = None, run
+        run["done"].set()
 
 
 class WifiJob:
@@ -171,6 +237,11 @@ class WifiJob:
         self.client = client
         self._lock = threading.Lock()
         self._state: dict = {"state": "idle"}
+        # Status and scan: one helper each at a time (see SingleFlight).
+        self.status_query = SingleFlight(
+            lambda: client.request({"command": "status"}, timeout=STATUS_QUERY_TIMEOUT_SECONDS))
+        self.scan_query = SingleFlight(
+            lambda: client.request({"command": "scan"}, timeout=SCAN_QUERY_TIMEOUT_SECONDS))
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -191,11 +262,12 @@ class WifiJob:
             payload["security"] = security
         try:
             answer = self.client.request(payload, timeout=CONNECT_TIMEOUT_SECONDS)
-        except WifiSetupTimeout:
-            # The helper may still finish; a second connect is refused until then.
-            answer = {"ok": False, "error": "Keine Rückmeldung vom Terminal. Bitte den WLAN-Status prüfen."}
+        except WifiSetupError:
+            # Timeout or broken off mid-way: the WLAN may have changed (the
+            # helper may still finish; a second connect is refused until then).
+            answer = {"ok": False, "error": "Ergebnis unklar. Bitte den WLAN-Status prüfen."}
         except WifiSetupUnavailable:
-            answer = {"ok": False, "error": "WLAN-Einstellung auf diesem Terminal nicht verfügbar."}
+            answer = {"ok": False, "error": "WLAN-Einstellung auf diesem Terminal nicht eingerichtet."}
         with self._lock:
             if answer.get("ok"):
                 self._state = {"state": "connected", "ssid": ssid}

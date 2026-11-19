@@ -27,7 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from terminal_diagnostics import DiagnosticsMonitor, state_directory
-from maintenance_access import MaintenanceAccess, WifiJob, WifiSetupClient, WifiSetupUnavailable
+from maintenance_access import (HIDDEN_SECURITY, SCAN_WAIT_SECONDS, STATUS_WAIT_SECONDS, MaintenanceAccess, WifiJob,
+                                WifiSetupClient, WifiSetupError, WifiSetupTimeout, WifiSetupUnavailable)
 
 from smartcard import scard
 
@@ -177,9 +178,6 @@ class LastScan:
     scanned_at_epoch: float
     consumed: bool = False
 
-
-# Below the kiosk's 15 s request timeout (terminal-wifi.ts, AGENT_TIMEOUT_MS).
-STATUS_HELPER_TIMEOUT_SECONDS = 8
 MAINTENANCE_ROUTES = ("/maintenance/unlock", "/maintenance/lock", "/wifi/status", "/wifi/networks", "/wifi/connect")
 
 
@@ -419,11 +417,12 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/wifi/connect":
             ssid, psk, hidden = payload.get("ssid"), payload.get("psk", ""), payload.get("hidden") is True
-            # Encryption only for hidden networks (not in the scan): WPA2, WPA3 or '' (open).
+            # Encryption only for hidden networks (not in the scan); open means no password.
             security = payload.get("security")
             if not isinstance(ssid, str) or not 0 < len(ssid.encode("utf-8")) <= 32 \
                     or not isinstance(psk, str) or len(psk) > 64 \
-                    or security not in (None, "WPA2", "WPA3", ""):
+                    or (security is not None and security not in HIDDEN_SECURITY) \
+                    or (security == "" and psk):
                 self._send_json(400, {"error": "invalid network"})
                 return
             if not job.start(ssid, psk, hidden, security):
@@ -433,15 +432,17 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(202, {"ok": True})
             return
 
-        # Status: shorter than the kiosk's request timeout (15 s), so the job
-        # snapshot below always arrives, however slow nmcli is.
-        command, timeout = ("status", STATUS_HELPER_TIMEOUT_SECONDS) if self.path == "/wifi/status" else ("scan", 40)
+        status = self.path == "/wifi/status"
+        # One helper per command at a time; the status answer comes within
+        # STATUS_WAIT_SECONDS (below the kiosk's 15 s), the job snapshot below
+        # always with it, however slow nmcli is.
+        query, wait = (job.status_query, STATUS_WAIT_SECONDS) if status else (job.scan_query, SCAN_WAIT_SECONDS)
         unavailable: WifiSetupUnavailable | None = None
         try:
-            answer = job.client.request({"command": command}, timeout=timeout)
+            answer = query.get(wait)
         except WifiSetupUnavailable as error:
             answer, unavailable = None, error
-        if command == "status":
+        if status:
             # The connect outcome comes from the agent itself: it must reach the
             # kiosk even when the helper's status query fails meanwhile (NM busy,
             # all socket slots taken). "helper" says why the status is missing.
@@ -454,7 +455,13 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
                                       "message": message[:300] if isinstance(message, str)
                                       else "WLAN-Status gerade nicht verfügbar."})
             return
-        if answer is None:
+        # Only a missing helper means "not set up"; a slow or broken one is a
+        # temporary error with a message of its own.
+        if isinstance(unavailable, WifiSetupTimeout):
+            self._send_json(502, {"message": "Die WLAN-Suche dauert zu lange. Bitte erneut suchen."})
+        elif isinstance(unavailable, WifiSetupError):
+            self._send_json(502, {"message": "Die WLAN-Suche wurde unterbrochen. Bitte erneut suchen."})
+        elif unavailable is not None:
             self._send_json(503, {"error": "wifi setup unavailable"})
         elif not answer.get("ok"):
             message = answer.get("error")

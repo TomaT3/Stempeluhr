@@ -308,20 +308,20 @@ public sealed record AdminSettingsUpdateDto(
     }
 
     /// <summary>Prüft Wartungs-WLAN und -PIN; <paramref name="result"/> ist das Ergebnis von <see cref="ToSettings"/>.</summary>
-    public string? ValidateMaintenance(RuntimeSettings result, RuntimeSettings current)
+    public string? ValidateMaintenance(RuntimeSettings result, PinMatchCache? cache = null)
     {
         if (TerminalMaintenance.ValidateServiceWifi(result.ServiceWifiSsid, result.ServiceWifiPsk) is { } wifiError)
             return wifiError;
         // Eine neue PIN hat ValidateMaintenancePin im Klartext gegen alle
-        // Mitarbeiter geprüft. Sonst gilt der gespeicherte Hash weiter: Auch
-        // eine später vergebene Mitarbeiter-PIN darf ihm nicht entsprechen.
-        // PBKDF2 ist teuer, deshalb nur neue oder geänderte PINs im Format der
-        // Wartungs-PIN - die unveränderten wurden beim Setzen schon geprüft.
+        // Mitarbeiter geprüft. Sonst gilt der gespeicherte Hash weiter: Keine
+        // Mitarbeiter-PIN darf ihm entsprechen - auch keine, die später, von
+        // Hand in settings.json oder per Restore dazukam. Geprüft wird deshalb
+        // jede PIN im Format der Wartungs-PIN; der Cache rechnet PBKDF2 pro
+        // Hash und PIN nur einmal, ein Save ohne neue PIN kostet so nichts.
         if (NewMaintenancePin is not null || result.MaintenancePinHash is not { } stored) return null;
+        cache ??= PinMatchCache.Shared;
         return result.Employees.Any(employee => employee.Pin is { } pin
-                && pin != current.Employees.FirstOrDefault(old =>
-                    string.Equals(old.Id, employee.Id, StringComparison.OrdinalIgnoreCase))?.Pin
-                && TerminalMaintenance.ValidatePin(pin) is null && TerminalMaintenance.VerifyPin(pin, stored))
+                && TerminalMaintenance.ValidatePin(pin) is null && cache.Matches(pin, stored))
             ? "Eine Mitarbeiter-PIN entspricht der Wartungs-PIN. Bitte eine andere Wartungs-PIN setzen."
             : null;
     }

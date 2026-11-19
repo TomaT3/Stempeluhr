@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -73,6 +74,27 @@ public static class TerminalMaintenance
             ? null
             : new TerminalServiceWifiDto(settings.ServiceWifiSsid, settings.ServiceWifiPsk),
         string.IsNullOrEmpty(settings.MaintenancePinHash) ? null : settings.MaintenancePinHash);
+}
+
+/// <summary>
+/// Ergebnisse von <see cref="TerminalMaintenance.VerifyPin"/> pro Hash und PIN.
+/// PBKDF2 kostet pro Prüfung um 100 ms; so prüft jeder Save alle
+/// Mitarbeiter-PINs gegen die Wartungs-PIN, rechnet aber nur neue Paare.
+/// Ein neuer Hash (neue Wartungs-PIN, neues Salt) hat eigene Einträge.
+/// </summary>
+public sealed class PinMatchCache(Func<string, string, bool> verify)
+{
+    private const int MaxEntries = 10_000;
+
+    public static PinMatchCache Shared { get; } = new(TerminalMaintenance.VerifyPin);
+
+    private readonly ConcurrentDictionary<(string Hash, string Pin), bool> results = new();
+
+    public bool Matches(string pin, string stored)
+    {
+        if (results.Count >= MaxEntries) results.Clear();
+        return results.GetOrAdd((stored, pin), key => verify(key.Pin, key.Hash));
+    }
 }
 
 public sealed record TerminalServiceWifiDto(string Ssid, string Psk);

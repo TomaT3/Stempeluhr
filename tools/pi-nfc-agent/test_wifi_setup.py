@@ -191,6 +191,11 @@ class ConnectTest(SetupTest):
         self.assertNotIn("[wifi-security]", (self.dir / self.files()[0]).read_text())
         with self.assertRaisesRegex(SetupError, "fehlt das Passwort"):
             self.manager.connect("Versteckt3", "", hidden=True, security="WPA3")
+        # "Open" with a password would become a wpa-psk profile: refused, nothing written.
+        before = self.files()
+        with self.assertRaisesRegex(SetupError, "offenes WLAN hat kein Passwort"):
+            self.manager.connect("Offen", "abcdefgh", hidden=True, security="")
+        self.assertEqual(self.files(), before)
 
     def test_second_connect_is_refused_while_one_runs(self):
         with wifi_setup.ConnectLock():

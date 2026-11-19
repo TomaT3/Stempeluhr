@@ -125,7 +125,7 @@ public sealed class TerminalMaintenanceTests
 
             Assert.Equal(("Stempeluhr-Service", "hotspot-secret", Current.MaintenancePinHash),
                 (result.ServiceWifiSsid, result.ServiceWifiPsk, result.MaintenancePinHash));
-            Assert.Null(update.ValidateMaintenance(result, Current));
+            Assert.Null(update.ValidateMaintenance(result));
         }
     }
 
@@ -144,7 +144,7 @@ public sealed class TerminalMaintenanceTests
         var update = Update(pin: " 739104 ");
         var result = update.ToSettings(Current);
 
-        Assert.Null(update.ValidateMaintenance(result, Current));
+        Assert.Null(update.ValidateMaintenance(result));
         Assert.DoesNotContain("739104", result.MaintenancePinHash);
         Assert.True(TerminalMaintenance.VerifyPin("739104", result.MaintenancePinHash));
         Assert.False(TerminalMaintenance.VerifyPin("482915", result.MaintenancePinHash));
@@ -183,16 +183,16 @@ public sealed class TerminalMaintenanceTests
         var update = Update() with { Employees = [Employee("482915")] };
         Assert.Null(update.ValidateMaintenancePin());
 
-        Assert.Contains("Mitarbeiter-PIN entspricht der Wartungs-PIN", update.ValidateMaintenance(update.ToSettings(Current), Current));
+        Assert.Contains("Mitarbeiter-PIN entspricht der Wartungs-PIN", update.ValidateMaintenance(update.ToSettings(Current)));
         var other = Update() with { Employees = [Employee("482916")] };
-        Assert.Null(other.ValidateMaintenance(other.ToSettings(Current), Current));
+        Assert.Null(other.ValidateMaintenance(other.ToSettings(Current)));
     }
 
     [Fact]
-    public void Save_UnchangedEmployeePins_AreNotHashedAgain()
+    public void Save_RestoredCollision_IsStillDetected()
     {
-        // An unchanged PIN was checked when the maintenance PIN was set; even a
-        // (hypothetical) stored collision is not re-checked on every save.
+        // From a backup or edited by hand: max already had the maintenance PIN
+        // before this save, and the save does not change it.
         var current = new RuntimeSettings
         {
             MaintenancePinHash = Current.MaintenancePinHash,
@@ -200,7 +200,22 @@ public sealed class TerminalMaintenanceTests
         };
         var update = Update() with { Employees = [Employee("482915")] };
 
-        Assert.Null(update.ValidateMaintenance(update.ToSettings(current), current));
+        Assert.Contains("Mitarbeiter-PIN entspricht der Wartungs-PIN",
+            update.ValidateMaintenance(update.ToSettings(current), new PinMatchCache(TerminalMaintenance.VerifyPin)));
+    }
+
+    [Fact]
+    public void Save_RepeatedSaves_HashEachPinOnlyOnce()
+    {
+        var runs = 0;
+        var cache = new PinMatchCache((pin, stored) => { runs++; return TerminalMaintenance.VerifyPin(pin, stored); });
+        var update = Update() with { Employees = [Employee("482916"), Employee("1234") with { Id = "anna" }] };
+
+        for (var save = 0; save < 3; save++)
+            Assert.Null(update.ValidateMaintenance(update.ToSettings(Current), cache));
+
+        // Only the PIN in the format of the maintenance PIN, and only once.
+        Assert.Equal(1, runs);
     }
 
     [Fact]
@@ -210,7 +225,7 @@ public sealed class TerminalMaintenanceTests
         var result = update.ToSettings(Current);
 
         Assert.Null(result.ServiceWifiPsk);
-        Assert.Contains("fehlt das Passwort", update.ValidateMaintenance(result, Current));
+        Assert.Contains("fehlt das Passwort", update.ValidateMaintenance(result));
         Assert.Equal("neues-geheim", Update(ssid: "Handy-B", psk: "neues-geheim").ToSettings(Current).ServiceWifiPsk);
     }
 
@@ -231,7 +246,7 @@ public sealed class TerminalMaintenanceTests
     {
         var update = Update(ssid: ssid, psk: psk);
 
-        Assert.Contains(message, update.ValidateMaintenance(update.ToSettings(new RuntimeSettings()), new RuntimeSettings()));
+        Assert.Contains(message, update.ValidateMaintenance(update.ToSettings(new RuntimeSettings())));
     }
 
     [Fact]

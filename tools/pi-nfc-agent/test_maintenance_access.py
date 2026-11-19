@@ -15,7 +15,7 @@ from test_local_scan_server import FOREIGN, KIOSK  # noqa: F401
 import socket
 
 from maintenance_access import (FREE_ATTEMPTS, LOCK_BASE_SECONDS, SESSION_SECONDS, MaintenanceAccess, WifiJob,
-                                WifiSetupClient, WifiSetupTimeout, WifiSetupUnavailable, verify_pin)
+                                WifiSetupClient, WifiSetupError, WifiSetupTimeout, WifiSetupUnavailable, verify_pin)
 from stempeluhr_nfc_agent import LocalScanServer
 
 PIN = "482915"
@@ -44,14 +44,21 @@ class FakeHelper:
         self.connect_answer = {"ok": True, "status": {"state": "connected"}}
         self.release = threading.Event()
         self.release.set()
+        # Cleared: the status query hangs, like nmcli with a busy NetworkManager.
+        self.status_gate = threading.Event()
+        self.status_gate.set()
+        self.scan_error = None
 
     def request(self, payload, timeout=30):
         self.requests.append(payload)
         if not self.available:
             raise WifiSetupUnavailable("FileNotFoundError")
         if payload["command"] == "status":
+            self.status_gate.wait(5)
             return {"ok": True, "status": {"state": "connected", "ssid": "Kunde", "ip": "192.168.1.23"}}
         if payload["command"] == "scan":
+            if self.scan_error:
+                raise self.scan_error
             return {"ok": True, "networks": [{"ssid": "Kunde", "signal": 80, "security": "WPA2", "inUse": True}]}
         self.release.wait(5)
         return self.connect_answer
@@ -80,18 +87,67 @@ class ClientTest(unittest.TestCase):
                 WifiSetupClient(self.path).request({"command": "status"}, timeout=0.2)
         self.assertEqual(caught.exception.reason, "timeout")
 
-    def test_job_reports_a_timeout_as_such(self):
-        class Silent:
-            def request(self, payload, timeout=30):
-                raise WifiSetupTimeout("timeout")
+    def test_deadline_covers_the_whole_request(self):
+        """A helper that trickles bytes must not stretch the timeout per recv()."""
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(self.path))
+            listener.listen(1)
 
-        job = WifiJob(Silent())
+            def trickle():
+                connection, _ = listener.accept()
+                with connection:
+                    for _ in range(40):
+                        try:
+                            connection.sendall(b" ")
+                        except OSError:
+                            return
+                        time.sleep(0.05)
+
+            threading.Thread(target=trickle, daemon=True).start()
+            started = time.monotonic()
+            with self.assertRaises(WifiSetupTimeout):
+                WifiSetupClient(self.path).request({"command": "status"}, timeout=0.3)
+            self.assertLess(time.monotonic() - started, 0.8)
+
+    def test_missing_group_rights_count_as_missing(self):
+        class Refused:
+            def __init__(self, *_args):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def settimeout(self, _timeout):
+                pass
+
+            def connect(self, _path):
+                raise PermissionError(13, "Permission denied")
+
+        with patch("maintenance_access.socket.socket", Refused):
+            with self.assertRaises(WifiSetupUnavailable) as caught:
+                WifiSetupClient(self.path).request({"command": "status"}, timeout=1)
+        self.assertEqual(caught.exception.reason, "missing")
+
+    def job_message(self, error):
+        class Failing:
+            def request(self, payload, timeout=30):
+                raise error
+
+        job = WifiJob(Failing())
         job.start("Kunde", "passwort1", False)
         for _ in range(50):
             if job.snapshot()["state"] != "running":
                 break
             time.sleep(0.02)
-        self.assertIn("WLAN-Status prüfen", job.snapshot()["message"])
+        return job.snapshot()["message"]
+
+    def test_job_reports_unclear_outcomes_as_such(self):
+        for error in (WifiSetupTimeout("timeout"), WifiSetupError("ConnectionResetError")):
+            self.assertEqual(self.job_message(error), "Ergebnis unklar. Bitte den WLAN-Status prüfen.")
+        self.assertIn("nicht eingerichtet", self.job_message(WifiSetupUnavailable("FileNotFoundError")))
 
 
 class VerifyPinTest(unittest.TestCase):
@@ -277,12 +333,44 @@ class RoutesTest(unittest.TestCase):
         self.assertIn({"command": "connect", "ssid": "Versteckt", "psk": "passwort1", "hidden": True,
                        "security": "WPA3"}, self.helper.requests)
 
-    def test_status_answers_before_the_kiosk_gives_up(self):
-        from stempeluhr_nfc_agent import STATUS_HELPER_TIMEOUT_SECONDS
+    def test_slow_status_helper_runs_once_and_is_not_orphaned(self):
+        import stempeluhr_nfc_agent
         session = self.unlock()
-        self.post("/wifi/status", {"session": session})
+        self.helper.status_gate.clear()
+        with patch.object(stempeluhr_nfc_agent, "STATUS_WAIT_SECONDS", 0.2):
+            started = time.monotonic()
+            first = self.post("/wifi/status", {"session": session})[1]
+            second = self.post("/wifi/status", {"session": session})[1]
+            elapsed = time.monotonic() - started
+        # Both answered quickly with the job, the status still pending ...
+        self.assertLess(elapsed, 2)
+        self.assertEqual((first["status"], first["helper"], first["job"]), (None, "timeout", {"state": "idle"}))
+        self.assertEqual(second["helper"], "timeout")
+        # ... and only one helper query runs: the second request reused it.
+        self.assertEqual([r["command"] for r in self.helper.requests], ["status"])
+        self.helper.status_gate.set()
+        for _ in range(50):
+            answer = self.post("/wifi/status", {"session": session})[1]
+            if answer["status"] is not None:
+                break
+            time.sleep(0.02)
+        self.assertEqual(answer["status"]["ssid"], "Kunde")
         # The kiosk waits 15 s (terminal-wifi.ts) for any agent request.
-        self.assertLess(STATUS_HELPER_TIMEOUT_SECONDS, 15)
+        self.assertLess(stempeluhr_nfc_agent.STATUS_WAIT_SECONDS, 15)
+
+    def test_scan_failures_are_not_reported_as_missing_setup(self):
+        session = self.unlock()
+        for error, message in ((WifiSetupTimeout("x"), "dauert zu lange"), (WifiSetupError("x"), "unterbrochen")):
+            self.helper.scan_error = error
+            status, answer = self.post("/wifi/networks", {"session": session})
+            self.assertEqual(status, 502)
+            self.assertIn(message, answer["message"])
+
+    def test_open_hidden_network_with_password_is_rejected(self):
+        session = self.unlock()
+        status, _ = self.post("/wifi/connect", {"session": session, "ssid": "Offen", "psk": "abcdefgh",
+                                                "hidden": True, "security": ""})
+        self.assertEqual(status, 400)
 
     def test_connect_outcome_survives_failing_status_queries(self):
         session = self.unlock()
