@@ -22,7 +22,7 @@ und in der API, nicht im Agenten.
 | `POST` | `/maintenance/lock` | Sitzung beenden |
 | `POST` | `/wifi/status` | WLAN-Status und laufender Verbindungsversuch (`{session}`) |
 | `POST` | `/wifi/networks` | WLAN-Suche (`{session}`) |
-| `POST` | `/wifi/connect` | `{session, ssid, psk, hidden}` → 202; Ergebnis über `/wifi/status` |
+| `POST` | `/wifi/connect` | `{session, ssid, psk, hidden, security}` → 202 (`security` nur bei versteckten WLANs: `"WPA2"`, `"WPA3"` oder `""` für offen; sonst gilt die WLAN-Suche); Ergebnis über `/wifi/status` |
 
 Die Wartungs- und WLAN-Routen verlangen immer die konfigurierte Origin, aber
 kein Terminal-Token: Das WLAN muss sich auch ohne Server ändern lassen
