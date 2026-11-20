@@ -49,10 +49,17 @@ export class AdminPage implements OnDestroy {
   readonly nfcTerminalId = signal(this.readStoredNfcTerminalId());
   /** Registrierte Terminals (mit Token) für die Auswahl; null = noch nicht geladen. */
   readonly nfcTerminals = signal<string[] | null>(null);
-  /** Auswahl-Optionen; ohne geladene Liste bleibt die gespeicherte ID wählbar. */
+  /**
+   * Auswahl-Optionen. Ohne geladene oder ohne registrierte Terminals bleibt die gespeicherte ID
+   * wählbar: Terminals ohne Token melden Scans trotzdem (/api/kiosk/identify).
+   */
   readonly nfcTerminalOptions = computed(() => {
+    const terminals = this.nfcTerminals();
+    if (terminals?.length) {
+      return terminals;
+    }
     const selected = this.nfcTerminalId();
-    return this.nfcTerminals() ?? (selected ? [selected] : []);
+    return selected ? [selected] : [];
   });
   readonly latestNfcEvent = signal<NfcClockEvent | null>(null);
   /** Terminal des letzten Scans, wenn es ein anderes registriertes Terminal als das gewählte ist. */
@@ -867,21 +874,22 @@ export class AdminPage implements OnDestroy {
 
   /**
    * Lädt die registrierten Terminals für die Auswahl und startet danach das Polling.
-   * Ist die gespeicherte Terminal-ID unbekannt (Tippfehler, alter Default), wird das erste Terminal gewählt.
+   * Ist die gespeicherte Terminal-ID unbekannt (Tippfehler, alter Default), wird das erste registrierte
+   * Terminal gewählt.
    */
   private loadNfcTerminalsAndPoll(): void {
     this.adminApi.getTerminalStatuses(this.adminPassword()).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: statuses => {
         const terminals = statuses.map(status => status.terminalId);
         this.nfcTerminals.set(terminals);
-        if (terminals.length === 0) {
-          this.latestNfcEvent.set(null);
-          this.nfcMessage.set('Keine Terminals registriert. Terminal-Token in den Einstellungen anlegen.');
-          return;
-        }
-
-        if (!this.containsTerminal(terminals, this.nfcTerminalId())) {
-          this.storeNfcTerminalId(terminals[0]);
+        // Ohne registrierte Terminals weiter abfragen: Terminals ohne Token (ältere Pis)
+        // melden ihre Scans trotzdem, sonst ließe sich keine Karte mehr zuweisen.
+        if (terminals.length > 0) {
+          // Schreibweise der registrierten ID übernehmen, damit die Auswahl sie anzeigt.
+          const registered = terminals.find(terminal => this.sameTerminal(terminal, this.nfcTerminalId()));
+          if (registered !== this.nfcTerminalId()) {
+            this.storeNfcTerminalId(registered ?? terminals[0]);
+          }
         }
         this.startNfcPolling();
       },
