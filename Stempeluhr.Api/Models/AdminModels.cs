@@ -71,6 +71,10 @@ public sealed record AdminSettingsDto(
     public int? SickActivityId { get; init; }
     public int? FlexDayActivityId { get; init; }
     public string AbsenceDayStart { get; init; } = RuntimeSettings.DefaultAbsenceDayStart;
+    public string? ServiceWifiSsid { get; init; }
+    public bool HasServiceWifiPsk { get; init; }
+    public bool ServiceWifiWpa3Only { get; init; }
+    public bool HasMaintenancePin { get; init; }
 
     public static AdminSettingsDto FromSettings(RuntimeSettings settings)
     {
@@ -98,6 +102,10 @@ public sealed record AdminSettingsDto(
             SickActivityId = settings.SickActivityId,
             FlexDayActivityId = settings.FlexDayActivityId,
             AbsenceDayStart = settings.AbsenceDayStart,
+            ServiceWifiSsid = settings.ServiceWifiSsid,
+            HasServiceWifiPsk = !string.IsNullOrEmpty(settings.ServiceWifiPsk),
+            ServiceWifiWpa3Only = settings.ServiceWifiWpa3Only,
+            HasMaintenancePin = !string.IsNullOrEmpty(settings.MaintenancePinHash),
         };
     }
 }
@@ -206,10 +214,38 @@ public sealed record AdminSettingsUpdateDto(
     int? VacationActivityId = null,
     int? SickActivityId = null,
     int? FlexDayActivityId = null,
-    string? AbsenceDayStart = null)
+    string? AbsenceDayStart = null,
+    string? ServiceWifiSsid = null,
+    string? ServiceWifiPsk = null,
+    bool? ServiceWifiWpa3Only = null,
+    string? MaintenancePin = null,
+    bool ClearMaintenancePin = false)
 {
     public RuntimeSettings ToSettings(RuntimeSettings current)
     {
+        // Wartungs-WLAN: null (alter Client) behält alles, eine leere SSID
+        // schaltet es samt Passwort ab. Kein Trim: Leerzeichen am Rand sind
+        // Teil einer SSID. Das Passwort ist write-only: leer behält das
+        // gespeicherte, aber nur für dieselbe SSID - zu einem anderen
+        // Hotspot passt es nicht (ValidateMaintenance verlangt dann ein neues).
+        var serviceWifiSsid = ServiceWifiSsid is null ? current.ServiceWifiSsid
+            : string.IsNullOrWhiteSpace(ServiceWifiSsid) ? null : ServiceWifiSsid;
+        var serviceWifiPsk = serviceWifiSsid is null ? null
+            : !string.IsNullOrEmpty(ServiceWifiPsk) ? ServiceWifiPsk
+            : serviceWifiSsid == current.ServiceWifiSsid ? current.ServiceWifiPsk
+            : null;
+        // null (alter Client) behält die Wahl; ohne Wartungs-WLAN gibt es keine.
+        var serviceWifiWpa3Only = serviceWifiSsid is not null
+            && (ServiceWifiWpa3Only ?? current.ServiceWifiWpa3Only);
+        // Vertrag: ValidateMaintenancePin lief vorher. Eine ungültige PIN wird
+        // nicht still übergangen, sonst hielte der Admin sie für gesetzt.
+        var newPin = NewMaintenancePin;
+        if (newPin is not null && TerminalMaintenance.ValidatePin(newPin) is { } pinError)
+            throw new ArgumentException(pinError, nameof(MaintenancePin));
+        var maintenancePinHash = ClearMaintenancePin ? null
+            : newPin is null ? current.MaintenancePinHash
+            : TerminalMaintenance.HashPin(newPin);
+
         var employees = Employees.Select(employee => employee.ToSettings(current)).ToList();
         return new RuntimeSettings
         {
@@ -253,8 +289,48 @@ public sealed record AdminSettingsUpdateDto(
             AbsenceDayStart = IncludesAbsences ? AbsenceDayStart ?? RuntimeSettings.DefaultAbsenceDayStart : current.AbsenceDayStart,
             PauseEndRecoveryToleranceSeconds = current.PauseEndRecoveryToleranceSeconds,
             TerminalTokens = current.TerminalTokens,
+            ServiceWifiSsid = serviceWifiSsid,
+            ServiceWifiPsk = serviceWifiPsk,
+            ServiceWifiWpa3Only = serviceWifiWpa3Only,
+            MaintenancePinHash = maintenancePinHash,
             Employees = employees
         };
+    }
+
+    private string? NewMaintenancePin =>
+        ClearMaintenancePin || string.IsNullOrWhiteSpace(MaintenancePin) ? null : MaintenancePin.Trim();
+
+    /// <summary>
+    /// Prüft eine neue Wartungs-PIN im Klartext, vor <see cref="ToSettings"/>:
+    /// eine ungültige PIN wird so gar nicht erst (teuer) gehasht.
+    /// </summary>
+    public string? ValidateMaintenancePin()
+    {
+        if (NewMaintenancePin is not { } pin) return null;
+        if (TerminalMaintenance.ValidatePin(pin) is { } pinError) return pinError;
+        // Sonst entsperrt eine Mitarbeiter-PIN die WLAN-Einstellung.
+        return Employees.Any(employee => employee.Pin?.Trim() == pin)
+            ? "Die Wartungs-PIN darf keiner Mitarbeiter-PIN entsprechen."
+            : null;
+    }
+
+    /// <summary>Prüft Wartungs-WLAN und -PIN; <paramref name="result"/> ist das Ergebnis von <see cref="ToSettings"/>.</summary>
+    public string? ValidateMaintenance(RuntimeSettings result, PinMatchCache cache)
+    {
+        if (TerminalMaintenance.ValidateServiceWifi(result.ServiceWifiSsid, result.ServiceWifiPsk) is { } wifiError)
+            return wifiError;
+        // Eine neue PIN hat ValidateMaintenancePin im Klartext gegen alle
+        // Mitarbeiter geprüft. Sonst gilt der gespeicherte Hash weiter: Keine
+        // Mitarbeiter-PIN darf ihm entsprechen - auch keine, die später, von
+        // Hand in settings.json oder per Restore dazukam. Geprüft wird deshalb
+        // jede PIN im Format der Wartungs-PIN; der Cache rechnet PBKDF2 pro
+        // Hash und PIN nur einmal. Der erste Save nach dem Start bzw. nach
+        // einer neuen Wartungs-PIN kostet so je Kandidat einmal ~100 ms.
+        if (NewMaintenancePin is not null || result.MaintenancePinHash is not { } stored) return null;
+        return result.Employees.Any(employee => employee.Pin is { } pin
+                && TerminalMaintenance.ValidatePin(pin) is null && cache.Matches(pin, stored))
+            ? "Eine Mitarbeiter-PIN entspricht der Wartungs-PIN. Bitte eine andere Wartungs-PIN setzen."
+            : null;
     }
 
     /// <summary>

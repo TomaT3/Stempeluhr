@@ -10,8 +10,10 @@
 #   4. Health-Check über http://127.0.0.1:<port>/health - schlägt er fehl,
 #      zurück auf die vorherige Version
 #   0. vorab bei jedem Lauf: journald-Konfiguration, Kiosk-Touch
-#      (kiosk_setup.py) und WLAN-Recovery-Units des installierten Bundles
-#      nachziehen
+#      (kiosk_setup.py), WLAN-Recovery- und WLAN-Einstellungs-Units des
+#      installierten Bundles nachziehen; ist der Server erreichbar, das
+#      Wartungs-WLAN und den Hash der Wartungs-PIN abgleichen
+#      (wifi_setup.py sync-service)
 #   5. nach jedem erfolgreichen Lauf: fehlt der PC/SC-Fix, die Paketmigration
 #      des installierten Bundles losgelöst starten (pcsc_maintenance.py);
 #      eine durch Neustart unterbrochene Migration auch nach Fehlern zurückrollen
@@ -37,6 +39,17 @@ UNITS=(stempeluhr-nfc-agent.service stempeluhr-nfc-agent-update.service stempelu
 # Not part of UNITS: older bundles (rollback) do not contain them.
 WIFI_UNITS=(stempeluhr-wifi-recovery.service stempeluhr-wifi-recovery.timer)
 WIFI_ENABLED_MARKER="$BASE_DIR/.wifi-recovery-enabled"
+# WLAN setup at the display (wifi_setup.py); also missing in older bundles.
+SETUP_UNITS=(stempeluhr-wifi-setup.socket stempeluhr-wifi-setup@.service)
+SETUP_ENABLED_MARKER="$BASE_DIR/.wifi-setup-enabled"
+# daemon-reload does not re-bind a listening socket: a changed socket unit
+# (e.g. MaxConnections) needs a restart, retried until it succeeds.
+SETUP_RESTART_MARKER="$BASE_DIR/.wifi-setup-socket-restart"
+# Held by wifi_setup.py during a connect and its rollback (CONNECT_LOCK).
+# This run takes it, too, before it restarts the socket or the agent or
+# rewrites the maintenance WLAN: none of that may hit a running WLAN change.
+SETUP_LOCK="${STEMPELUHR_WIFI_SETUP_LOCK:-/run/stempeluhr-wifi-setup.lock}"
+SETUP_LOCK_HELD=0
 DEV_VERSION="0.0.0-local"
 
 FORCE=0
@@ -165,11 +178,88 @@ install_wifi_recovery() { # release-verzeichnis (auch alte Bundles ohne Dateien)
   fi
 }
 
+# Takes the WLAN setup lock for the rest of this run (fd 8); fails while a
+# WLAN change at the display runs. Without flock or lock file nothing is
+# blocked - an update must never get stuck on it.
+hold_wifi_setup_lock() {
+  [ "$SETUP_LOCK_HELD" -eq 1 ] && return 0
+  command -v flock >/dev/null 2>&1 || return 0
+  { exec 8>>"$SETUP_LOCK"; } 2>/dev/null || return 0
+  flock -n 8 || return 1
+  SETUP_LOCK_HELD=1
+}
+
+# Socket of the root helper for the WLAN setup at the display. Same rules as
+# the WLAN recovery: bundles without it change nothing, the socket is enabled
+# once, errors only warn.
+install_wifi_setup() { # release-verzeichnis (auch alte Bundles ohne Dateien)
+  local changed=0 reloaded=1 unit
+  for unit in "${SETUP_UNITS[@]}"; do
+    [ -f "$1/$unit" ] || return 0
+  done
+  for unit in "${SETUP_UNITS[@]}"; do
+    if ! cmp -s "$1/$unit" "$SYSTEMD_DIR/$unit"; then
+      if ! install -m 644 "$1/$unit" "$SYSTEMD_DIR/$unit"; then
+        log "WARNUNG: WLAN-Einstellung nicht installiert; nächster Versuch beim nächsten Update-Lauf." >&2
+        return 0
+      fi
+      changed=1
+      if [ "$unit" = stempeluhr-wifi-setup.socket ] && [ -f "$SETUP_ENABLED_MARKER" ]; then
+        touch "$SETUP_RESTART_MARKER"
+      fi
+    fi
+  done
+  # A pending restart reloads again: a failed reload left the old unit loaded.
+  if [ "$changed" -eq 1 ] || [ -f "$SETUP_RESTART_MARKER" ]; then
+    if ! "$SYSTEMCTL" daemon-reload; then
+      reloaded=0
+      log "WARNUNG: systemctl daemon-reload nach Installation der WLAN-Einstellung fehlgeschlagen." >&2
+    fi
+  fi
+  if [ -f "$SETUP_RESTART_MARKER" ]; then
+    if [ "$reloaded" -eq 0 ]; then
+      # Restarting now would keep the old unit and drop the marker.
+      log "WARNUNG: Socket der WLAN-Einstellung nicht neu gestartet (daemon-reload fehlgeschlagen); nächster Versuch beim nächsten Update-Lauf." >&2
+    elif ! hold_wifi_setup_lock; then
+      # A connect holds the lock until its rollback is done.
+      log "Socket der WLAN-Einstellung nicht neu gestartet: WLAN-Umstellung läuft; nächster Versuch beim nächsten Update-Lauf."
+    elif "$SYSTEMCTL" restart stempeluhr-wifi-setup.socket; then
+      rm -f "$SETUP_RESTART_MARKER"
+      log "Socket der WLAN-Einstellung mit geänderter Unit neu gestartet."
+    else
+      log "WARNUNG: Socket der WLAN-Einstellung nicht neu gestartet; nächster Versuch beim nächsten Update-Lauf." >&2
+    fi
+  fi
+  if [ ! -f "$SETUP_ENABLED_MARKER" ]; then
+    if "$SYSTEMCTL" enable --now stempeluhr-wifi-setup.socket; then
+      touch "$SETUP_ENABLED_MARKER"
+      log "WLAN-Einstellung am Display aktiviert (journalctl -t stempeluhr-wifi-setup)."
+    else
+      log "WARNUNG: Socket der WLAN-Einstellung nicht aktiviert; nächster Versuch beim nächsten Update-Lauf." >&2
+    fi
+  fi
+}
+
+# Maintenance WLAN and PIN hash from the server (terminal token). Without a
+# token, offline or with an older bundle nothing changes.
+sync_maintenance() { # release-verzeichnis
+  [ -f "$1/wifi_setup.py" ] || return 0
+  # Not while the helper is in "connection up" or its rollback.
+  if ! hold_wifi_setup_lock; then
+    log "WLAN-Umstellung am Display läuft - Wartungs-WLAN beim nächsten Update-Lauf abgleichen."
+    return 0
+  fi
+  if ! python3 "$1/wifi_setup.py" sync-service --config "$CONFIG"; then
+    log "WARNUNG: Wartungs-WLAN nicht abgeglichen; nächster Versuch beim nächsten Update-Lauf." >&2
+  fi
+}
+
 # The first upgrade may still run an old updater. On its next timer run,
 # configure the installed bundle before same-version/offline early exits.
 install_journal "$BASE_DIR/current"
 configure_kiosk "$BASE_DIR/current"
 install_wifi_recovery "$BASE_DIR/current"
+install_wifi_setup "$BASE_DIR/current"
 
 [ -f "$CONFIG" ] || fail "$CONFIG fehlt"
 BASE_URL="$(json_value "$CONFIG" api_base_url "")"
@@ -183,6 +273,10 @@ if ! curl -fsS --max-time 20 -o "$WORK/agent.json" "$BASE_URL/pi/agent.json"; th
   log "Server nicht erreichbar oder liefert kein Agent-Bundle - nächster Versuch später."
   exit 0
 fi
+
+# The server is reachable: keep the maintenance WLAN current, also when the
+# agent version stays the same.
+sync_maintenance "$BASE_DIR/current"
 
 VERSION="$(json_value "$WORK/agent.json" version "")"
 FILE="$(json_value "$WORK/agent.json" file "")"
@@ -233,6 +327,7 @@ install_units() { # release-verzeichnis
   fi
   install_journal "$1"
   install_wifi_recovery "$1"
+  install_wifi_setup "$1"
 }
 
 switch_current() { # release-verzeichnis
@@ -252,22 +347,32 @@ agent_healthy() { # erwartete-version
   return 1
 }
 
+# A restart of the agent would end the dialog's session and lose the result
+# of a running WLAN change (it lives in the agent): wait for the next run.
+if ! hold_wifi_setup_lock; then
+  log "WLAN-Umstellung am Display läuft - Agent $VERSION beim nächsten Update-Lauf."
+  exit 0
+fi
+
 install_units "$RELEASE"
 switch_current "$RELEASE"
-"$SYSTEMCTL" restart stempeluhr-nfc-agent.service
+# 8>&-: the agent must not inherit the lock.
+"$SYSTEMCTL" restart stempeluhr-nfc-agent.service 8>&-
 
 if ! agent_healthy "$VERSION"; then
   log "Agent $VERSION meldet sich nicht über /health - Rollback." >&2
   if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
     install_units "$PREVIOUS"
     switch_current "$PREVIOUS"
-    "$SYSTEMCTL" restart stempeluhr-nfc-agent.service
+    "$SYSTEMCTL" restart stempeluhr-nfc-agent.service 8>&-
     log "Zurück auf $(cat "$PREVIOUS/VERSION" 2>/dev/null || echo "$PREVIOUS")." >&2
   fi
   exit 1
 fi
 
 log "Agent $VERSION läuft."
+# The first bundle with wifi_setup.py need not wait for the next run.
+sync_maintenance "$RELEASE"
 
 # Alte Releases aufräumen, das aktive bleibt immer erhalten.
 ACTIVE="$(readlink -f "$BASE_DIR/current")"

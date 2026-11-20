@@ -97,6 +97,10 @@ cat > "$WORK/systemctl" <<EOF
 #!/usr/bin/env bash
 case "\$1" in
   restart)
+    if [ "\$2" = "stempeluhr-wifi-setup.socket" ]; then
+      echo "\$*" >> "$WORK/systemctl.log"
+      exit 0
+    fi
     if [ "\$2" = "systemd-journald.service" ]; then
       echo restart >> "$WORK/journald-restarts"
       [ -f "$WORK/fail-journald" ] && exit 1
@@ -108,11 +112,33 @@ case "\$1" in
       --config "$WORK/config.json" > "$WORK/agent.log" 2>&1 &
     echo \$! > "$WORK/agent.pid"
     ;;
+  daemon-reload)
+    echo "\$*" >> "$WORK/systemctl.log"
+    [ -f "$WORK/fail-daemon-reload" ] && exit 1
+    exit 0
+    ;;
   *) echo "\$*" >> "$WORK/systemctl.log" ;;
 esac
 EOF
 chmod +x "$WORK/systemctl"
 wifi_enables() { grep -c '^enable --now stempeluhr-wifi-recovery.timer$' "$WORK/systemctl.log" 2>/dev/null || true; }
+setup_restarts() { grep -c '^restart stempeluhr-wifi-setup.socket$' "$WORK/systemctl.log" 2>/dev/null || true; }
+setup_enables() { grep -c '^enable --now stempeluhr-wifi-setup.socket$' "$WORK/systemctl.log" 2>/dev/null || true; }
+
+# Fake nmcli for the maintenance WLAN: records the call and lists the keyfiles
+# in \$WORK/nm as loaded profiles, like NetworkManager after "connection load".
+mkdir -p "$WORK/nm"
+cat > "$WORK/bin/nmcli" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$WORK/nmcli.log"
+if [[ "\$*" == *NAME,UUID,TYPE,DEVICE* ]]; then
+  for file in "$WORK"/nm/*.nmconnection; do
+    [ -f "\$file" ] || continue
+    echo "\$(sed -n 's/^id=//p' "\$file"):\$(sed -n 's/^uuid=//p' "\$file"):802-11-wireless:"
+  done
+fi
+EOF
+chmod +x "$WORK/bin/nmcli"
 
 run_update() {
   STEMPELUHR_AGENT_CONFIG="$WORK/config.json" \
@@ -122,6 +148,8 @@ run_update() {
   STEMPELUHR_HEALTH_TIMEOUT=8 \
   STEMPELUHR_PCSC_STATE="$WORK/pcsc-state" \
   STEMPELUHR_OS_RELEASE="$WORK/os-release" \
+  STEMPELUHR_NM_CONNECTIONS="$WORK/nm" \
+  STEMPELUHR_WIFI_SETUP_LOCK="$WORK/wifi-setup.lock" \
   PATH="$WORK/bin:$PATH" \
   SYSTEMCTL="$WORK/systemctl" \
     bash "$AGENT_SRC/update.sh" "$@" > "$WORK/update.log" 2>&1
@@ -170,6 +198,13 @@ grep -q "current/stempeluhr_nfc_agent.py" "$WORK/systemd/stempeluhr-nfc-agent.se
   && ok "WLAN-Recovery im Bundle, Units installiert" || bad "WLAN-Recovery fehlt"
 [ "$(wifi_enables)" = 1 ] && [ -f "$WORK/opt/.wifi-recovery-enabled" ] \
   && ok "WLAN-Recovery-Timer einmal aktiviert" || bad "Timer-Aktivierung: $(wifi_enables)x"
+[ -f "$WORK/opt/current/wifi_setup.py" ] && [ -f "$WORK/opt/current/maintenance_access.py" ] \
+  && [ -f "$WORK/systemd/stempeluhr-wifi-setup.socket" ] && [ -f "$WORK/systemd/stempeluhr-wifi-setup@.service" ] \
+  && ok "WLAN-Einstellung im Bundle, Units installiert" || bad "WLAN-Einstellung fehlt"
+[ "$(setup_enables)" = 1 ] && [ -f "$WORK/opt/.wifi-setup-enabled" ] \
+  && ok "Socket der WLAN-Einstellung einmal aktiviert" || bad "Socket-Aktivierung: $(setup_enables)x"
+[ ! -f "$WORK/nmcli.log" ] && [ ! -f "$WORK/maintenance.json" ] \
+  && ok "Ohne Terminal-Token kein Abgleich des Wartungs-WLANs" || bad "Abgleich ohne Token"
 
 # Existing config deliberately has no terminal_token. Capability discovery must
 # fail explicitly while the original scan bridge stays usable after update.
@@ -199,6 +234,32 @@ grep -q 'WARNUNG: Kiosk-Touch-Einrichtung fehlgeschlagen' "$WORK/update.log" \
 [ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent läuft unverändert weiter" || bad "Agent neu gestartet"
 cp "$AGENT_SRC/kiosk_setup.py" "$KIOSK_SETUP"
 
+say "2b2: Geänderte Socket-Unit der WLAN-Einstellung"
+[ "$(setup_restarts)" = 0 ] && ok "Erstinstallation startet den Socket nicht neu" || bad "Neustart bei Erstinstallation"
+echo "# alt" >> "$WORK/systemd/stempeluhr-wifi-setup.socket"
+# A connect is running (lock held): no restart now, but next time.
+exec 9>"$WORK/wifi-setup.lock"
+flock 9
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 0 ] && grep -q 'nicht neu gestartet' "$WORK/update.log" \
+  && ok "Kein Socket-Neustart während einer WLAN-Umstellung" || bad "Neustart trotz Sperre ($(setup_restarts)x)"
+exec 9>&-
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 1 ] && [ ! -f "$WORK/opt/.wifi-setup-socket-restart" ] \
+  && ok "Socket nach geänderter Unit neu gestartet" || bad "Socket-Neustarts: $(setup_restarts)x"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 1 ] && ok "Unveränderte Unit: kein weiterer Neustart" || bad "Socket-Neustarts: $(setup_restarts)x"
+# daemon-reload fails: a restart would keep the old unit and drop the marker.
+echo "# alt" >> "$WORK/systemd/stempeluhr-wifi-setup.socket"
+touch "$WORK/fail-daemon-reload"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 1 ] && [ -f "$WORK/opt/.wifi-setup-socket-restart" ] \
+  && ok "Nach gescheitertem daemon-reload kein Neustart, Merker bleibt" || bad "Socket-Neustarts: $(setup_restarts)x"
+rm "$WORK/fail-daemon-reload"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(setup_restarts)" = 2 ] && [ ! -f "$WORK/opt/.wifi-setup-socket-restart" ] \
+  && ok "Nächster Lauf lädt neu und startet den Socket" || bad "Socket-Neustarts: $(setup_restarts)x"
+
 say "2c: WLAN-Recovery nach Upgrade durch alten Updater"
 # The old updater installed the bundle but neither these units nor the timer.
 rm "$WORK/systemd/stempeluhr-wifi-recovery.service" "$WORK/systemd/stempeluhr-wifi-recovery.timer" \
@@ -214,8 +275,48 @@ cmp -s "$AGENT_SRC/stempeluhr-wifi-recovery.service" "$WORK/systemd/stempeluhr-w
   && ok "Geänderte Unit wird ersetzt" || bad "Unit nicht ersetzt"
 [ "$(wifi_enables)" = 2 ] && ok "Bereits eingerichteter Timer wird nicht erneut aktiviert" || bad "Timer erneut aktiviert"
 
+say "2d: Wartungs-WLAN und PIN-Hash vom Server"
+cp "$WORK/config.json" "$WORK/config.json.bak"
+python3 - "$WORK/config.json" <<'PY'
+import json, sys
+config = json.load(open(sys.argv[1]))
+config["terminal_token"] = "t" * 40
+json.dump(config, open(sys.argv[1], "w"))
+PY
+PIN_HASH="pbkdf2-sha256\$200000\$$(printf 'ab%.0s' $(seq 1 16))\$$(printf 'cd%.0s' $(seq 1 32))"
+mkdir -p "$WORK/www/api/kiosk"
+printf '{"serviceWifi": {"ssid": "Stempeluhr-Service", "psk": "hotspot-geheim"}, "maintenancePinHash": "%s"}\n' \
+  "$PIN_HASH" > "$WORK/www/api/kiosk/maintenance"
+if run_update; then ok "endet erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+grep -q '^autoconnect-priority=-10$' "$WORK/nm/stempeluhr-service.nmconnection" 2>/dev/null \
+  && [ "$(stat -c %a "$WORK/nm/stempeluhr-service.nmconnection")" = 600 ] \
+  && ok "Wartungs-WLAN als Keyfile (0600, Priorität -10) angelegt" || bad "Keyfile fehlt: $(tail -3 "$WORK/update.log")"
+grep -q "connection load $WORK/nm/stempeluhr-service.nmconnection" "$WORK/nmcli.log" \
+  && ! grep -q hotspot-geheim "$WORK/nmcli.log" "$WORK/update.log" \
+  && ok "Profil geladen, Passwort weder in nmcli-Aufrufen noch im Log" || bad "nmcli-Aufrufe: $(cat "$WORK/nmcli.log")"
+grep -q "$PIN_HASH" "$WORK/maintenance.json" 2>/dev/null && ok "PIN-Hash neben config.json abgelegt" || bad "maintenance.json fehlt"
+LOADS_BEFORE="$(grep -c 'connection load' "$WORK/nmcli.log")"
+if run_update; then ok "zweiter Lauf erfolgreich"; else bad "Fehler: $(tail -3 "$WORK/update.log")"; fi
+[ "$(grep -c 'connection load' "$WORK/nmcli.log")" = "$LOADS_BEFORE" ] && ! grep -q 'eingerichtet' "$WORK/update.log" \
+  && ok "Unveränderte Einstellungen lösen nichts aus" || bad "Profil unnötig neu geladen"
+[ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && ok "Agent dabei nicht neu gestartet" || bad "Agent neu gestartet"
+mv "$WORK/config.json.bak" "$WORK/config.json"
+rm -rf "$WORK/www/api"
+
 say "3: Server liefert neue Version"
 publish 1.1.0
+# A WLAN change at the display runs: neither agent restart nor sync-service.
+PID_BEFORE="$(cat "$WORK/agent.pid")"
+NMCLI_BEFORE="$(cat "$WORK/nmcli.log" 2>/dev/null | wc -l)"
+exec 9>"$WORK/wifi-setup.lock"
+flock 9
+if run_update; then ok "Update während WLAN-Umstellung endet ohne Fehler"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi
+[ "$(cat "$WORK/agent.pid")" = "$PID_BEFORE" ] && [ "$(health_version)" != "1.1.0" ] \
+  && grep -q 'Agent 1.1.0 beim nächsten Update-Lauf' "$WORK/update.log" \
+  && ok "Agent wird während einer WLAN-Umstellung nicht neu gestartet" || bad "Agent neu gestartet trotz Sperre"
+[ "$(cat "$WORK/nmcli.log" 2>/dev/null | wc -l)" = "$NMCLI_BEFORE" ] && grep -q 'Wartungs-WLAN beim nächsten' "$WORK/update.log" \
+  && ok "Wartungs-WLAN wird während einer WLAN-Umstellung nicht angefasst" || bad "sync-service trotz Sperre"
+exec 9>&-
 rm "$WORK/journald/stempeluhr.conf"
 touch "$WORK/fail-journald"
 if run_update; then ok "Update endet erfolgreich"; else bad "Update: $(tail -3 "$WORK/update.log")"; fi

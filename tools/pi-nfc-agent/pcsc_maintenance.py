@@ -43,6 +43,10 @@ RESULT_WAIT_SECONDS = 25 * 60
 # unattended-upgrades may hold the dpkg lock for several minutes.
 DPKG_LOCK_WAIT_SECONDS = 10 * 60
 AGENT_SERVICE = "stempeluhr-nfc-agent.service"
+# Held by wifi_setup.py during a WLAN change at the display and its rollback.
+WIFI_SETUP_LOCK = Path(os.environ.get("STEMPELUHR_WIFI_SETUP_LOCK", "/run/stempeluhr-wifi-setup.lock"))
+# RuntimeMaxSec of stempeluhr-wifi-setup@.service: the helper never holds it longer.
+WIFI_SETUP_WAIT_SECONDS = 6 * 60
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
 BASE = Path(os.environ.get("STEMPELUHR_AGENT_DIR", "/opt/stempeluhr-nfc-agent"))
 STATE = Path(os.environ.get("STEMPELUHR_PCSC_STATE", "/var/lib/stempeluhr-pcsc-migration"))
@@ -98,6 +102,37 @@ def locked():
     BASE.mkdir(parents=True, exist_ok=True)
     with (BASE / ".maintenance.lock").open("a") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+@contextmanager
+def wifi_setup_paused(wait_seconds=None):
+    """Holds the lock of a WLAN change at the display (wifi_setup.py CONNECT_LOCK).
+
+    Its outcome lives in the agent, and a stopped agent ends the dialog's
+    session: the agent is stopped only once a running change and its rollback
+    are done. Meanwhile the display reports a running update. Without the lock
+    file (bundle without WLAN setup) or after the wait nothing is blocked - the
+    helper ends after RuntimeMaxSec anyway.
+    """
+    wait_seconds = WIFI_SETUP_WAIT_SECONDS if wait_seconds is None else wait_seconds
+    try:
+        handle = WIFI_SETUP_LOCK.open("a")
+    except OSError:
+        yield
+        return
+    with handle:
+        deadline = None
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                deadline = deadline or time.monotonic() + wait_seconds
+                if time.monotonic() >= deadline:
+                    print("WLAN-Umstellung am Display läuft noch; Paketwechsel trotzdem fortgesetzt", file=sys.stderr)
+                    break
+                time.sleep(2)
         yield
 
 
@@ -491,41 +526,43 @@ def rollback(folder, snapshot):
         if current is not None and current[0] not in (expected[0], snapshot.get("targetVersion")):
             recover_pcsc_services(snapshot)
             raise ValueError("PC/SC-Version wurde außerhalb der Migration verändert; kein automatisches Downgrade")
-    command("systemctl", "stop", AGENT_SERVICE)
-    try:
-        pause_pcsc()
-        reset_pcsc_runtime()
-        # Finish a dpkg run interrupted by a killed activation before reinstalling.
-        # This rollback unit intentionally has no systemd runtime limit.
-        configure_interrupted_packages()
-        originals = list((folder / "old").glob("*.deb"))
-        if originals:
-            command(*APT_INSTALL, "--allow-downgrades", "install", *(str(p) for p in originals), timeout=None)
-        for name in snapshot["conffiles"]:
-            relative = Path(name)
-            if relative.is_absolute() or ".." in relative.parts:
-                raise ValueError("Ungültiger Konfigurationspfad in Originalsicherung")
-            shutil.copy2(folder / "pcsc-config" / relative, Path("/etc") / relative)
-        restore_auto(snapshot)
-        for p, expected in snapshot["originals"].items():
-            if installed(p) != tuple(expected):
-                raise ValueError("Originalversion nach Rückinstallation nicht wiederhergestellt")
-        restore_usb_rule(folder, snapshot)
-        resume_pcsc()
-    except Exception:
-        # Even a failed rollback must not leave the terminal without NFC.
-        recover_pcsc_services(snapshot)
-        raise
-    if snapshot["agentActive"]:
-        command("systemctl", "start", AGENT_SERVICE)
-    # The restored packages are the known-good state. A kiosk browser that
-    # stopped sending heartbeats is not fixed by repeating the rollback.
-    verify(folder, {**snapshot, "browserAlive": False}, require_fix=False)
-    if not snapshot["pcscActive"] and not snapshot["agentActive"]:
-        command("systemctl", "stop", "pcscd.service")
-        if not snapshot.get("socketActive", True):
-            command("systemctl", "stop", "pcscd.socket")
-    write_result(folder, "rolled-back", "Originalpakete wiederhergestellt; Funktionsprüfung vor Ort weiterhin erforderlich")
+    # A WLAN change at the display lives in the agent: let it finish first.
+    with wifi_setup_paused():
+        command("systemctl", "stop", AGENT_SERVICE)
+        try:
+            pause_pcsc()
+            reset_pcsc_runtime()
+            # Finish a dpkg run interrupted by a killed activation before reinstalling.
+            # This rollback unit intentionally has no systemd runtime limit.
+            configure_interrupted_packages()
+            originals = list((folder / "old").glob("*.deb"))
+            if originals:
+                command(*APT_INSTALL, "--allow-downgrades", "install", *(str(p) for p in originals), timeout=None)
+            for name in snapshot["conffiles"]:
+                relative = Path(name)
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError("Ungültiger Konfigurationspfad in Originalsicherung")
+                shutil.copy2(folder / "pcsc-config" / relative, Path("/etc") / relative)
+            restore_auto(snapshot)
+            for p, expected in snapshot["originals"].items():
+                if installed(p) != tuple(expected):
+                    raise ValueError("Originalversion nach Rückinstallation nicht wiederhergestellt")
+            restore_usb_rule(folder, snapshot)
+            resume_pcsc()
+        except Exception:
+            # Even a failed rollback must not leave the terminal without NFC.
+            recover_pcsc_services(snapshot)
+            raise
+        if snapshot["agentActive"]:
+            command("systemctl", "start", AGENT_SERVICE)
+        # The restored packages are the known-good state. A kiosk browser that
+        # stopped sending heartbeats is not fixed by repeating the rollback.
+        verify(folder, {**snapshot, "browserAlive": False}, require_fix=False)
+        if not snapshot["pcscActive"] and not snapshot["agentActive"]:
+            command("systemctl", "stop", "pcscd.service")
+            if not snapshot.get("socketActive", True):
+                command("systemctl", "stop", "pcscd.socket")
+        write_result(folder, "rolled-back", "Originalpakete wiederhergestellt; Funktionsprüfung vor Ort weiterhin erforderlich")
 
 
 def activate(folder):
@@ -535,32 +572,34 @@ def activate(folder):
             write_result(folder, "unchanged", "PC/SC-Pakete seit Vorprüfung verändert; Paketwechsel ohne Dienstunterbrechung abgebrochen")
             subprocess.run(["systemctl", "stop", snapshot["rollbackUnit"] + ".timer"], check=False)
             return
-        try:
-            command("systemctl", "stop", AGENT_SERVICE)
-            pause_pcsc()
-            reset_pcsc_runtime()
-            # The activation unit supplies its own outer deadline and rollback;
-            # do not interrupt dpkg early with the timeout for read-only checks.
-            command(*APT_INSTALL, "install", *(str(p) for p in (folder / "new").glob("*.deb")), timeout=None)
-            restore_auto(snapshot)
-            install_usb_rule()
-            resume_pcsc()
-            if snapshot["agentActive"]:
-                command("systemctl", "start", AGENT_SERVICE)
-            verify(folder, snapshot)
-            write_result(folder, "ok", "Fixstand und Leser geprüft; echter Scan und 24h-Vergleich noch ausstehend")
-            # Once committed, even an already dispatched timer skips rollback.
-            subprocess.run(["systemctl", "stop", snapshot["rollbackUnit"] + ".timer"], check=False)
-        except Exception as error:
-            print("Aktivierung fehlgeschlagen; Rückinstallation:", type(error).__name__, file=sys.stderr)
-            write_result(folder, "failed", "Aktivierung fehlgeschlagen; Rückinstallation läuft")
-            # A separate unit without the activation's time limit, so it is
-            # never killed mid-dpkg; it starts once this unit releases the lock.
+        # A WLAN change at the display lives in the agent: let it finish first.
+        with wifi_setup_paused():
             try:
-                detached(folder, snapshot["rollbackUnit"] + "-now", "--rollback")
-            except Exception:
-                print("Sofortige Rückinstallation nicht gestartet; Rollback-Timer übernimmt", file=sys.stderr)
-            raise
+                command("systemctl", "stop", AGENT_SERVICE)
+                pause_pcsc()
+                reset_pcsc_runtime()
+                # The activation unit supplies its own outer deadline and rollback;
+                # do not interrupt dpkg early with the timeout for read-only checks.
+                command(*APT_INSTALL, "install", *(str(p) for p in (folder / "new").glob("*.deb")), timeout=None)
+                restore_auto(snapshot)
+                install_usb_rule()
+                resume_pcsc()
+                if snapshot["agentActive"]:
+                    command("systemctl", "start", AGENT_SERVICE)
+                verify(folder, snapshot)
+                write_result(folder, "ok", "Fixstand und Leser geprüft; echter Scan und 24h-Vergleich noch ausstehend")
+                # Once committed, even an already dispatched timer skips rollback.
+                subprocess.run(["systemctl", "stop", snapshot["rollbackUnit"] + ".timer"], check=False)
+            except Exception as error:
+                print("Aktivierung fehlgeschlagen; Rückinstallation:", type(error).__name__, file=sys.stderr)
+                write_result(folder, "failed", "Aktivierung fehlgeschlagen; Rückinstallation läuft")
+                # A separate unit without the activation's time limit, so it is
+                # never killed mid-dpkg; it starts once this unit releases the lock.
+                try:
+                    detached(folder, snapshot["rollbackUnit"] + "-now", "--rollback")
+                except Exception:
+                    print("Sofortige Rückinstallation nicht gestartet; Rollback-Timer übernimmt", file=sys.stderr)
+                raise
 
 
 def main():

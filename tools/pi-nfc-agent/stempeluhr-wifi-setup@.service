@@ -1,0 +1,17 @@
+[Unit]
+Description=Stempeluhr WLAN setup (one request of the NFC agent)
+# Skipped after a rollback to an agent bundle without the script.
+ConditionPathExists=/opt/stempeluhr-nfc-agent/current/wifi_setup.py
+After=NetworkManager.service
+
+[Service]
+# Root: writes NetworkManager keyfiles and activates connections.
+ExecStart=/usr/bin/python3 /opt/stempeluhr-nfc-agent/current/wifi_setup.py serve
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+SyslogIdentifier=stempeluhr-wifi-setup
+# Longer than the agent waits (maintenance_access.CONNECT_TIMEOUT_SECONDS):
+# a rollback to the previous WLAN must never be cut off.
+RuntimeMaxSec=6min
+UMask=0077

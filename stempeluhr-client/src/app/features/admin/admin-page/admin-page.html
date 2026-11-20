@@ -49,6 +49,9 @@
       <button type="button" (click)="scrollToSection('booking')">Buchungsvorgaben</button>
       <button type="button" (click)="scrollToSection('nfc')">NFC-Kartenleser</button>
       <button type="button" (click)="scrollToSection('telegram')">Telegram-Freigabe</button>
+      @if (settings.serviceWifiSsid !== undefined) {
+        <button type="button" (click)="scrollToSection('maintenance')">Terminal-Wartung</button>
+      }
       <button type="button" (click)="scrollToSection('absences')">Abwesenheiten</button>
       <button type="button" (click)="scrollToSection('employees')">Mitarbeiter</button>
       <button type="button" (click)="scrollToSection('export')">Monatsexport</button>
@@ -194,8 +197,61 @@
         <p class="task-admin-hint">Mehrere User-IDs mit Komma trennen. Bot-Token und Stempel-Chat stehen in der settings.json; so findest du die IDs: README, Abschnitt Telegram.</p>
       </section>
 
+      @if (settings.serviceWifiSsid !== undefined) {
+        <section class="admin-section" id="maintenance">
+          <div class="section-head"><span class="section-number">05</span><div><h2>Terminal-Wartung</h2><p>WLAN eingebauter Terminals ohne Kabel ändern</p></div></div>
+          <div class="form-grid">
+            <label>
+              Wartungs-WLAN (SSID)
+              <input
+                [value]="settings.serviceWifiSsid ?? ''"
+                (input)="updateMaintenance({ serviceWifiSsid: $any($event.target).value })"
+                placeholder="leer = kein Wartungs-WLAN"
+                autocomplete="off"
+                spellcheck="false">
+            </label>
+            <label>
+              Passwort des Wartungs-WLANs
+              <input
+                type="password"
+                [value]="settings.serviceWifiPsk ?? ''"
+                (input)="updateMaintenance({ serviceWifiPsk: $any($event.target).value })"
+                [placeholder]="keepsServiceWifiPsk(settings) ? 'gespeichert, leer lassen zum Behalten' : 'mindestens 8 Zeichen'"
+                autocomplete="new-password">
+            </label>
+            <label class="toggle">
+              <input
+                type="checkbox"
+                [checked]="settings.serviceWifiWpa3Only ?? false"
+                (change)="updateMaintenance({ serviceWifiWpa3Only: $any($event.target).checked })">
+              Hotspot nur mit WPA3 (wenn das Handy kein WPA2 anbietet)
+            </label>
+            <label>
+              Wartungs-PIN
+              <input
+                type="password"
+                inputmode="numeric"
+                [value]="settings.maintenancePin ?? ''"
+                (input)="updateMaintenance({ maintenancePin: $any($event.target).value })"
+                [placeholder]="settings.hasMaintenancePin ? 'gesetzt, leer lassen zum Behalten' : '6 bis 12 Ziffern'"
+                autocomplete="new-password">
+            </label>
+            @if (settings.hasMaintenancePin) {
+              <label class="toggle">
+                <input
+                  type="checkbox"
+                  [checked]="settings.clearMaintenancePin ?? false"
+                  (change)="updateMaintenance({ clearMaintenancePin: $any($event.target).checked })">
+                Wartungs-PIN entfernen (WLAN-Einstellung am Display aus)
+              </label>
+            }
+          </div>
+          <p class="task-admin-hint">Jedes Terminal mit Token übernimmt beides beim nächsten Update-Lauf (spätestens nach 15 Minuten, solange es online ist). Ohne Kunden-WLAN verbindet es sich mit dem Wartungs-WLAN, z. B. einem Handy-Hotspot mit genau diesen Daten (WPA2 oder WPA2/WPA3; nur WPA3 bitte oben anhaken). Am Display: fünfmal auf die Uhrzeit tippen, Wartungs-PIN eingeben, WLAN wählen.</p>
+        </section>
+      }
+
       <section class="admin-section" id="absences">
-        <div class="section-head"><span class="section-number">05</span><div><h2>Abwesenheiten</h2><p>Kimai-Ziele für Urlaub, Krankheit und Gleittage</p></div></div>
+        <div class="section-head"><span class="section-number">06</span><div><h2>Abwesenheiten</h2><p>Kimai-Ziele für Urlaub, Krankheit und Gleittage</p></div></div>
         <div class="form-grid">
           <label>
             Abwesenheits-Projekt
@@ -248,7 +304,7 @@
       }
 
       <section class="admin-section employee-admin-list" id="employees">
-        <div class="section-head"><span class="section-number">06</span><div><h2>Mitarbeiter <span class="count">{{ settings.employees.length }}</span></h2><p>Zugang, Buchungsregeln und Tätigkeiten pro Person</p></div></div>
+        <div class="section-head"><span class="section-number">07</span><div><h2>Mitarbeiter <span class="count">{{ settings.employees.length }}</span></h2><p>Zugang, Buchungsregeln und Tätigkeiten pro Person</p></div></div>
         <div class="admin-actions">
           <button type="button" (click)="importKimaiUsers()">Aus Kimai laden</button>
           <button type="button" (click)="addEmployee()">Mitarbeiter hinzufügen</button>
@@ -456,7 +512,7 @@
       </section>
       </fieldset>
       <section class="admin-section" id="export">
-        <div class="section-head"><span class="section-number">07</span><div><h2>Monatsexport</h2><p>Excel-Datei für den Steuerberater: Übersicht, Abwesenheiten und Arbeitszeiten</p></div></div>
+        <div class="section-head"><span class="section-number">08</span><div><h2>Monatsexport</h2><p>Excel-Datei für den Steuerberater: Übersicht, Abwesenheiten und Arbeitszeiten</p></div></div>
         @defer (on immediate) {
           <app-monthly-export-section (sessionRejected)="onExportSessionRejected()" />
         } @placeholder {

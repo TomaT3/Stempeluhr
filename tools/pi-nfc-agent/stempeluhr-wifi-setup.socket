@@ -1,0 +1,14 @@
+[Unit]
+Description=Stempeluhr WLAN setup (socket for the NFC agent)
+
+[Socket]
+# One root helper per request (Accept=yes); only the agent's group may connect.
+ListenStream=/run/stempeluhr-wifi-setup.sock
+SocketUser=root
+SocketGroup=stempeluhr
+SocketMode=0660
+Accept=yes
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

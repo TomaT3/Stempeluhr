@@ -9,3 +9,4 @@
 # systemd-Units des Agenten (landen unverändert auf den Pis).
 *.service text eol=lf
 *.timer text eol=lf
+*.socket text eol=lf

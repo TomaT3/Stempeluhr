@@ -3,6 +3,7 @@
 Run on Linux (fcntl/dpkg). Package installation itself is tested separately
 in an arm64 Trixie container by test_pcsc_packages.sh.
 """
+import fcntl
 import hashlib
 import io
 import json
@@ -27,7 +28,8 @@ class MaintenanceTests(unittest.TestCase):
         for name, value in (("BASE", self.root / "agent"), ("STATE", self.root / "state"),
                             ("CONFIG", self.root / "config.json"),
                             ("USB_RULE", self.root / "udev" / "99-stempeluhr-pcsc.rules"),
-                            ("PCSC_RUNTIME", self.root / "run" / "pcscd")):
+                            ("PCSC_RUNTIME", self.root / "run" / "pcscd"),
+                            ("WIFI_SETUP_LOCK", self.root / "wifi-setup.lock")):
             p = patch.object(maintenance, name, value)
             p.start()
             self.addCleanup(p.stop)
@@ -177,6 +179,44 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(job[:2], ("systemd-run", "--unit=test-now"))
         self.assertFalse(any(arg.startswith("--property=RuntimeMaxSec") for arg in job))
         self.assertEqual(job[-2:], ("--rollback", str(folder)))
+
+    def test_agent_stops_only_after_a_running_wlan_change_at_the_display(self):
+        # wifi_setup.py holds the lock during "connection up" and its rollback;
+        # the outcome lives in the agent, a restart would lose it.
+        for action in ("activate", "rollback"):
+            with self.subTest(action=action):
+                folder = self.root / action
+                folder.mkdir()
+                (folder / "new").mkdir()
+                (folder / "old").mkdir()
+                snapshot = {"agentActive": True, "pcscActive": True, "auto": [], "originals": {},
+                            "conffiles": [], "rollbackUnit": "test"}
+                (folder / "snapshot.json").write_text(json.dumps(snapshot))
+                connect = maintenance.WIFI_SETUP_LOCK.open("a")
+                fcntl.flock(connect, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                events = []
+
+                def run(*args, **kwargs):
+                    if args[:3] == ("systemctl", "stop", maintenance.AGENT_SERVICE):
+                        events.append("agent stopped")
+                    return ""
+
+                def wait(_seconds):
+                    events.append("waited")
+                    connect.close()  # the WLAN change is done
+
+                try:
+                    with patch.object(maintenance, "command", side_effect=run), \
+                         patch.object(maintenance, "verify"), \
+                         patch.object(maintenance.subprocess, "run", return_value=Mock(returncode=0)), \
+                         patch.object(maintenance.time, "sleep", side_effect=wait):
+                        if action == "activate":
+                            maintenance.activate(folder)
+                        else:
+                            maintenance.rollback(folder, snapshot)
+                finally:
+                    connect.close()
+                self.assertEqual(events, ["waited", "agent stopped"])
 
     def test_result_wait_reports_failure_and_waits_for_the_rollback(self):
         results = [None, {"status": "failed", "detail": "a"}, {"status": "rolled-back", "detail": "b"}]

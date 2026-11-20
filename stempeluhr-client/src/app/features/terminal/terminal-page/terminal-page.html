@@ -9,7 +9,8 @@
     </div>
   }
   <header class="terminal-clock" aria-label="Aktuelle Uhrzeit und Datum">
-    <span class="clock-time">{{ clockState.now() | date: 'HH:mm:ss' }}</span>
+    <!-- Versteckte Geste: fünfmal tippen öffnet die WLAN-Einstellung (Wartungs-PIN). -->
+    <span class="clock-time" (click)="maintenanceTap()">{{ clockState.now() | date: 'HH:mm:ss' }}</span>
     <span class="clock-date">{{ clockState.now() | date: 'dd.MM.yyyy' }}</span>
     @if (selectedEmployee() && !correctionOpen() && !absenceOpen()) {
       <!-- Hinweise zur Arbeitszeit, höchstens einer. Bewusst in der Uhr-Spalte:
@@ -290,6 +291,14 @@
       </span>
       <button type="button" class="rejected-dismiss" [attr.data-rejected-ids]="rejectedStampIds()" (click)="dismissRejectedStamps($event)">Alle erledigt</button>
     </div>
+  }
+}
+
+@if (maintenanceOpen()) {
+  <!-- Eigener Chunk: Der Service Worker lädt alle Skripte vorab, der Dialog
+       steht also auch offline bereit, belastet aber nicht den Start. -->
+  @defer {
+    <app-terminal-maintenance (closed)="maintenanceOpen.set(false)" />
   }
 }
 

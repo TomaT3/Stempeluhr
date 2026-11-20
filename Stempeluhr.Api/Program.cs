@@ -19,6 +19,7 @@ builder.Services.AddSingleton(sp => new AbsenceStore(
     Path.Combine(DataPaths.Directory(builder.Configuration, builder.Environment), "absences.json"),
     sp.GetRequiredService<ILogger<AbsenceStore>>()));
 builder.Services.AddSingleton<IEmployeeService, EmployeeService>();
+builder.Services.AddSingleton(new PinMatchCache(TerminalMaintenance.VerifyPin));
 builder.Services.AddSingleton<IAdminAuthorizationService, AdminAuthorizationService>();
 builder.Services.AddSingleton<INfcClockEventStore, NfcClockEventStore>();
 builder.Services.AddSingleton<IOfflineEventIdStore>(sp => new FileOfflineEventIdStore(

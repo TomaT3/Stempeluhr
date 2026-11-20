@@ -141,6 +141,24 @@ public sealed class RuntimeSettings
         AbsenceProjectId is not null && VacationActivityId is not null
         && SickActivityId is not null && FlexDayActivityId is not null;
 
+    /// <summary>
+    /// Wartungs-WLAN (z. B. ein Handy-Hotspot), das jedes Terminal mit
+    /// niedriger Priorität kennt. Bringt ein Terminal ohne Kunden-WLAN online.
+    /// </summary>
+    public string? ServiceWifiSsid { get; init; }
+
+    /// <summary>Passwort des Wartungs-WLANs (Secret, nur für authentifizierte Terminals).</summary>
+    public string? ServiceWifiPsk { get; init; }
+
+    /// <summary>
+    /// Der Hotspot kann nur WPA3 (SAE). Sonst WPA2, was auch WPA2/WPA3 im
+    /// Übergangsmodus abdeckt - ein reiner WPA3-Hotspot braucht key-mgmt=sae.
+    /// </summary>
+    public bool ServiceWifiWpa3Only { get; init; }
+
+    /// <summary>PBKDF2-Hash der Wartungs-PIN für die WLAN-Einstellung am Display.</summary>
+    public string? MaintenancePinHash { get; init; }
+
     public List<EmployeeSettings> Employees { get; init; } = [];
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(BaseUrl) && Employees.Any(employee => employee.IsEnabled);

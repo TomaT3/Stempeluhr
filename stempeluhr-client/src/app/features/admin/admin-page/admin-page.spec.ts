@@ -199,6 +199,107 @@ describe('AdminPage', () => {
     });
   });
 
+  describe('terminal maintenance settings', () => {
+    const configured: AdminSettings = {
+      ...emptySettings,
+      serviceWifiSsid: 'Stempeluhr-Service',
+      hasServiceWifiPsk: true,
+      hasMaintenancePin: true,
+    };
+
+    async function openPage(settings: AdminSettings) {
+      sessionStorage.setItem(AdminSession.StorageKey, 'pw');
+      const page = await createPage();
+      flushLogin(page.http, 'pw', [], settings);
+      page.fixture.detectChanges();
+      return page;
+    }
+
+    function savedPayload(http: HttpTestingController): Record<string, unknown> {
+      const request = http.expectOne('/api/admin/settings');
+      const body = request.request.body as Record<string, unknown>;
+      request.flush(configured);
+      http.expectOne('/api/admin/employee-statuses').flush([]);
+      return body;
+    }
+
+    it('keeps stored secrets when only the name is sent back', async () => {
+      const { fixture, component, http } = await openPage(configured);
+      const section = (fixture.nativeElement as HTMLElement).querySelector('#maintenance');
+      expect(section?.querySelector('input')?.value).toBe('Stempeluhr-Service');
+      expect(section?.textContent).toContain('Wartungs-PIN entfernen');
+
+      component.saveAdminSettings();
+
+      expect(savedPayload(http)).toMatchObject({
+        serviceWifiSsid: 'Stempeluhr-Service', serviceWifiPsk: '', maintenancePin: '', clearMaintenancePin: false,
+      });
+      fixture.destroy();
+    });
+
+    it('asks for a new password once the name changes', async () => {
+      const { fixture, component } = await openPage(configured);
+      const passwordInput = () =>
+        (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>('#maintenance input')[1];
+      expect(passwordInput().placeholder).toContain('leer lassen zum Behalten');
+
+      component.updateMaintenance({ serviceWifiSsid: 'Handy-B' });
+      fixture.detectChanges();
+      expect(passwordInput().placeholder).toBe('mindestens 8 Zeichen');
+
+      component.updateMaintenance({ serviceWifiSsid: 'Stempeluhr-Service' });
+      fixture.detectChanges();
+      expect(passwordInput().placeholder).toContain('leer lassen zum Behalten');
+      fixture.destroy();
+    });
+
+    it('sends a new password and PIN once and forgets them after saving', async () => {
+      const { fixture, component, http } = await openPage(configured);
+
+      component.updateMaintenance({ serviceWifiPsk: 'neues-geheim', maintenancePin: '739104' });
+      component.saveAdminSettings();
+
+      expect(savedPayload(http)).toMatchObject({ serviceWifiPsk: 'neues-geheim', maintenancePin: '739104' });
+      expect(component.adminSettings()?.serviceWifiPsk).toBeUndefined();
+      expect(component.adminSettings()?.maintenancePin).toBeUndefined();
+      fixture.destroy();
+    });
+
+    it('switches the maintenance WLAN off with an empty name and removes the PIN', async () => {
+      const { fixture, component, http } = await openPage(configured);
+
+      component.updateMaintenance({ serviceWifiSsid: '', clearMaintenancePin: true });
+      component.saveAdminSettings();
+
+      expect(savedPayload(http)).toMatchObject({ serviceWifiSsid: '', clearMaintenancePin: true });
+      fixture.destroy();
+    });
+
+    it('sends the WPA3-only choice of the hotspot', async () => {
+      const { fixture, component, http } = await openPage({ ...configured, serviceWifiWpa3Only: false });
+      const toggle = [...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLLabelElement>('#maintenance label')]
+        .find(label => label.textContent?.includes('nur mit WPA3'))?.querySelector('input');
+      expect(toggle?.checked).toBe(false);
+
+      toggle!.click();
+      component.saveAdminSettings();
+
+      expect(savedPayload(http)).toMatchObject({ serviceWifiWpa3Only: true });
+      fixture.destroy();
+    });
+
+    it('hides the section and changes nothing when the backend does not know the fields', async () => {
+      const { fixture, component, http } = await openPage(emptySettings);
+
+      expect((fixture.nativeElement as HTMLElement).querySelector('#maintenance')).toBeNull();
+      component.saveAdminSettings();
+
+      expect(savedPayload(http))
+        .toMatchObject({ serviceWifiSsid: null, serviceWifiPsk: '', serviceWifiWpa3Only: null, maintenancePin: '' });
+      fixture.destroy();
+    });
+  });
+
   describe('absence settings and contract data', () => {
     const anna: AdminEmployee = {
       id: 'anna',

@@ -140,6 +140,7 @@ public static class AdminEndpoints
             IRuntimeSettingsStore settingsStore,
             IAdminAuthorizationService authorization,
             IAdminService adminService,
+            PinMatchCache pinMatches,
             CancellationToken cancellationToken) =>
         {
             if (!authorization.IsAdmin(request) && !authorization.CanBootstrapFromLocalhost(request))
@@ -150,6 +151,11 @@ public static class AdminEndpoints
             if (update.ValidateTelegram() is { } telegramError)
             {
                 return Results.BadRequest(new { message = telegramError });
+            }
+
+            if (update.ValidateMaintenancePin() is { } pinError)
+            {
+                return Results.BadRequest(new { message = pinError });
             }
 
             var current = settingsStore.Load();
@@ -172,6 +178,11 @@ public static class AdminEndpoints
             if (adminService.ValidateAbsences(settings) is { } absenceError)
             {
                 return Results.BadRequest(new { message = absenceError });
+            }
+
+            if (update.ValidateMaintenance(settings, pinMatches) is { } maintenanceError)
+            {
+                return Results.BadRequest(new { message = maintenanceError });
             }
 
             await settingsStore.SaveAsync(settings, cancellationToken);

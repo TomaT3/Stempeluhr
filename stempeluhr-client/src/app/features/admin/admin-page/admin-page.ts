@@ -60,6 +60,7 @@ export class AdminPage implements OnDestroy {
   readonly openAbsences = signal(0);
   /** Eingabe der Freigeber-IDs als Text, damit „12, “ beim Tippen nicht umgeschrieben wird. */
   readonly telegramApproverText = signal('');
+  private storedServiceWifiSsid: string | null | undefined;
 
   private nfcPollTimer: number | null = null;
 
@@ -377,6 +378,12 @@ export class AdminPage implements OnDestroy {
 
   updateTelegramCorrectionChatId(value: string): void {
     this.updateSettings(settings => ({ ...settings, telegramCorrectionChatId: value }));
+  }
+
+  updateMaintenance(
+    patch: Pick<Partial<AdminSettings>, 'serviceWifiSsid' | 'serviceWifiPsk' | 'serviceWifiWpa3Only' | 'maintenancePin' | 'clearMaintenancePin'>,
+  ): void {
+    this.updateSettings(settings => ({ ...settings, ...patch }));
   }
 
   updateTelegramApproverUserIds(value: string): void {
@@ -736,7 +743,13 @@ export class AdminPage implements OnDestroy {
     return `Admin-Anmeldung fehlgeschlagen (${error.status}).`;
   }
 
+  /** Das gespeicherte Hotspot-Passwort gilt nur, solange die SSID unverändert bleibt (wie im Backend). */
+  keepsServiceWifiPsk(settings: AdminSettings): boolean {
+    return !!settings.hasServiceWifiPsk && settings.serviceWifiSsid === this.storedServiceWifiSsid;
+  }
+
   private withEditableTokens(settings: AdminSettings): AdminSettings {
+    this.storedServiceWifiSsid = settings.serviceWifiSsid;
     return {
       ...settings,
       employees: settings.employees.map(employee => ({ ...employee, apiToken: '' })),
@@ -767,6 +780,14 @@ export class AdminPage implements OnDestroy {
       sickActivityId: settings.sickActivityId ?? null,
       flexDayActivityId: settings.flexDayActivityId ?? null,
       absenceDayStart: settings.absenceDayStart ?? null,
+      // undefined: altes Backend, null lässt alles unverändert. Eine leere
+      // SSID schaltet das Wartungs-WLAN ab; leere Secrets behalten den Wert.
+      serviceWifiSsid: settings.serviceWifiSsid === undefined ? null : (settings.serviceWifiSsid ?? ''),
+      serviceWifiPsk: settings.serviceWifiPsk ?? '',
+      // undefined: altes Backend, null behält die Wahl.
+      serviceWifiWpa3Only: settings.serviceWifiWpa3Only ?? null,
+      maintenancePin: settings.maintenancePin ?? '',
+      clearMaintenancePin: settings.clearMaintenancePin ?? false,
       employees: settings.employees.map(employee => ({
         id: employee.id,
         kimaiUserId: employee.kimaiUserId,
