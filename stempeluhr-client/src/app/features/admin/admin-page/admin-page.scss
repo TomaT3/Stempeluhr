@@ -278,6 +278,30 @@ input[type="color"] {
   padding: 4px;
 }
 
+/* Anzeige statt Eingabe: kein Rahmen, damit sie nicht wie ein Feld wirkt. */
+.nfc-readout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--color-border-strong) 18%, transparent);
+
+  dt {
+    color: var(--color-muted);
+    font-size: 0.9rem;
+    font-weight: 800;
+  }
+
+  dd {
+    margin: 4px 0 0;
+    color: var(--color-text);
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+}
+
 .nfc-card-id {
   color: var(--color-text);
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;

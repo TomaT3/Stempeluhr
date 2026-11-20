@@ -135,36 +135,50 @@
         <div class="section-head"><span class="section-number">03</span><div><h2>NFC-Kartenleser</h2><p>Letzten Scan prüfen und einem Mitarbeiter zuweisen</p></div></div>
         <div class="form-grid">
           <label>
-            Terminal-ID
-            <input
-              [value]="nfcTerminalId()"
-              (input)="updateNfcTerminalId($any($event.target).value)"
-              autocomplete="off"
-              spellcheck="false">
-          </label>
-          <label>
-            Letzte Karten-ID
-            <input class="nfc-card-id" readonly [value]="latestNfcCardId() ?? 'Keine Karte gelesen'">
-          </label>
-          <label>
-            Status
-            <input readonly [value]="latestNfcEvent()?.message ?? 'Keine Daten'">
-          </label>
-          <label>
-            Scan-Terminal
-            <input readonly [value]="latestNfcEvent()?.terminalId ?? '-'">
-          </label>
-          <label>
-            Gelesen um
-            <input readonly [value]="(latestNfcEvent()?.occurredAt | date: 'HH:mm:ss') ?? '-'">
+            Terminal
+            <select
+              class="nfc-terminal-select"
+              (change)="updateNfcTerminalId($any($event.target).value)"
+              [disabled]="nfcTerminalOptions().length === 0">
+              @if (nfcTerminalOptions().length === 0) {
+                <option value="" selected>Keine Terminals registriert</option>
+              }
+              @for (terminal of nfcTerminalOptions(); track terminal) {
+                <option [value]="terminal" [selected]="terminal === nfcTerminalId()">{{ terminal }}</option>
+              }
+            </select>
           </label>
         </div>
+
+        <dl class="nfc-readout" aria-live="polite">
+          <div>
+            <dt>Letzte Karten-ID</dt>
+            <dd class="nfc-card-id">{{ latestNfcCardId() ?? 'Keine Karte gelesen' }}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{{ latestNfcEvent()?.message ?? 'Keine Daten' }}</dd>
+          </div>
+          <div>
+            <dt>Scan-Terminal</dt>
+            <dd class="nfc-scan-terminal">{{ latestNfcEvent()?.terminalId ?? '–' }}</dd>
+          </div>
+          <div>
+            <dt>Gelesen um</dt>
+            <dd>{{ (latestNfcEvent()?.occurredAt | date: 'HH:mm:ss') ?? '–' }}</dd>
+          </div>
+        </dl>
 
         <div class="admin-actions">
           <button type="button" (click)="refreshLatestNfcEvent(true)" [disabled]="nfcRefreshBusy()">
             {{ nfcRefreshBusy() ? 'Aktualisiere...' : 'Aktualisieren' }}
           </button>
           <button type="button" (click)="copyLatestNfcCardId()" [disabled]="!latestNfcCardId()">Kopieren</button>
+          @if (otherNfcScanTerminal(); as scanTerminal) {
+            <button type="button" class="nfc-use-scan-terminal" (click)="updateNfcTerminalId(scanTerminal)">
+              „{{ scanTerminal }}“ auswählen
+            </button>
+          }
         </div>
 
         @if (nfcMessage()) {

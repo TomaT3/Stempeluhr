@@ -156,7 +156,8 @@ eingebunden und gesichert werden. `Stempeluhr__DataPath` verlegt den Ordner
 
 - Kimai-URL und Admin-API-Token
 - Mitarbeiter mit Kimai-API-Token, PIN, Farbe, Bild und optional NFC-Karte.
-  Eine neue Karte am Terminal auflegen; im Admin-Bereich erscheint sie unter
+  Eine neue Karte am Terminal auflegen; im Admin-Bereich das Terminal aus der
+  Liste der registrierten Terminals wählen, dann erscheint die Karte unter
   „Letzte Karten-ID“ und lässt sich per „Letzte NFC-Karte zuweisen“ übernehmen.
 - Standard-Projekt, Standard-Aktivität und Pause-Aktivität
 - Pro Mitarbeiter optional **weitere Tätigkeiten** (Bezeichnung, Projekt,
