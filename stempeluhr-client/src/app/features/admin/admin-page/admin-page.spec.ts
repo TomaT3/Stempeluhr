@@ -122,17 +122,14 @@ describe('AdminPage', () => {
       fixture.destroy();
     });
 
-    it('keeps polling the stored terminal when no terminal token is registered', async () => {
-      // Terminals ohne Token melden Scans über /api/kiosk/identify; die Karte muss zuweisbar bleiben.
+    it('does not poll when no terminal is registered', async () => {
       const { fixture, component, http } = await loginWithStoredTerminal('stempeluhr-pi-01');
       flushTerminals(http, []);
-      expectLatestNfcRequest(http, 'stempeluhr-pi-01', nfcEvent('stempeluhr-pi-01'));
       fixture.detectChanges();
 
-      const select = terminalSelect(fixture.nativeElement as HTMLElement);
-      expect(select.disabled).toBe(false);
-      expect(select.value).toBe('stempeluhr-pi-01');
-      expect(component.latestNfcCardId()).toBe('04A1B2C3');
+      http.expectNone(request => request.url === '/api/nfc/events/latest');
+      expect(component.nfcMessage()).toContain('Keine Terminals registriert');
+      expect(terminalSelect(fixture.nativeElement as HTMLElement).disabled).toBe(true);
       fixture.destroy();
     });
 
