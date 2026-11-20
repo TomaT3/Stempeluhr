@@ -113,11 +113,7 @@ Remove-Item .\terminal.token
 Das Token bleibt in
 `/etc/stempeluhr-nfc-agent/config.json` (`root:stempeluhr`, `640`). Bestehende
 Konfigurationen bleiben erhalten; `--terminal-token-file` ergänzt oder ersetzt
-nur das Token. Ohne diese Option funktionieren alte Konfigurationen weiter,
-der Nachtrag verwendet bis zum ersten erfolgreichen authentifizierten
-Katalogabruf weiter PIN/Karte. Bestehende Queue-Zugangsdaten bleiben bis dahin
-erhalten. Nach bestätigter Umstellung entfernt der Browser sie dauerhaft;
-Token-Entzug bewirkt dann keinen Rückfall auf PIN-Auth.
+nur das Token. Token-Entzug bewirkt keinen Rückfall auf PIN-Auth.
 
 **Prüfung:** Kiosk einmal online öffnen. Im Browser-Netzwerkprotokoll muss
 `http://127.0.0.1:8737/terminal/catalog` mit 200 antworten. Danach Netzwerk
@@ -332,7 +328,7 @@ ist. Es legt dann an:
 - `/etc/stempeluhr-nfc-agent/maintenance.json` mit dem PIN-Hash
   (`root:stempeluhr`, `0640`).
 
-Ohne Token, offline oder bei einem Serverfehler bleibt alles, wie es ist.
+Offline, bei ungültigem Token oder einem Serverfehler bleibt alles, wie es ist.
 Abschalten auf der Admin-Seite, wirksam beim nächsten Lauf:
 
 - Wartungs-WLAN: das SSID-Feld leeren. Das Profil `stempeluhr-service` wird

@@ -43,9 +43,8 @@ Ein gültiges `traceparent` (W3C, Version 00) der Kiosk-Seite gibt der Agent an
 die API weiter, ein ungültiges lässt er weg. `features` in `/health` sagt dem
 Kiosk, dass der Agent den Header im Preflight zulässt: Ältere Agents würden die
 Anfrage daran scheitern lassen ([Logs und Traces](../../docs/observability.md#ein-stempel-eine-trace)).
-Fehlendes Token ergibt 503 (Browser behält bis zum ersten erfolgreichen
-Katalogabruf den Legacy-Nachtrag); 401 bei Entzug/Rotation wird an den Browser
-weitergereicht. Die Queue bleibt dabei erhalten.
+Ein 401 bei Entzug/Rotation des Tokens wird an den Browser weitergereicht.
+Die Queue bleibt dabei erhalten.
 
 ## Dateien
 
