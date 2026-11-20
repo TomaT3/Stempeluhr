@@ -95,7 +95,7 @@ Bestehende `config.json`-Dateien bleiben gültig.
   bestätigt sie erst nach erfolgreicher Übertragung. Ältere Ereignisse
   können bei längerem Ausfall aus diesem begrenzten Puffer fallen.
   Wiederholte identische Health-Fehler werden nur bei Statusänderung erfasst.
-  Ohne Token bleibt die lokale Diagnose aktiv. Ausfälle beim Versand
+  Die lokale Diagnose bleibt auch bei ungültigem Token aktiv. Ausfälle beim Versand
   beeinflussen weder Kartenlesen noch Stempeln und werden nicht unbegrenzt gepuffert.
 - Das Update installiert `/etc/systemd/journald.conf.d/stempeluhr.conf`:
   persistentes Systemjournal mit 64 MiB Zielgrenze, 128 MiB freizuhaltendem

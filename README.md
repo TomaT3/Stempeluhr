@@ -54,13 +54,12 @@ Browser erhält nur, was er zur Bedienung braucht.
 2. **Stempeln:** Der gewählte Knopf ruft `/api/kiosk/clock` auf; die API
    bucht in Kimai (Pause = Wechsel auf die Pause-Aktivität, Tätigkeitswechsel
    = Wechsel auf Projekt/Aktivität einer weiteren Tätigkeit, siehe unten).
-   Ein Terminal mit Token schickt den Aufruf über seinen Agenten
+   Das Terminal schickt den Aufruf über seinen Agenten
    (`POST /terminal/clock`), der das Terminal-Token ergänzt. So kennt die API
    das Terminal für die Telegram-Meldung. PIN oder Karte authentifizieren die
    Aktion weiterhin; ein ungültiges Token bucht ohne Terminal-Angabe. Kennt
-   ein älterer Agent die Route nicht (404), fehlt ihm das Token (503) oder
-   ist er nicht erreichbar (z. B. während eines Updates), ruft der Kiosk
-   `/api/kiosk/clock` direkt auf. Nach einem Timeout nicht: Der Agent könnte
+   ein älterer Agent die Route nicht (404) oder ist er nicht erreichbar
+   (z. B. während eines Updates), ruft der Kiosk `/api/kiosk/clock` direkt auf. Nach einem Timeout nicht: Der Agent könnte
    den Stempel schon weitergegeben haben, er geht in die Queue.
 3. **Offline:** Scheitert der Aufruf (kein Netz, Timeout nach 8 s, Server-
    oder Kimai-Fehler) oder ist der Ausfall schon bekannt, landet die Aktion mit
@@ -90,9 +89,7 @@ Weitere Regeln:
   Browser-Profil muss App und Katalog zunächst wieder online laden.
 - Nach dem ersten erfolgreichen authentifizierten Katalogabruf speichert das
   Terminal keine PINs mehr in der Queue. Nachträge laufen dann über den lokalen
-  Agenten mit Terminal-Token. Bis dahin bleiben alte Pis beim bisherigen
-  PIN-/Karten-Nachtrag und behalten dessen gespeicherte Zugangsdaten.
-  Auf `/clock` ohne Terminal-Agent bleibt eine PIN
+  Agenten mit Terminal-Token. Auf `/clock` ohne Terminal-Agent bleibt eine PIN
   nur im Arbeitsspeicher: Nach einem Browser-Neustart warten PIN-basierte
   Nachträge auf eine erneute Online-Anmeldung des jeweiligen Mitarbeiters.
   Das hält die Nachträge anderer Mitarbeiter nicht auf; die Reihenfolge pro
@@ -623,11 +620,11 @@ Jede Meldung nennt außerdem, wie gestempelt wurde:
 
 | Quelle | Zusatz |
 | --- | --- |
-| Karte am Terminal mit Token | `· Karte am Terminal stempeluhr-pi-01` |
-| PIN am Terminal mit Token | `· PIN am Terminal stempeluhr-pi-01` |
+| Karte am Terminal | `· Karte am Terminal stempeluhr-pi-01` |
+| PIN am Terminal | `· PIN am Terminal stempeluhr-pi-01` |
 | Seite `/clock` im Webbrowser | `· Webbrowser` |
-| Karte, Terminal ohne Token oder älterer Agent | `· Karte am Terminal` |
-| PIN eines älteren Kiosks oder Terminals ohne Token | kein Zusatz, wie bisher |
+| Karte mit ungültigem Token oder über einen älteren Agenten | `· Karte am Terminal` |
+| PIN mit ungültigem Token oder eines älteren Kiosks | kein Zusatz |
 
 Das Terminal ist die Terminal-ID aus `terminalTokens`. Sie stammt nur aus
 dem von der API geprüften Token, nie aus dem Request-Body. Karte oder PIN
@@ -951,8 +948,7 @@ gh workflow run release.yml --ref <branch> -f dry_run=true
 - Authentifizierte Terminals speichern keine PINs in der Offline-Queue. Erst
   ein erfolgreicher Katalogabruf bestätigt die Unterstützung des Agenten und
   migriert bestehende Terminal-Queues ohne Änderung von Event-IDs/Zeitstempeln.
-  Bis dahin bleibt für alte Pis der Legacy-Modus mit gespeicherten PINs aktiv.
-  Nach bestätigter Umstellung gibt es bei Token-Entzug keinen Legacy-Fallback.
+  Bei Token-Entzug gibt es keinen Legacy-Fallback.
 - Terminal-Tokens stehen ausschließlich in `settings.json` auf dem Server und
   `config.json` beim Agenten (`root:stempeluhr`, Modus `640`). Der Browser erhält
   sie nie. `/api/kiosk/catalog` und Terminal-Nachträge benötigen Bearer-Token
@@ -994,11 +990,8 @@ gh workflow run release.yml --ref <branch> -f dry_run=true
 Terminal-Hänger und Kimai-Ablehnungen: Vorgehen, technische Messwerte und
 Logexport stehen in [Terminal-Diagnose](docs/terminal-diagnostics.md).
 
-- Für PIN-freie Terminal-Nachträge müssen bestehende Pis einmalig ein
-  registriertes Terminal-Token erhalten. Alte Agent-Konfigurationen und alte
-  Agent-Versionen bleiben bis zum ersten erfolgreichen Katalogabruf beim
-  Legacy-Nachtrag; dessen PINs liegen weiterhin im Browserprofil. Nach der
-  Umstellung bleiben bei Token-Entzug wartende Stempel bis zur Behebung erhalten.
+- Bei Token-Entzug bleiben wartende Stempel eines Terminals bis zur Behebung
+  erhalten.
 - Ohne Terminal-Agent kennt `/clock` offline nur zuvor lokal angemeldete
   Mitarbeiter. PIN-basierte Queues benötigen nach einem Neustart eine erneute
   Online-Anmeldung; sie bleiben bis dahin erhalten.
