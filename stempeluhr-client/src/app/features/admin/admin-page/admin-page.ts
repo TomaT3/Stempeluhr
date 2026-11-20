@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { DatePipe } from '@angular/common';
-import { Component, DestroyRef, OnDestroy, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnDestroy, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { catchError, forkJoin, of, switchMap } from 'rxjs';
@@ -47,7 +47,22 @@ export class AdminPage implements OnDestroy {
   readonly kimaiProjects = signal<KimaiProject[]>([]);
   readonly kimaiUsers = signal<KimaiUser[]>([]);
   readonly nfcTerminalId = signal(this.readStoredNfcTerminalId());
+  /** Registrierte Terminals (mit Token) für die Auswahl; null = noch nicht geladen. */
+  readonly nfcTerminals = signal<string[] | null>(null);
+  /** Auswahl-Optionen; ohne geladene Liste bleibt die gespeicherte ID wählbar. */
+  readonly nfcTerminalOptions = computed(() => {
+    const selected = this.nfcTerminalId();
+    return this.nfcTerminals() ?? (selected ? [selected] : []);
+  });
   readonly latestNfcEvent = signal<NfcClockEvent | null>(null);
+  /** Terminal des letzten Scans, wenn es ein anderes registriertes Terminal als das gewählte ist. */
+  readonly otherNfcScanTerminal = computed(() => {
+    const scanTerminal = this.latestNfcEvent()?.terminalId;
+    if (!scanTerminal || this.sameTerminal(scanTerminal, this.nfcTerminalId())) {
+      return null;
+    }
+    return this.containsTerminal(this.nfcTerminals() ?? [], scanTerminal) ? scanTerminal : null;
+  });
   readonly nfcMessage = signal('');
   readonly nfcRefreshBusy = signal(false);
   readonly adminMessage = signal('');
@@ -122,7 +137,7 @@ export class AdminPage implements OnDestroy {
         this.loadOpenCorrections();
         this.loadOpenAbsences();
         this.scrollToRequestedSection();
-        this.startNfcPolling();
+        this.loadNfcTerminalsAndPoll();
       },
       error: (error: HttpErrorResponse) => {
         this.adminSettings.set(previous.settings);
@@ -486,9 +501,7 @@ export class AdminPage implements OnDestroy {
   }
 
   updateNfcTerminalId(value: string): void {
-    const terminalId = value.trim();
-    this.nfcTerminalId.set(terminalId);
-    localStorage.setItem(AdminPage.NfcTerminalStorageKey, terminalId);
+    this.storeNfcTerminalId(value.trim());
     this.latestNfcEvent.set(null);
     this.refreshLatestNfcEvent(true);
   }
@@ -852,13 +865,54 @@ export class AdminPage implements OnDestroy {
     this.nfcPollTimer = window.setInterval(() => this.refreshLatestNfcEvent(), 1500);
   }
 
+  /**
+   * Lädt die registrierten Terminals für die Auswahl und startet danach das Polling.
+   * Ist die gespeicherte Terminal-ID unbekannt (Tippfehler, alter Default), wird das erste Terminal gewählt.
+   */
+  private loadNfcTerminalsAndPoll(): void {
+    this.adminApi.getTerminalStatuses(this.adminPassword()).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: statuses => {
+        const terminals = statuses.map(status => status.terminalId);
+        this.nfcTerminals.set(terminals);
+        if (terminals.length === 0) {
+          this.latestNfcEvent.set(null);
+          this.nfcMessage.set('Keine Terminals registriert. Terminal-Token in den Einstellungen anlegen.');
+          return;
+        }
+
+        if (!this.containsTerminal(terminals, this.nfcTerminalId())) {
+          this.storeNfcTerminalId(terminals[0]);
+        }
+        this.startNfcPolling();
+      },
+      // Ohne Liste bleibt die gespeicherte ID auswählbar und wird weiter abgefragt.
+      error: () => {
+        this.nfcTerminals.set(null);
+        this.startNfcPolling();
+      },
+    });
+  }
+
+  private containsTerminal(terminals: readonly string[], terminalId: string): boolean {
+    return terminals.some(terminal => this.sameTerminal(terminal, terminalId));
+  }
+
+  private sameTerminal(left: string, right: string): boolean {
+    return left.trim().toLowerCase() === right.trim().toLowerCase();
+  }
+
+  private storeNfcTerminalId(terminalId: string): void {
+    this.nfcTerminalId.set(terminalId);
+    localStorage.setItem(AdminPage.NfcTerminalStorageKey, terminalId);
+  }
+
   private nfcStatusMessage(event: NfcClockEvent | null, requestedTerminalId: string): string {
     if (!event) {
-      return 'Noch kein NFC-Scan empfangen. Bitte Karte erneut scannen und Pi-Agent/Token pruefen.';
+      return 'Noch kein NFC-Scan empfangen. Bitte Karte erneut scannen und Pi-Agent/Token prüfen.';
     }
 
-    if (event.terminalId.trim().toLowerCase() !== requestedTerminalId.trim().toLowerCase()) {
-      return `Letzter Scan kam von Terminal "${event.terminalId}". Terminal-ID oben anpassen oder Pi-Agent-Konfiguration pruefen.`;
+    if (!this.sameTerminal(event.terminalId, requestedTerminalId)) {
+      return `Letzter Scan kam von Terminal „${event.terminalId}“, nicht vom gewählten Terminal.`;
     }
 
     if (!event.cardId) {

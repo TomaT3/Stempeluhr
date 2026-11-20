@@ -3,7 +3,8 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 
-import { AdminEmployee, AdminSettings } from '../../../core/models/admin.models';
+import { AdminEmployee, AdminSettings, AdminTerminalStatus } from '../../../core/models/admin.models';
+import { NfcClockEvent } from '../../../core/models/kiosk.models';
 import { AdminSession } from '../../../core/services/admin-session';
 import { AdminPage } from './admin-page';
 
@@ -48,8 +49,119 @@ describe('AdminPage', () => {
     const absences = http.expectOne(request => request.url === '/api/admin/absences');
     expect(absences.request.params.get('status')).toBe('open');
     absences.flush(openAbsences);
+    flushTerminals(http);
     http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
   }
+
+  function terminalStatus(terminalId: string): AdminTerminalStatus {
+    return { terminalId, state: 'online', lastReportAt: null, problems: [], report: null, powerFlags: [] };
+  }
+
+  function flushTerminals(http: HttpTestingController, terminalIds: string[] = ['stempeluhr-pi-01']): void {
+    http.expectOne('/api/admin/terminal-statuses').flush(terminalIds.map(terminalStatus));
+  }
+
+  function nfcEvent(terminalId: string): NfcClockEvent {
+    return {
+      eventId: 'e1', occurredAt: '2026-11-20T08:44:10Z', terminalId, cardId: '04A1B2C3',
+      employee: null, status: null, message: 'NFC-Karte erkannt.', success: true,
+    };
+  }
+
+  describe('NFC-Kartenleser', () => {
+    const storageKey = 'stempeluhr.admin.nfcTerminalId';
+
+    /** Login bis vor die Terminalliste; die Seite startet mit der gespeicherten ID `storedTerminalId`. */
+    async function loginWithStoredTerminal(storedTerminalId: string) {
+      sessionStorage.setItem(AdminSession.StorageKey, 'test-password');
+      const page = await createPage();
+      localStorage.setItem(storageKey, storedTerminalId);
+      page.component.nfcTerminalId.set(storedTerminalId);
+      page.http.expectOne('/api/admin/settings').flush(emptySettings);
+      page.http.expectOne('/api/admin/kimai-projects').flush([]);
+      page.http.expectOne('/api/admin/kimai-activities').flush([]);
+      page.http.expectOne('/api/admin/employee-statuses').flush([]);
+      page.http.expectOne(request => request.url === '/api/admin/corrections').flush([]);
+      page.http.expectOne(request => request.url === '/api/admin/absences').flush([]);
+      return page;
+    }
+
+    function expectLatestNfcRequest(http: HttpTestingController, terminalId: string, event: NfcClockEvent | null): void {
+      const latest = http.expectOne(request => request.url === '/api/nfc/events/latest');
+      expect(latest.request.params.get('terminalId')).toBe(terminalId);
+      latest.flush({ event });
+    }
+
+    function terminalSelect(page: HTMLElement): HTMLSelectElement {
+      return page.querySelector<HTMLSelectElement>('#nfc select')!;
+    }
+
+    afterEach(() => localStorage.removeItem(storageKey));
+
+    it('offers the registered terminals and replaces an unknown stored terminal with the first one', async () => {
+      const { fixture, http } = await loginWithStoredTerminal('vertippt');
+      flushTerminals(http, ['stempeluhr-01', 'stempeluhr-02']);
+      expectLatestNfcRequest(http, 'stempeluhr-01', null);
+      fixture.detectChanges();
+
+      const select = terminalSelect(fixture.nativeElement as HTMLElement);
+      expect(Array.from(select.options, option => option.value)).toEqual(['stempeluhr-01', 'stempeluhr-02']);
+      expect(select.value).toBe('stempeluhr-01');
+      expect(localStorage.getItem(storageKey)).toBe('stempeluhr-01');
+      fixture.destroy();
+    });
+
+    it('keeps a stored terminal that is registered', async () => {
+      const { fixture, http } = await loginWithStoredTerminal('STEMPELUHR-02');
+      flushTerminals(http, ['stempeluhr-01', 'stempeluhr-02']);
+      expectLatestNfcRequest(http, 'STEMPELUHR-02', null);
+      fixture.destroy();
+    });
+
+    it('does not poll when no terminal is registered', async () => {
+      const { fixture, component, http } = await loginWithStoredTerminal('stempeluhr-pi-01');
+      flushTerminals(http, []);
+      fixture.detectChanges();
+
+      http.expectNone(request => request.url === '/api/nfc/events/latest');
+      expect(component.nfcMessage()).toContain('Keine Terminals registriert');
+      expect(terminalSelect(fixture.nativeElement as HTMLElement).disabled).toBe(true);
+      fixture.destroy();
+    });
+
+    it('keeps the stored terminal selectable when the terminal list fails', async () => {
+      const { fixture, http } = await loginWithStoredTerminal('stempeluhr-02');
+      http.expectOne('/api/admin/terminal-statuses').flush('kaputt', { status: 500, statusText: 'Server Error' });
+      expectLatestNfcRequest(http, 'stempeluhr-02', null);
+      fixture.detectChanges();
+
+      expect(terminalSelect(fixture.nativeElement as HTMLElement).value).toBe('stempeluhr-02');
+      fixture.destroy();
+    });
+
+    it('shows the scan terminal as read-only text and switches to it on request', async () => {
+      const { fixture, component, http } = await loginWithStoredTerminal('stempeluhr-02');
+      flushTerminals(http, ['stempeluhr-01', 'stempeluhr-02']);
+      expectLatestNfcRequest(http, 'stempeluhr-02', nfcEvent('stempeluhr-01'));
+      fixture.detectChanges();
+
+      const page = fixture.nativeElement as HTMLElement;
+      expect(page.querySelector('#nfc .nfc-scan-terminal')?.textContent?.trim()).toBe('stempeluhr-01');
+      expect(page.querySelectorAll('#nfc input')).toHaveLength(0);
+      expect(component.nfcMessage()).toContain('„stempeluhr-01“');
+
+      const switchButton = page.querySelector<HTMLButtonElement>('#nfc .nfc-use-scan-terminal')!;
+      expect(switchButton.textContent).toContain('stempeluhr-01');
+      switchButton.click();
+      expectLatestNfcRequest(http, 'stempeluhr-01', nfcEvent('stempeluhr-01'));
+      fixture.detectChanges();
+
+      expect(component.nfcTerminalId()).toBe('stempeluhr-01');
+      expect(localStorage.getItem(storageKey)).toBe('stempeluhr-01');
+      expect(page.querySelector('#nfc .nfc-use-scan-terminal')).toBeNull();
+      fixture.destroy();
+    });
+  });
 
   it('shows the number of open correction requests on the quick link', async () => {
     sessionStorage.setItem(AdminSession.StorageKey, 'test-password');
@@ -610,6 +722,7 @@ describe('AdminPage', () => {
     expect(page.querySelector('.loading-note')).toBeNull();
     expect(page.querySelector<HTMLFieldSetElement>('.admin-editor')?.disabled).toBe(false);
     http.expectOne('/api/health').flush({});
+    flushTerminals(http);
     http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
     http.verify();
   });
@@ -649,6 +762,7 @@ describe('AdminPage', () => {
     expect(Array.from(selects, select => select.value)).toEqual(['42', '73', '']);
     expect(fixture.componentInstance.adminMessage()).toContain('Kimai-Projekte oder Aktivitäten');
     http.expectOne('/api/health').flush({});
+    flushTerminals(http);
     http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
     http.verify();
   });
@@ -685,6 +799,7 @@ describe('AdminPage', () => {
     http.expectOne(request => request.url === '/api/admin/corrections').flush([]);
     http.expectOne(request => request.url === '/api/admin/absences').flush([]);
     http.expectOne('/api/health').flush({});
+    flushTerminals(http);
     http.expectOne(request => request.url === '/api/nfc/events/latest').flush({ event: null });
 
     component.updateDefaultProjectId('43');
