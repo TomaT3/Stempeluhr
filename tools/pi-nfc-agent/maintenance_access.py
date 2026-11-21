@@ -38,13 +38,14 @@ CONNECT_TIMEOUT_SECONDS = 330
 # agent keeps its socket open that long (no orphaned helper), the kiosk is
 # answered after STATUS_WAIT_SECONDS with the last known status meanwhile.
 STATUS_QUERY_TIMEOUT_SECONDS = 60
-SCAN_QUERY_TIMEOUT_SECONDS = 60
+SCAN_QUERY_TIMEOUT_SECONDS = 75
 # Below the kiosk's 15 s request timeout (terminal-wifi.ts, AGENT_TIMEOUT_MS).
 STATUS_WAIT_SECONDS = 8
-# The helper's scan takes up to wifi_setup.SCAN_TIMEOUT + READ_TIMEOUT (40 s)
-# plus its start; the kiosk waits longer still (SCAN_TIMEOUT_MS, 50 s).
+# The helper's scan takes up to wifi_setup.RADIO_PREPARE + SCAN_TIMEOUT +
+# READ_TIMEOUT (53 s) plus its start; the kiosk waits longer still
+# (SCAN_TIMEOUT_MS, 65 s).
 # test_wifi_setup checks these relations.
-SCAN_WAIT_SECONDS = 44
+SCAN_WAIT_SECONDS = 58
 
 # Encryption of a hidden network (not in the scan): WPA2 (also WPA2/WPA3
 # mixed), WPA3 only, '' open. Shared by agent and helper; the kiosk offers
