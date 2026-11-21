@@ -40,7 +40,7 @@ export type HiddenSecurity = 'WPA2' | 'WPA3' | '';
  * kommt per Status. Die Suche wartet im Agenten bis zu 44 s.
  */
 const AGENT_TIMEOUT_MS = 15_000;
-const SCAN_TIMEOUT_MS = 50_000;
+const SCAN_TIMEOUT_MS = 65_000;
 
 /**
  * WLAN-Einstellung am Display über den lokalen Agenten. Erst die

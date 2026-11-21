@@ -34,10 +34,16 @@ class FakeNmcli:
                      ":Neu3:60:WPA3\n:Firma:55:WPA2 802.1X\n::30:WPA2\n")
         self.up_results = {}
         self.rescan_fails = False
+        self.radio = "enabled"
         self.dir = None
 
     def __call__(self, args, timeout):
         self.calls.append(list(args))
+        if args == ["radio", "wifi"]:
+            return CommandResult(0, self.radio + "\n")
+        if args == ["radio", "wifi", "on"]:
+            self.radio = "enabled"
+            return CommandResult(0)
         if args[:3] == ["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION"]:
             return CommandResult(0, f"wlan0:wifi:{self.state}:{self.connection}\neth0:ethernet:unavailable:\n")
         if args[:3] == ["-t", "-f", "NAME,UUID,TYPE,DEVICE"]:
@@ -88,7 +94,7 @@ class SetupTest(unittest.TestCase):
         self.nmcli = FakeNmcli()
         self.nmcli.dir = self.dir
         self.logs = []
-        self.manager = NetworkManager(self.nmcli, self.dir, self.logs.append)
+        self.manager = NetworkManager(self.nmcli, self.dir, self.logs.append, sleep=lambda _s: None)
         lock = patch.object(wifi_setup, "CONNECT_LOCK", self.dir / "connect.lock")
         lock.start()
         self.addCleanup(lock.stop)
@@ -161,7 +167,8 @@ class TimeoutsTest(unittest.TestCase):
                     re.findall(r"const (AGENT_TIMEOUT_MS|SCAN_TIMEOUT_MS) = ([\d_]+);", kiosk)}
         # Helper: status = device, IP and SSID query; scan = rescan plus fallback.
         status_worst = 3 * wifi_setup.READ_TIMEOUT_SECONDS
-        scan_worst = wifi_setup.SCAN_TIMEOUT_SECONDS + wifi_setup.READ_TIMEOUT_SECONDS
+        scan_worst = (wifi_setup.RADIO_PREPARE_SECONDS + wifi_setup.SCAN_TIMEOUT_SECONDS
+                      + wifi_setup.READ_TIMEOUT_SECONDS)
         startup = 3  # Python and nmcli start on the Pi
         self.assertGreater(agent.STATUS_QUERY_TIMEOUT_SECONDS, status_worst + startup)
         self.assertGreater(agent.SCAN_QUERY_TIMEOUT_SECONDS, scan_worst + startup)
@@ -362,6 +369,16 @@ class ScanStatusTest(SetupTest):
     def test_scan_falls_back_to_last_result(self):
         self.nmcli.rescan_fails = True
         self.assertEqual(len(self.manager.scan()), 5)
+
+    def test_scan_switches_a_disabled_radio_on(self):
+        self.nmcli.radio = "disabled"
+        self.assertEqual(len(self.manager.scan()), 5)
+        self.assertEqual(self.nmcli.radio, "enabled")
+        self.assertIn(["radio", "wifi", "on"], self.nmcli.calls)
+
+    def test_scan_leaves_an_enabled_radio_alone(self):
+        self.manager.scan()
+        self.assertNotIn(["radio", "wifi", "on"], self.nmcli.calls)
 
     def test_status(self):
         status = self.manager.status()

@@ -55,6 +55,11 @@ SERVICE_PRIORITY = -10
 WIFI_TYPE = "802-11-wireless"
 READ_TIMEOUT_SECONDS = 15
 SCAN_TIMEOUT_SECONDS = 25
+# Switching a disabled WLAN radio on before a scan: two short nmcli calls plus
+# the time the device needs to leave "unavailable".
+RADIO_TIMEOUT_SECONDS = 5
+RADIO_SETTLE_SECONDS = 3
+RADIO_PREPARE_SECONDS = 2 * RADIO_TIMEOUT_SECONDS + RADIO_SETTLE_SECONDS
 CONNECT_WAIT_SECONDS = 40
 CONNECT_TIMEOUT_SECONDS = 55
 ROLLBACK_WAIT_SECONDS = 30
@@ -65,7 +70,7 @@ LOCK_WAIT_SECONDS = 50
 # profiles, load, one delete for all old profiles, status). The agent waits longer
 # (maintenance_access.CONNECT_TIMEOUT_SECONDS), systemd longer still
 # (RuntimeMaxSec), so neither cuts off a rollback; test_wifi_setup checks it.
-CONNECT_WORST_CASE_SECONDS = (LOCK_WAIT_SECONDS + SCAN_TIMEOUT_SECONDS + CONNECT_TIMEOUT_SECONDS
+CONNECT_WORST_CASE_SECONDS = (LOCK_WAIT_SECONDS + RADIO_PREPARE_SECONDS + SCAN_TIMEOUT_SECONDS + CONNECT_TIMEOUT_SECONDS
                               + ROLLBACK_TIMEOUT_SECONDS + 9 * READ_TIMEOUT_SECONDS)
 MAX_REQUEST_BYTES = 4096
 MAX_NETWORKS = 30
@@ -184,8 +189,9 @@ def uuid_of(content: Optional[str]) -> Optional[str]:
 
 class NetworkManager:
     def __init__(self, nmcli: Runner = run_nmcli, connections_dir: Path = CONNECTIONS_DIR,
-                 log: Callable[[str], None] = lambda line: print(line, file=sys.stderr)):
-        self.nmcli, self.connections_dir, self.log = nmcli, connections_dir, log
+                 log: Callable[[str], None] = lambda line: print(line, file=sys.stderr),
+                 sleep: Callable[[float], None] = time.sleep):
+        self.nmcli, self.connections_dir, self.log, self.sleep = nmcli, connections_dir, log, sleep
 
     def run(self, args: List[str], timeout: float = READ_TIMEOUT_SECONDS) -> CommandResult:
         try:
@@ -238,6 +244,20 @@ class NetworkManager:
         write_private(path, content)
         return path
 
+    def ensure_radio(self) -> None:
+        """Switches a disabled WLAN radio on: NetworkManager keeps the switch
+        across reboots, and with the radio off the device is "unavailable" and a
+        scan finds nothing. Best effort: a failure shows up as the scan error."""
+        state = self.run(["radio", "wifi"], RADIO_TIMEOUT_SECONDS)
+        if state.returncode != 0 or state.stdout.strip() != "disabled":
+            return
+        result = self.run(["radio", "wifi", "on"], RADIO_TIMEOUT_SECONDS)
+        if result.returncode != 0:
+            self.log(f"WARNUNG: WLAN-Funk ließ sich nicht einschalten: {short_error(result)}")
+            return
+        self.log("WLAN-Einstellung: WLAN-Funk war ausgeschaltet und wurde eingeschaltet.")
+        self.sleep(RADIO_SETTLE_SECONDS)
+
     # -- commands of the agent --
 
     def status(self) -> dict:
@@ -263,6 +283,7 @@ class NetworkManager:
     def scan(self, limit: Optional[int] = MAX_NETWORKS) -> List[dict]:
         """Networks in range, strongest first; `limit` only shortens the list
         for the kiosk (None: all, for looking up the network of a connect)."""
+        self.ensure_radio()
         fields = ["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan"]
         result = self.run(fields + ["yes"], SCAN_TIMEOUT_SECONDS)
         if result.returncode != 0:
