@@ -1,7 +1,7 @@
 <div class="backdrop">
   <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="maintenance-title">
     <header class="dialog-head">
-      <h2 id="maintenance-title">WLAN-Einstellung</h2>
+      <h2 id="maintenance-title">Wartung</h2>
       <button type="button" class="close" (click)="close()">Schließen</button>
     </header>
 
@@ -62,6 +62,11 @@
                 {{ scanning() ? 'Suche …' : 'Neu suchen' }}
               </button>
               <button type="button" class="secondary" (click)="openHidden()">Verstecktes WLAN</button>
+            </div>
+            <!-- Sauber ausschalten statt Netzteil ziehen: schont die SD-Karte. -->
+            <div class="power-actions" aria-label="Terminal">
+              <button type="button" class="secondary" (click)="askPower('reboot')">Neu starten</button>
+              <button type="button" class="secondary" (click)="askPower('poweroff')">Herunterfahren</button>
             </div>
           </div>
           <ul class="network-list" aria-label="Gefundene WLANs">
@@ -160,6 +165,36 @@
             </div>
           </div>
         }
+      }
+
+      @case ('power-confirm') {
+        <div class="center" role="alertdialog" aria-labelledby="power-question">
+          @if (powerAction() === 'reboot') {
+            <p class="big" id="power-question">Terminal neu starten?</p>
+            <p class="status-detail">Das Terminal ist dann etwa eine Minute nicht bedienbar.</p>
+          } @else {
+            <p class="big" id="power-question">Terminal herunterfahren?</p>
+            <p class="status-detail">Zum Einschalten danach das Netzteil kurz aus- und wieder einstecken.</p>
+          }
+          <div class="entry-actions">
+            <button type="button" class="secondary" (click)="backToOverview()">Abbrechen</button>
+            <button type="button" class="primary" [disabled]="busy()" (click)="confirmPower()">
+              {{ powerAction() === 'reboot' ? 'Neu starten' : 'Herunterfahren' }}
+            </button>
+          </div>
+        </div>
+      }
+
+      @case ('powering') {
+        <div class="center" role="status" aria-live="polite">
+          @if (powerAction() === 'reboot') {
+            <p class="big">Terminal startet neu …</p>
+            <p class="status-detail">Gleich geht es hier weiter.</p>
+          } @else {
+            <p class="big">Terminal fährt herunter …</p>
+            <p class="status-detail">Nach etwa 30 Sekunden kann das Netzteil gezogen werden.</p>
+          }
+        </div>
       }
     }
   </section>

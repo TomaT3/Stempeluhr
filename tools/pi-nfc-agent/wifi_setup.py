@@ -6,7 +6,9 @@ Two jobs, both as root:
 serve        One request of the NFC agent per connection on
              /run/stempeluhr-wifi-setup.sock (stempeluhr-wifi-setup.socket,
              Accept=yes): a JSON line on stdin, a JSON line on stdout.
-             Commands: status, scan, connect. The agent itself stays
+             Commands: status, scan, connect, power (reboot or poweroff
+             of the terminal, refused while a WLAN change or an agent
+             update holds the connect lock). The agent itself stays
              unprivileged (NoNewPrivileges); only members of the group
              stempeluhr may connect to the socket.
 sync-service Called by update.sh: fetches the maintenance settings of this
@@ -25,6 +27,7 @@ profiles stempeluhr-wlan (customer WLAN, priority 10) and stempeluhr-service
 from __future__ import annotations
 
 import argparse
+import subprocess
 import fcntl
 import grp
 import json
@@ -38,7 +41,7 @@ import urllib.error
 import urllib.request
 import uuid as uuidlib
 
-from maintenance_access import HIDDEN_SECURITY, PIN_HASH, STARTED_LINE
+from maintenance_access import HIDDEN_SECURITY, PIN_HASH, POWER_ACTIONS, STARTED_LINE
 from wifi_recovery import STATE_DIR, CommandResult, Runner, device_category, run_nmcli, short_error, split_terse
 
 CONFIG = Path(os.environ.get("STEMPELUHR_AGENT_CONFIG", "/etc/stempeluhr-nfc-agent/config.json"))
@@ -75,6 +78,10 @@ CONNECT_WORST_CASE_SECONDS = (LOCK_WAIT_SECONDS + RADIO_PREPARE_SECONDS + SCAN_T
 MAX_REQUEST_BYTES = 4096
 MAX_NETWORKS = 30
 SERVER_TIMEOUT_SECONDS = 15
+SYSTEMCTL_TIMEOUT_SECONDS = 10
+# Reboot/poweroff starts this much later: systemd stops the helper and the
+# agent right away, so their answers must reach the kiosk first.
+POWER_DELAY_SECONDS = 3
 
 
 class SetupError(Exception):
@@ -420,6 +427,36 @@ def connect_error(result: CommandResult) -> str:
 
 # --- serve: one request of the agent ---------------------------------------------
 
+def run_command(args: List[str], timeout: float) -> CommandResult:
+    try:
+        completed = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True,
+                                   text=True, timeout=timeout, env={**os.environ, "LC_ALL": "C"})
+    except subprocess.TimeoutExpired:
+        return CommandResult(None)
+    return CommandResult(completed.returncode, completed.stdout, completed.stderr)
+
+
+def power(action: object, run: Runner, log: Callable[[str], None]) -> None:
+    """Reboot or power off the terminal; the caller holds the connect lock.
+
+    A transient timer starts it POWER_DELAY_SECONDS later. Right away
+    (systemctl --no-block) systemd would stop this helper and the agent before
+    their answers reached the kiosk, which then showed an error while the
+    terminal shut down. A clean shutdown instead of pulling the plug protects
+    the SD card.
+    """
+    if action not in POWER_ACTIONS:
+        raise SetupError("Unbekannte Aktion.")
+    log(f"Terminal {action} am Display angefordert.")
+    try:
+        result = run(["systemd-run", f"--on-active={POWER_DELAY_SECONDS}", "--timer-property=AccuracySec=100ms",
+                      "systemctl", str(action)], SYSTEMCTL_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        raise SetupError("systemd-run ist nicht vorhanden.") from None
+    if result.returncode != 0:
+        raise SetupError("Neustart bzw. Herunterfahren fehlgeschlagen.")
+
+
 class RecoveryPause:
     """Holds the lock of wifi_recovery.py, so it does not interfere meanwhile."""
 
@@ -506,7 +543,8 @@ def handle_request(raw: bytes, manager: NetworkManager,
                    pause: Callable[[], RecoveryPause] = RecoveryPause,
                    connect_lock: Callable[[], ConnectLock] = ConnectLock,
                    on_start: Callable[[], None] = lambda: None,
-                   config_path: Optional[Path] = None) -> dict:
+                   config_path: Optional[Path] = None,
+                   runner: Runner = run_command) -> dict:
     """on_start: called for a connect once it holds the lock, before anything
     changes (serve() tells the agent with STARTED_LINE)."""
     try:
@@ -533,6 +571,21 @@ def handle_request(raw: bytes, manager: NetworkManager,
                     return {"ok": True, "status": manager.connect(
                         request.get("ssid"), request.get("psk", ""), hidden, security if hidden else None,
                         on_connected=lambda uuid: retarget_recovery(config, uuid, manager.log))}
+        if command == "power":
+            # Not during a WLAN change (its rollback must finish) or an agent
+            # update (update.sh holds the same lock).
+            if request.get("action") not in POWER_ACTIONS:
+                return {"ok": False, "error": "Unbekannte Aktion."}
+            try:
+                lock = connect_lock()
+                lock.__enter__()
+            except SetupError as error:
+                return {"ok": False, "busy": True, "error": str(error)}
+            try:
+                power(request.get("action"), runner, manager.log)
+            finally:
+                lock.__exit__(None, None, None)
+            return {"ok": True}
     except SetupError as error:
         return {"ok": False, "error": str(error)}
     return {"ok": False, "error": "Unbekannter Befehl."}

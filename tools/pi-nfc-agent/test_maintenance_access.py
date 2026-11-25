@@ -52,6 +52,8 @@ class FakeHelper:
         self.scan_gate.set()
         self.scan_error = None
         self.connect_status = {"state": "connected", "ssid": "Neu", "ip": "192.168.5.7"}
+        self.power_answer = {"ok": True}
+        self.power_error = None
 
     def request(self, payload, timeout=30):
         self.requests.append(payload)
@@ -65,6 +67,10 @@ class FakeHelper:
             if self.scan_error:
                 raise self.scan_error
             return {"ok": True, "networks": [{"ssid": "Kunde", "signal": 80, "security": "WPA2", "inUse": True}]}
+        if payload["command"] == "power":
+            if self.power_error:
+                raise self.power_error
+            return self.power_answer
         self.release.wait(5)
         return self.connect_answer
 
@@ -617,6 +623,57 @@ class RoutesTest(unittest.TestCase):
         session = self.unlock()
         self.assertEqual(self.post("/maintenance/lock", {"session": session})[0], 200)
         self.assertEqual(self.post("/wifi/status", {"session": session})[0], 401)
+
+    def power_requests(self):
+        return [r for r in self.helper.requests if r["command"] == "power"]
+
+    def test_power_needs_the_kiosk_and_a_session(self):
+        self.assertEqual(self.post("/maintenance/power", {"session": "geraten", "action": "reboot"})[0], 401)
+        session = self.unlock()
+        for origin in (FOREIGN, None):
+            self.assertEqual(self.post("/maintenance/power", {"session": session, "action": "reboot"}, origin)[0], 403)
+        self.assertEqual(self.power_requests(), [])
+
+    def test_power_reboot_and_poweroff(self):
+        for action in ("reboot", "poweroff"):
+            with self.subTest(action=action):
+                session = self.unlock()
+                self.assertEqual(self.post("/maintenance/power", {"session": session, "action": action}),
+                                 (202, {"ok": True}))
+                self.assertEqual(self.power_requests()[-1], {"command": "power", "action": action})
+                # The session ends with it.
+                self.assertEqual(self.post("/wifi/status", {"session": session})[0], 401)
+
+    def test_power_invalid_action(self):
+        session = self.unlock()
+        for action in ("halt", None, ["reboot"]):
+            self.assertEqual(self.post("/maintenance/power", {"session": session, "action": action})[0], 400, action)
+        self.assertEqual(self.power_requests(), [])
+
+    def test_power_refused_while_a_wlan_change_runs(self):
+        session = self.unlock()
+        self.helper.release.clear()
+        self.assertEqual(self.post("/wifi/connect", {"session": session, "ssid": "Kunde", "psk": "passwort1"})[0], 202)
+        status, answer = self.post("/maintenance/power", {"session": session, "action": "poweroff"})
+        self.assertEqual(status, 409)
+        self.assertIn("WLAN-Umstellung", answer["message"])
+        self.assertEqual(self.power_requests(), [])
+
+    def test_power_busy_helper_and_errors(self):
+        session = self.unlock()
+        self.helper.power_answer = {"ok": False, "busy": True, "error": "Ein Agent-Update läuft noch."}
+        self.assertEqual(self.post("/maintenance/power", {"session": session, "action": "reboot"}),
+                         (409, {"message": "Ein Agent-Update läuft noch."}))
+        self.helper.power_answer = {"ok": False, "error": "Neustart bzw. Herunterfahren fehlgeschlagen."}
+        self.assertEqual(self.post("/maintenance/power", {"session": session, "action": "reboot"})[0], 502)
+        self.helper.power_error = WifiSetupTimeout("timeout", False)
+        self.assertEqual(self.post("/maintenance/power", {"session": session, "action": "reboot"})[0], 502)
+        self.helper.power_error = None
+        self.helper.available = False
+        self.assertEqual(self.post("/maintenance/power", {"session": session, "action": "reboot"}),
+                         (503, {"error": "wifi setup unavailable"}))
+        # Nothing happened: the session stays open for another try.
+        self.assertNotEqual(self.post("/wifi/status", {"session": session})[0], 401)
 
     def test_routes_absent_without_maintenance(self):
         server = LocalScanServer(port=0, allowed_origin=KIOSK)

@@ -20,6 +20,7 @@ und in der API, nicht im Agenten.
 | `GET` | `/diagnostics` | letzte Pi-/Browser-Diagnose für lokale Wartung |
 | `POST` | `/maintenance/unlock` | Wartungs-PIN `{pin}` → `{session}` (10 min); 401 falsch, 429 gesperrt, 403 ohne PIN-Hash |
 | `POST` | `/maintenance/lock` | Sitzung beenden |
+| `POST` | `/maintenance/power` | `{session, action}` mit `"reboot"` oder `"poweroff"` → 202 und Sitzung beendet; 409 während einer WLAN-Umstellung oder eines Agent-Updates |
 | `POST` | `/wifi/status` | WLAN-Status und laufender Verbindungsversuch (`{session}`) |
 | `POST` | `/wifi/networks` | WLAN-Suche (`{session}`) |
 | `POST` | `/wifi/connect` | `{session, ssid, psk, hidden, security}` → 202 (`security` nur bei versteckten WLANs: `"WPA2"`, `"WPA3"` oder `""` für offen; sonst gilt die WLAN-Suche); Ergebnis über `/wifi/status` |
@@ -72,7 +73,7 @@ Die Queue bleibt dabei erhalten.
   `update.sh` installiert die Units bei jedem Lauf nach und aktiviert den
   Timer einmalig (siehe [Pi-Anleitung](../../docs/raspberry-pi-kiosk-nfc.md#7-wlan-recovery))
 - `wifi_setup.py`, `stempeluhr-wifi-setup.socket` / `stempeluhr-wifi-setup@.service` –
-  root-Helfer der WLAN-Einstellung am Display (Socket nur für die Gruppe
+  root-Helfer der WLAN-Einstellung sowie für Neustart und Herunterfahren am Display (Socket nur für die Gruppe
   `stempeluhr`) und Abgleich von Wartungs-WLAN und PIN-Hash mit dem Server
   (`sync-service`, aus `update.sh`); `maintenance_access.py` – PIN-Prüfung,
   Sperre, Sitzung und Socket-Client im Agenten

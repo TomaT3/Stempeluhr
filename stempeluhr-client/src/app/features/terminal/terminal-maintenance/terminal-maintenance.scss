@@ -13,6 +13,8 @@ p {
 
 .backdrop {
   display: grid;
+  // Der Dialog wächst nie über den Bildschirm; zu viel Inhalt scrollt darin.
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   padding: 8px;
   box-sizing: border-box;
@@ -144,6 +146,8 @@ button {
 .overview {
   display: grid;
   grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  // Eine Zeile in der Höhe des Dialogs: Status und Liste scrollen darin.
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
 }
@@ -152,6 +156,9 @@ button {
   display: grid;
   align-content: start;
   gap: 6px;
+  // Mit Hinweis und Fehlermeldung zugleich ist die Karte bei 800×480 höher als der Dialog.
+  min-height: 0;
+  overflow-y: auto;
   padding: 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -187,6 +194,20 @@ button {
   display: grid;
   gap: 8px;
   margin-top: 6px;
+}
+
+// Nebeneinander: eine Zeile mehr reicht bei 800×480 neben der WLAN-Liste.
+.power-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+
+  .secondary {
+    padding: 0 8px;
+  }
 }
 
 .network-list {

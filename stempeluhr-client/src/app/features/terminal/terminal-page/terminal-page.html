@@ -9,7 +9,7 @@
     </div>
   }
   <header class="terminal-clock" aria-label="Aktuelle Uhrzeit und Datum">
-    <!-- Versteckte Geste: fünfmal tippen öffnet die WLAN-Einstellung (Wartungs-PIN). -->
+    <!-- Versteckte Geste: fünfmal tippen öffnet die Wartung (WLAN, Neustart; Wartungs-PIN). -->
     <span class="clock-time" (click)="maintenanceTap()">{{ clockState.now() | date: 'HH:mm:ss' }}</span>
     <span class="clock-date">{{ clockState.now() | date: 'dd.MM.yyyy' }}</span>
     @if (selectedEmployee() && !correctionOpen() && !absenceOpen()) {
