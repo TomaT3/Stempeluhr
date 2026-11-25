@@ -27,8 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from terminal_diagnostics import DiagnosticsMonitor, state_directory
-from maintenance_access import (HIDDEN_SECURITY, SCAN_WAIT_SECONDS, STATUS_WAIT_SECONDS, MaintenanceAccess, WifiJob,
-                                WifiSetupClient, WifiSetupError, WifiSetupTimeout, WifiSetupUnavailable)
+from maintenance_access import (HIDDEN_SECURITY, POWER_ACTIONS, POWER_QUERY_TIMEOUT_SECONDS, SCAN_WAIT_SECONDS,
+                                STATUS_WAIT_SECONDS, MaintenanceAccess, WifiJob, WifiSetupClient, WifiSetupError, WifiSetupTimeout, WifiSetupUnavailable)
 
 from smartcard import scard
 
@@ -178,7 +178,8 @@ class LastScan:
     scanned_at_epoch: float
     consumed: bool = False
 
-MAINTENANCE_ROUTES = ("/maintenance/unlock", "/maintenance/lock", "/wifi/status", "/wifi/networks", "/wifi/connect")
+MAINTENANCE_ROUTES = ("/maintenance/unlock", "/maintenance/lock", "/maintenance/power", "/wifi/status",
+                      "/wifi/networks", "/wifi/connect")
 
 
 class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
@@ -415,6 +416,9 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             access.end(payload.get("session"))
             self._send_json(200, {"ok": True})
             return
+        if self.path == "/maintenance/power":
+            self._power(payload, access, job)
+            return
         if self.path == "/wifi/connect":
             ssid, psk, hidden = payload.get("ssid"), payload.get("psk", ""), payload.get("hidden") is True
             # Encryption only for hidden networks (not in the scan); open means no password.
@@ -478,6 +482,42 @@ class _LocalScanHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(502, {"message": message[:300] if isinstance(message, str) else "WLAN-Fehler"})
         else:
             self._send_json(200, {"networks": answer.get("networks") or []})
+
+    def _power(self, payload: dict, access: MaintenanceAccess, job: WifiJob) -> None:
+        """Reboot or power off at the display instead of pulling the plug.
+
+        Refused while a WLAN change runs: its rollback to the previous WLAN
+        must not be cut off. The helper checks the same with its connect lock
+        (also held by update.sh).
+        """
+        action = payload.get("action")
+        if action not in POWER_ACTIONS:
+            self._send_json(400, {"error": "invalid action"})
+            return
+        if job.snapshot()["state"] == "running":
+            self._send_json(409, {"message": "Eine WLAN-Umstellung läuft noch. Bitte deren Ergebnis abwarten."})
+            return
+        try:
+            answer = job.client.request({"command": "power", "action": action},
+                                        timeout=POWER_QUERY_TIMEOUT_SECONDS)
+        except WifiSetupTimeout:
+            self._send_json(502, {"message": "Ergebnis unklar. Startet das Terminal nicht, bitte erneut versuchen."})
+            return
+        except WifiSetupError:
+            self._send_json(502, {"message": "Neustart bzw. Herunterfahren fehlgeschlagen."})
+            return
+        except WifiSetupUnavailable:
+            self._send_json(503, {"error": "wifi setup unavailable"})
+            return
+        if not answer.get("ok"):
+            message = answer.get("error")
+            self._send_json(409 if answer.get("busy") else 502,
+                            {"message": message[:300] if isinstance(message, str)
+                             else "Neustart bzw. Herunterfahren fehlgeschlagen."})
+            return
+        LOGGER.warning("Terminal %s requested at the display", action)
+        access.end(payload.get("session"))
+        self._send_json(202, {"ok": True})
 
     def _heartbeat(self) -> None:
         server: LocalScanServer = self.server.scan_server

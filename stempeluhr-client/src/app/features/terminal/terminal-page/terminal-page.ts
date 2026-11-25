@@ -35,7 +35,7 @@ export class TerminalPage extends ClockWorkflow {
   }
 
   /**
-   * Versteckter Zugang zur WLAN-Einstellung, nur ohne angemeldeten
+   * Versteckter Zugang zur Wartung (WLAN, Neustart), nur ohne angemeldeten
    * Mitarbeiter. Die Wartungs-PIN schützt den Rest.
    */
   maintenanceTap(): void {

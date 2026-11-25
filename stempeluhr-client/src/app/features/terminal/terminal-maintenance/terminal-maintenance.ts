@@ -2,10 +2,10 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, DestroyRef, inject, output, signal } from '@angular/core';
 import { Subscription, catchError, exhaustMap, of, tap, throwError, timer } from 'rxjs';
 
-import { HiddenSecurity, TerminalWifiApi, WifiNetwork, WifiStatus } from '../../../core/services/terminal-wifi';
+import { HiddenSecurity, PowerAction, TerminalWifiApi, WifiNetwork, WifiStatus } from '../../../core/services/terminal-wifi';
 import { OnscreenKeyboard } from '../../../shared/components/onscreen-keyboard/onscreen-keyboard';
 
-type Step = 'pin' | 'overview' | 'hidden' | 'password' | 'connecting' | 'result';
+type Step = 'pin' | 'overview' | 'hidden' | 'password' | 'connecting' | 'result' | 'power-confirm' | 'powering';
 
 interface Target {
   ssid: string;
@@ -26,7 +26,8 @@ function needsPassword(security: string): boolean {
 }
 
 /**
- * WLAN am eingebauten Terminal ändern: versteckt hinter einer Geste auf der
+ * WLAN am eingebauten Terminal ändern, Terminal neu starten oder herunterfahren:
+ * versteckt hinter einer Geste auf der
  * Uhr und der Wartungs-PIN. Läuft vollständig über den lokalen Agenten, also
  * auch ohne Netz.
  */
@@ -67,6 +68,8 @@ export class TerminalMaintenance {
   readonly connectingSsid = signal('');
   /** Der Versuch stammt nicht von der letzten Eingabe (z. B. vor dem Schließen gestartet). */
   readonly earlierAttempt = signal(false);
+  /** Neu starten bzw. Herunterfahren, das gerade bestätigt wird oder läuft. */
+  readonly powerAction = signal<PowerAction>('reboot');
 
   private session: string | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -273,6 +276,47 @@ export class TerminalMaintenance {
 
   finish(): void {
     this.close();
+  }
+
+  // --- Neu starten und Herunterfahren ---
+
+  askPower(action: PowerAction): void {
+    this.powerAction.set(action);
+    this.message.set('');
+    this.step.set('power-confirm');
+  }
+
+  /** Sauber statt Netzteil ziehen: schont die SD-Karte. */
+  confirmPower(): void {
+    const session = this.session;
+    if (!session || this.busy()) return;
+    this.busy.set(true);
+    this.message.set('');
+    this.requests.add(this.api.power(session, this.powerAction()).subscribe({
+      next: () => {
+        // Der Agent hat die Sitzung beendet.
+        this.session = null;
+        this.busy.set(false);
+        this.step.set('powering');
+      },
+      error: (error: unknown) => {
+        this.busy.set(false);
+        this.step.set('overview');
+        this.powerError(error);
+      },
+    }));
+  }
+
+  private powerError(error: unknown): void {
+    if (error instanceof HttpErrorResponse && error.status === 409 && typeof error.error?.message === 'string') {
+      this.message.set(error.error.message);
+    } else if (error instanceof HttpErrorResponse && error.status === 404) {
+      this.message.set('Der Agent dieses Terminals kennt Neustart und Herunterfahren noch nicht (Agent-Update abwarten).');
+    } else if (error instanceof HttpErrorResponse && error.status === 503) {
+      this.message.set('Neustart und Herunterfahren sind auf diesem Terminal noch nicht eingerichtet (Agent-Update abwarten).');
+    } else {
+      this.handleError(error);
+    }
   }
 
   private openPassword(): void {

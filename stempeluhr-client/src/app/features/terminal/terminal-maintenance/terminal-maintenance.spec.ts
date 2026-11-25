@@ -503,4 +503,57 @@ describe('TerminalMaintenance', () => {
     http.expectNone(`${AGENT}/maintenance/lock`);
     expect(closed).toBe(1);
   });
+
+  const button = (label: string) => [...(fixture.nativeElement as HTMLElement).querySelectorAll('button')]
+    .find(candidate => candidate.textContent?.trim() === label) as HTMLButtonElement;
+
+  it.each([
+    ['Neu starten', 'reboot', 'Terminal neu starten?', 'Terminal startet neu'],
+    ['Herunterfahren', 'poweroff', 'Terminal herunterfahren?', 'Terminal fährt herunter'],
+  ])('%s after asking again', (label, action, question, progress) => {
+    unlocked();
+    button(label).click();
+    fixture.detectChanges();
+    expect(text()).toContain(question);
+    http.expectNone(`${AGENT}/maintenance/power`);
+
+    button(label).click();
+    const request = http.expectOne(`${AGENT}/maintenance/power`);
+    expect(request.request.body).toEqual({ session: 's1', action });
+    request.flush({ ok: true }, { status: 202, statusText: 'Accepted' });
+    fixture.detectChanges();
+
+    expect(component.step()).toBe('powering');
+    expect(text()).toContain(progress);
+    // The agent ended the session already: closing sends no lock.
+    component.close();
+    http.expectNone(`${AGENT}/maintenance/lock`);
+  });
+
+  it('cancels a power action without asking the agent', () => {
+    unlocked();
+    button('Herunterfahren').click();
+    fixture.detectChanges();
+    button('Abbrechen').click();
+    fixture.detectChanges();
+
+    http.expectNone(`${AGENT}/maintenance/power`);
+    expect(component.step()).toBe('overview');
+  });
+
+  it.each([
+    [409, { message: 'Eine WLAN-Umstellung läuft noch. Bitte deren Ergebnis abwarten.' }, 'WLAN-Umstellung läuft noch'],
+    [404, { error: 'not found' }, 'kennt Neustart und Herunterfahren noch nicht'],
+    [503, { error: 'wifi setup unavailable' }, 'noch nicht eingerichtet'],
+    [502, { message: 'Neustart bzw. Herunterfahren fehlgeschlagen.' }, 'Neustart bzw. Herunterfahren fehlgeschlagen.'],
+  ])('explains a refused power action (%s)', (status, body, message) => {
+    unlocked();
+    component.askPower('reboot');
+    component.confirmPower();
+    http.expectOne(`${AGENT}/maintenance/power`).flush(body, { status, statusText: 'x' });
+    fixture.detectChanges();
+
+    expect(component.step()).toBe('overview');
+    expect(text()).toContain(message);
+  });
 });

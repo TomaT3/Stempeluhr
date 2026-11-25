@@ -386,6 +386,28 @@ Abnahme:
 6. `journalctl -t stempeluhr-wifi-setup -u stempeluhr-nfc-agent-update` enthält
    kein Passwort.
 
+## 9. Neu starten und Herunterfahren am Display
+
+Den Pi nicht durch Ziehen des Netzteils ausschalten: Ein Schreibvorgang auf
+die SD-Karte kann dabei abbrechen. Im selben Wartungsdialog wie in Abschnitt 8
+(fünfmal auf die Uhrzeit tippen, Wartungs-PIN) gibt es dafür „Neu starten“ und
+„Herunterfahren“, jeweils mit Rückfrage.
+
+- Neu starten: Nach etwa einer Minute ist der Kiosk wieder da.
+- Herunterfahren: Nach etwa 30 Sekunden kann das Netzteil gezogen werden. Zum
+  Einschalten das Netzteil wieder einstecken (oder die Power-Taste des Pi 5
+  drücken, falls sie erreichbar ist).
+
+Abgelehnt wird, solange eine WLAN-Umstellung oder ein Agent-Update läuft
+(Meldung im Dialog); dann kurz warten und erneut versuchen. Noch nicht
+gesendete Offline-Stempel bleiben erhalten und werden nach dem Start
+nachgetragen.
+
+Technik: Der Agent reicht den Befehl über denselben Socket an
+`wifi_setup.py serve` weiter, das `systemctl --no-block reboot` bzw.
+`poweroff` ausführt. Protokoll: `journalctl -t stempeluhr-wifi-setup` und
+der Agent („Terminal reboot/poweroff requested at the display“).
+
 ## Hinweise
 
 - `terminal_id` in `config.json` und `terminalId` in der Kiosk-URL müssen

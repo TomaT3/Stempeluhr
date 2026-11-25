@@ -51,6 +51,12 @@ SCAN_WAIT_SECONDS = 58
 # mixed), WPA3 only, '' open. Shared by agent and helper; the kiosk offers
 # the same values (terminal-wifi.ts, HiddenSecurity).
 HIDDEN_SECURITY = ("WPA2", "WPA3", "")
+# Power actions at the display (POST /maintenance/power); the helper runs
+# "systemctl --no-block <action>". The kiosk offers the same values
+# (terminal-wifi.ts, PowerAction).
+POWER_ACTIONS = ("reboot", "poweroff")
+# Below the kiosk's 15 s request timeout (terminal-wifi.ts, AGENT_TIMEOUT_MS).
+POWER_QUERY_TIMEOUT_SECONDS = 12
 # Whole bytes only (even hex lengths): bytes.fromhex would raise otherwise.
 # Same format as TerminalMaintenance.VerifyPin on the server; wifi_setup
 # uses it before storing a hash.

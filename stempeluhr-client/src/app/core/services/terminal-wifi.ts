@@ -34,6 +34,9 @@ export interface WifiJob {
 /** Verschlüsselung eines versteckten WLANs: WPA2 (auch WPA2/WPA3-gemischt), nur WPA3, '' = offen. */
 export type HiddenSecurity = 'WPA2' | 'WPA3' | '';
 
+/** Wie maintenance_access.POWER_ACTIONS im Agenten. */
+export type PowerAction = 'reboot' | 'poweroff';
+
 /**
  * Der Agent antwortet auf Status und Login schneller (Status-Abfrage beim
  * Helfer: höchstens 8 s); Verbinden kehrt sofort zurück (202), das Ergebnis
@@ -79,6 +82,14 @@ export class TerminalWifiApi {
   connect(session: string, ssid: string, psk: string, hidden = false, security?: HiddenSecurity) {
     return this.post<unknown>('/wifi/connect',
       { session, ssid, psk, hidden, ...(hidden && security !== undefined ? { security } : {}) });
+  }
+
+  /**
+   * Terminal sauber neu starten bzw. herunterfahren (202). Der Agent beendet
+   * dabei die Sitzung; ein älterer Agent kennt die Route nicht (404).
+   */
+  power(session: string, action: PowerAction) {
+    return this.post<unknown>('/maintenance/power', { session, action });
   }
 
   private post<T>(path: string, body: object, timeoutMs = AGENT_TIMEOUT_MS) {

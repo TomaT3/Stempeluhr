@@ -555,6 +555,53 @@ class ServeTest(SetupTest):
             self.assertEqual(result, ["entered"])
 
 
+
+class PowerTest(SetupTest):
+    def setUp(self):
+        super().setUp()
+        self.calls = []
+
+    def systemctl(self, args, timeout):
+        self.calls.append((args, timeout))
+        return CommandResult(0)
+
+    def request(self, raw):
+        return wifi_setup.handle_request(raw, self.manager, systemctl=self.systemctl)
+
+    def test_reboot_and_poweroff_only_queue_the_job(self):
+        for action in ("reboot", "poweroff"):
+            with self.subTest(action=action):
+                self.calls.clear()
+                answer = self.request(('{"command": "power", "action": "%s"}' % action).encode())
+                self.assertEqual(answer, {"ok": True})
+                self.assertEqual([args for args, _timeout in self.calls], [["--no-block", action]])
+                self.assertLess(self.calls[0][1], __import__("maintenance_access").POWER_QUERY_TIMEOUT_SECONDS)
+
+    def test_unknown_action_runs_nothing(self):
+        for raw in (b'{"command": "power", "action": "halt"}', b'{"command": "power"}',
+                    b'{"command": "power", "action": ["reboot"]}'):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.request(raw), {"ok": False, "error": "Unbekannte Aktion."})
+        self.assertEqual(self.calls, [])
+
+    def test_refused_while_a_wlan_change_or_update_holds_the_lock(self):
+        with wifi_setup.ConnectLock():
+            answer = self.request(b'{"command": "power", "action": "poweroff"}')
+        self.assertEqual(answer["ok"], False)
+        self.assertTrue(answer["busy"])
+        self.assertIn("läuft noch", answer["error"])
+        self.assertEqual(self.calls, [])
+        # Released afterwards: the next request goes through.
+        self.assertEqual(self.request(b'{"command": "power", "action": "poweroff"}'), {"ok": True})
+
+    def test_failed_systemctl_is_reported(self):
+        answer = wifi_setup.handle_request(b'{"command": "power", "action": "reboot"}', self.manager,
+                                           systemctl=lambda _args, _timeout: CommandResult(1, "", "denied"))
+        self.assertEqual(answer, {"ok": False, "error": "Neustart bzw. Herunterfahren fehlgeschlagen."})
+        with wifi_setup.ConnectLock():
+            pass  # the lock is released after a failure, too
+
+
 if __name__ == "__main__":
     os.umask(0o022)
     unittest.main()
