@@ -561,20 +561,25 @@ class PowerTest(SetupTest):
         super().setUp()
         self.calls = []
 
-    def systemctl(self, args, timeout):
+    def runner(self, args, timeout):
         self.calls.append((args, timeout))
         return CommandResult(0)
 
     def request(self, raw):
-        return wifi_setup.handle_request(raw, self.manager, systemctl=self.systemctl)
+        return wifi_setup.handle_request(raw, self.manager, runner=self.runner)
 
-    def test_reboot_and_poweroff_only_queue_the_job(self):
+    def test_reboot_and_poweroff_start_later(self):
+        # Right away systemd would stop helper and agent before their answers
+        # reached the kiosk: a transient timer starts it a few seconds later.
         for action in ("reboot", "poweroff"):
             with self.subTest(action=action):
                 self.calls.clear()
                 answer = self.request(('{"command": "power", "action": "%s"}' % action).encode())
                 self.assertEqual(answer, {"ok": True})
-                self.assertEqual([args for args, _timeout in self.calls], [["--no-block", action]])
+                self.assertEqual([args for args, _timeout in self.calls], [[
+                    "systemd-run", "--on-active=%d" % wifi_setup.POWER_DELAY_SECONDS,
+                    "--timer-property=AccuracySec=100ms", "systemctl", action]])
+                self.assertGreaterEqual(wifi_setup.POWER_DELAY_SECONDS, 2)
                 self.assertLess(self.calls[0][1], __import__("maintenance_access").POWER_QUERY_TIMEOUT_SECONDS)
 
     def test_unknown_action_runs_nothing(self):
@@ -594,9 +599,9 @@ class PowerTest(SetupTest):
         # Released afterwards: the next request goes through.
         self.assertEqual(self.request(b'{"command": "power", "action": "poweroff"}'), {"ok": True})
 
-    def test_failed_systemctl_is_reported(self):
+    def test_failed_systemd_run_is_reported(self):
         answer = wifi_setup.handle_request(b'{"command": "power", "action": "reboot"}', self.manager,
-                                           systemctl=lambda _args, _timeout: CommandResult(1, "", "denied"))
+                                           runner=lambda _args, _timeout: CommandResult(1, "", "denied"))
         self.assertEqual(answer, {"ok": False, "error": "Neustart bzw. Herunterfahren fehlgeschlagen."})
         with wifi_setup.ConnectLock():
             pass  # the lock is released after a failure, too

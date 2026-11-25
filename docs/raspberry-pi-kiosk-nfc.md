@@ -404,8 +404,9 @@ gesendete Offline-Stempel bleiben erhalten und werden nach dem Start
 nachgetragen.
 
 Technik: Der Agent reicht den Befehl über denselben Socket an
-`wifi_setup.py serve` weiter, das `systemctl --no-block reboot` bzw.
-`poweroff` ausführt. Protokoll: `journalctl -t stempeluhr-wifi-setup` und
+`wifi_setup.py serve` weiter. Das startet `systemctl reboot` bzw. `poweroff`
+über einen Timer drei Sekunden später (`systemd-run --on-active=3`), damit die
+Antwort vorher noch den Kiosk erreicht. Protokoll: `journalctl -t stempeluhr-wifi-setup` und
 der Agent („Terminal reboot/poweroff requested at the display“).
 
 ## Hinweise

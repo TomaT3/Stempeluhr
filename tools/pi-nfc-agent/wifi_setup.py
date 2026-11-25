@@ -79,6 +79,9 @@ MAX_REQUEST_BYTES = 4096
 MAX_NETWORKS = 30
 SERVER_TIMEOUT_SECONDS = 15
 SYSTEMCTL_TIMEOUT_SECONDS = 10
+# Reboot/poweroff starts this much later: systemd stops the helper and the
+# agent right away, so their answers must reach the kiosk first.
+POWER_DELAY_SECONDS = 3
 
 
 class SetupError(Exception):
@@ -424,29 +427,32 @@ def connect_error(result: CommandResult) -> str:
 
 # --- serve: one request of the agent ---------------------------------------------
 
-def run_systemctl(args: List[str], timeout: float) -> CommandResult:
+def run_command(args: List[str], timeout: float) -> CommandResult:
     try:
-        completed = subprocess.run(["systemctl", *args], stdin=subprocess.DEVNULL, capture_output=True,
+        completed = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True,
                                    text=True, timeout=timeout, env={**os.environ, "LC_ALL": "C"})
     except subprocess.TimeoutExpired:
         return CommandResult(None)
     return CommandResult(completed.returncode, completed.stdout, completed.stderr)
 
 
-def power(action: object, systemctl: Runner, log: Callable[[str], None]) -> None:
+def power(action: object, run: Runner, log: Callable[[str], None]) -> None:
     """Reboot or power off the terminal; the caller holds the connect lock.
 
-    --no-block only queues the job: the answer still reaches the agent before
-    systemd stops the services. A clean shutdown instead of pulling the plug
-    protects the SD card.
+    A transient timer starts it POWER_DELAY_SECONDS later. Right away
+    (systemctl --no-block) systemd would stop this helper and the agent before
+    their answers reached the kiosk, which then showed an error while the
+    terminal shut down. A clean shutdown instead of pulling the plug protects
+    the SD card.
     """
     if action not in POWER_ACTIONS:
         raise SetupError("Unbekannte Aktion.")
     log(f"Terminal {action} am Display angefordert.")
     try:
-        result = systemctl(["--no-block", str(action)], SYSTEMCTL_TIMEOUT_SECONDS)
+        result = run(["systemd-run", f"--on-active={POWER_DELAY_SECONDS}", "--timer-property=AccuracySec=100ms",
+                      "systemctl", str(action)], SYSTEMCTL_TIMEOUT_SECONDS)
     except FileNotFoundError:
-        raise SetupError("systemctl ist nicht vorhanden.") from None
+        raise SetupError("systemd-run ist nicht vorhanden.") from None
     if result.returncode != 0:
         raise SetupError("Neustart bzw. Herunterfahren fehlgeschlagen.")
 
@@ -538,7 +544,7 @@ def handle_request(raw: bytes, manager: NetworkManager,
                    connect_lock: Callable[[], ConnectLock] = ConnectLock,
                    on_start: Callable[[], None] = lambda: None,
                    config_path: Optional[Path] = None,
-                   systemctl: Runner = run_systemctl) -> dict:
+                   runner: Runner = run_command) -> dict:
     """on_start: called for a connect once it holds the lock, before anything
     changes (serve() tells the agent with STARTED_LINE)."""
     try:
@@ -576,7 +582,7 @@ def handle_request(raw: bytes, manager: NetworkManager,
             except SetupError as error:
                 return {"ok": False, "busy": True, "error": str(error)}
             try:
-                power(request.get("action"), systemctl, manager.log)
+                power(request.get("action"), runner, manager.log)
             finally:
                 lock.__exit__(None, None, None)
             return {"ok": True}

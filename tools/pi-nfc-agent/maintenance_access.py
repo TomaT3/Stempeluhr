@@ -52,7 +52,7 @@ SCAN_WAIT_SECONDS = 58
 # the same values (terminal-wifi.ts, HiddenSecurity).
 HIDDEN_SECURITY = ("WPA2", "WPA3", "")
 # Power actions at the display (POST /maintenance/power); the helper runs
-# "systemctl --no-block <action>". The kiosk offers the same values
+# "systemd-run --on-active=3 systemctl <action>". The kiosk offers the same values
 # (terminal-wifi.ts, PowerAction).
 POWER_ACTIONS = ("reboot", "poweroff")
 # Below the kiosk's 15 s request timeout (terminal-wifi.ts, AGENT_TIMEOUT_MS).
